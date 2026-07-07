@@ -1,11 +1,7 @@
 import { Factory } from "lucide-react";
+import type { WorkCenter } from "../types/WorkCenter";
 
-type Props = {
-  name: string;
-  queueCount: number;
-  status: string;
-};
-function WorkCenter({ name, queueCount, status }: Props) {
+function WorkCenterCard({ name, queueCount, status }: WorkCenter) {
   const statusColor =
     status === "Busy"
       ? "text-yellow-500"
@@ -27,4 +23,4 @@ function WorkCenter({ name, queueCount, status }: Props) {
   );
 }
 
-export default WorkCenter;
+export default WorkCenterCard;
