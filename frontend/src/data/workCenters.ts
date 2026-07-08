@@ -4,7 +4,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 1,
     name: "Raw Material",
-    queueCount: 25,
+    queueCount: 100,
     status: "Idle",
     processTimeSeconds: 1,
     progressSeconds: 0,

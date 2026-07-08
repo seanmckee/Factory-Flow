@@ -2,7 +2,9 @@ export type WorkCenter = {
   id: number;
   name: string;
   queueCount: number;
-  status: "Idle" | "Busy" | "Blocked";
+  status: WorkCenterStatus;
   processTimeSeconds: number;
   progressSeconds: number;
 };
+
+export type WorkCenterStatus = "Idle" | "Running" | "Blocked" | "Starved";

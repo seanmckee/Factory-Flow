@@ -25,9 +25,11 @@ function App() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
-  const startSimulation = () => {
-    console.log("Simulation started");
-    setIsRunning(true);
+  const toggleSimulation = () => {
+    setIsRunning((prev) => !prev);
+  };
+  const resetSimulation = () => {
+    setWorkCenterData(initialWorkCenters);
   };
   return (
     <>
@@ -38,12 +40,20 @@ function App() {
             return <WorkCenterCard key={workCenter.name} {...workCenter} />;
           })}
         </div>
-        <button
-          className="bg-blue-500 text-white p-2 rounded-lg"
-          onClick={startSimulation}
-        >
-          Start Simulation
-        </button>
+        <div className="flex gap-4">
+          <button
+            className="bg-blue-500 text-white p-2 rounded-lg"
+            onClick={toggleSimulation}
+          >
+            {isRunning ? "Stop Simulation" : "Start Simulation"}
+          </button>
+          <button
+            className="bg-slate-500 text-white p-2 rounded-lg"
+            onClick={resetSimulation}
+          >
+            Reset Simulation
+          </button>
+        </div>
       </div>
     </>
   );

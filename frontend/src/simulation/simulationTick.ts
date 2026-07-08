@@ -1,4 +1,4 @@
-import type { WorkCenter } from "../types/WorkCenter";
+import type { WorkCenter, WorkCenterStatus } from "../types/WorkCenter";
 
 export function simulateTick(
   workCenters: WorkCenter[],
@@ -13,6 +13,7 @@ export function simulateTick(
   for (const workCenter of newWorkCenters) {
     if (workCenter.queueCount <= 0) {
       workCenter.progressSeconds = 0;
+
       continue;
     }
 
@@ -37,6 +38,19 @@ export function simulateTick(
       workCenter.progressSeconds = 0;
     }
   }
+  const updatedWorkCenters = newWorkCenters.map((workCenter) => ({
+    ...workCenter,
+    status: calculateStatus(workCenter),
+  }));
+  return updatedWorkCenters;
+}
 
-  return newWorkCenters;
+function calculateStatus(workCenter: WorkCenter): WorkCenterStatus {
+  let status: WorkCenterStatus;
+  if (workCenter.queueCount > 0) {
+    status = "Running";
+  } else {
+    status = "Starved";
+  }
+  return status;
 }
