@@ -1,31 +1,39 @@
-import { useState } from "react";
-
+import { useState, useEffect } from "react";
+import { simulateTick } from "./simulation/simulationTick";
 import WorkCenterCard from "./components/WorkCenterCard";
 import type { WorkCenter } from "./types/WorkCenter";
-
+import { initialWorkCenters } from "./data/workCenters";
 function App() {
-  const [workCenterData, setWorkCenterData] = useState<WorkCenter[]>([
-    { name: "Raw Material", queueCount: 10, status: "Idle" },
-    { name: "Cutter", queueCount: 5, status: "Busy" },
-    { name: "Finisher", queueCount: 0, status: "Idle" },
-    { name: "Test", queueCount: 100, status: "Blocked" },
-  ]);
+  const [isRunning, setIsRunning] = useState(false);
+  const [workCenterData, setWorkCenterData] =
+    useState<WorkCenter[]>(initialWorkCenters);
+  const productionOrder = [1, 2, 3, 4, 5, 6];
+  useEffect(() => {
+    if (!isRunning) return;
 
+    const interval = setInterval(() => {
+      // setWorkCenterData((currentWorkCenters) =>
+      //   currentWorkCenters.map((workCenter) => ({
+      //     ...workCenter,
+      //     queueCount: Math.max(0, workCenter.queueCount - 1),
+      //   })),
+      // );
+      setWorkCenterData((workCenterData) =>
+        simulateTick(workCenterData, productionOrder),
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isRunning]);
   const startSimulation = () => {
     console.log("Simulation started");
-    const newWorkCenterData = workCenterData.map((workCenter) => {
-      return {
-        ...workCenter,
-        queueCount: Math.max(0, workCenter.queueCount - 1),
-      };
-    });
-    setWorkCenterData(newWorkCenterData);
+    setIsRunning(true);
   };
   return (
     <>
       <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
         <h1 className="text-3xl font-bold">Factory Simulator</h1>
-        <div className="flex gap-4">
+        <div className="grid grid-cols-3 gap-4">
           {workCenterData.map((workCenter) => {
             return <WorkCenterCard key={workCenter.name} {...workCenter} />;
           })}
