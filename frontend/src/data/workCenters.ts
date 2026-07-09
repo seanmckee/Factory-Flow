@@ -46,7 +46,7 @@ export const initialWorkCenters: WorkCenter[] = [
     name: "Packaging",
     queueCount: 0,
     status: "Idle",
-    processTimeSeconds: 1,
+    processTimeSeconds: 3,
     progressSeconds: 0,
   },
 ];

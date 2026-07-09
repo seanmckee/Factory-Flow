@@ -1,15 +1,19 @@
 import type { WorkCenter, WorkCenterStatus } from "../types/WorkCenter";
-
+type SimulationTickResult = {
+  updatedWorkCenters: WorkCenter[];
+  finishedParts: number;
+};
 export function simulateTick(
   workCenters: WorkCenter[],
   productionLine: number[],
-): WorkCenter[] {
+): SimulationTickResult {
   console.log("simulating tick");
 
   const newWorkCenters = workCenters.map((workCenter) => ({
     ...workCenter,
   }));
 
+  let finishedParts = 0;
   for (const workCenter of newWorkCenters) {
     if (workCenter.queueCount <= 0) {
       workCenter.progressSeconds = 0;
@@ -32,6 +36,8 @@ export function simulateTick(
         if (nextWorkCenter) {
           nextWorkCenter.queueCount += 1;
         }
+      } else {
+        finishedParts += 1;
       }
 
       workCenter.queueCount -= 1;
@@ -42,7 +48,7 @@ export function simulateTick(
     ...workCenter,
     status: calculateStatus(workCenter),
   }));
-  return updatedWorkCenters;
+  return { updatedWorkCenters, finishedParts };
 }
 
 function calculateStatus(workCenter: WorkCenter): WorkCenterStatus {
