@@ -3,7 +3,8 @@ import { simulateTick } from "./simulation/simulationTick";
 import WorkCenterCard from "./components/WorkCenterCard";
 import type { WorkCenter } from "./types/WorkCenter";
 import { initialWorkCenters } from "./data/workCenters";
-
+import { parts } from "./data/parts.ts";
+import PartsList from "./components/PartsList";
 type SimulationState = {
   workCenters: WorkCenter[];
   finishedParts: number;
@@ -78,6 +79,9 @@ function App() {
         >
           Reset Simulation
         </button>
+      </div>
+      <div className="flex gap-4">
+        <PartsList parts={parts} />,
       </div>
     </div>
   );
