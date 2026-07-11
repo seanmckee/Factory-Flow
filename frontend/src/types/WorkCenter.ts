@@ -8,3 +8,8 @@ export type WorkCenter = {
 };
 
 export type WorkCenterStatus = "Idle" | "Running" | "Blocked" | "Starved";
+
+export type DbWorkCenter = {
+  id: number;
+  name: string;
+};

@@ -1,6 +1,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import { workCenters } from "./db/schema.js";
+import { db } from "./db/index.js";
 
 dotenv.config();
 
@@ -26,4 +28,13 @@ app.get("/api/factory", (_req, res) => {
 
 app.listen(port, () => {
   console.log(`Backend running on http://localhost:${port}`);
+});
+
+app.get("/api/work-centers", async (_req, res) => {
+  try {
+    const wcs = await db.select().from(workCenters);
+    res.json(wcs);
+  } catch (error) {
+    res.status(500).json({ message: "Error getting work centers", error });
+  }
 });
