@@ -1,7 +1,7 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import { workCenters } from "./db/schema.js";
+import { parts, workCenters } from "./db/schema.js";
 import { db } from "./db/index.js";
 
 dotenv.config();
@@ -36,5 +36,14 @@ app.get("/api/work-centers", async (_req, res) => {
     res.json(wcs);
   } catch (error) {
     res.status(500).json({ message: "Error getting work centers", error });
+  }
+});
+
+app.get("/api/parts", async (_req, res) => {
+  try {
+    const ps = await db.select().from(parts);
+    res.json(ps);
+  } catch (error) {
+    res.status(500).json({ message: "Error getting parts", error });
   }
 });

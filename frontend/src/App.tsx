@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { simulateTick } from "./simulation/simulationTick";
 import WorkCenterCard from "./components/WorkCenterCard";
 import type { WorkCenter, DbWorkCenter } from "./types/WorkCenter";
-import { parts } from "./data/parts.ts";
+import type { Part } from "./types/Part.ts";
 import PartsList from "./components/PartsList";
 type SimulationState = {
   workCenters: WorkCenter[];
@@ -12,6 +12,7 @@ type SimulationState = {
 function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [partsList, setPartsList] = useState<Part[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationState>({
     workCenters: [],
     finishedParts: 0,
@@ -39,6 +40,23 @@ function App() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
+
+  useEffect(() => {
+    async function loadParts() {
+      try {
+        const response = await fetch("http://localhost:3000/api/parts");
+        if (!response.ok) {
+          throw new Error("Failed to load parts");
+        }
+
+        const data: Part[] = await response.json();
+        setPartsList(data);
+      } catch (error) {
+        console.error("Failed fetching Parts List", error);
+      }
+    }
+    loadParts();
+  }, []);
 
   const toggleSimulation = () => {
     setIsRunning((prev) => !prev);
@@ -133,7 +151,7 @@ function App() {
         </button>
       </div>
       <div className="flex gap-4">
-        <PartsList parts={parts} />
+        <PartsList parts={partsList} />
       </div>
     </div>
   );
