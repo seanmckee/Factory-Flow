@@ -1,0 +1,344 @@
+{
+  "version": "8",
+  "dialect": "postgres",
+  "id": "4929f837-8716-47f2-8481-2c5822b3179e",
+  "prevIds": [
+    "6ea2d9e1-b8a2-4328-a87b-81b5514e84a4"
+  ],
+  "ddl": [
+    {
+      "isRlsEnabled": false,
+      "name": "parts",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "routing_steps",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "routings",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "work_centers",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "parts"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "part_number",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "parts"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "parts"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "routing_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "work_center_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "process_time_seconds",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "setup_time_seconds",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routings"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "part_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routings"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routings"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "'A'",
+      "generated": null,
+      "identity": null,
+      "name": "revision",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "routings"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "work_centers"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "work_centers"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "routing_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "routings",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "routing_steps_routing_id_routings_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "work_center_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "work_centers",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "name": "routing_steps_work_center_id_work_centers_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "part_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "parts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "routings_part_id_parts_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "routings"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "parts_pkey",
+      "schema": "public",
+      "table": "parts",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "routing_steps_pkey",
+      "schema": "public",
+      "table": "routing_steps",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "routings_pkey",
+      "schema": "public",
+      "table": "routings",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "work_centers_pkey",
+      "schema": "public",
+      "table": "work_centers",
+      "entityType": "pks"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "routing_id",
+        "sequence"
+      ],
+      "nullsNotDistinct": false,
+      "name": "routing_steps_routing_id_sequence_unique",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "routing_steps"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "part_number"
+      ],
+      "nullsNotDistinct": false,
+      "name": "parts_part_number_key",
+      "schema": "public",
+      "table": "parts",
+      "entityType": "uniques"
+    }
+  ],
+  "renames": []
+}
