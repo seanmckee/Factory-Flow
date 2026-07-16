@@ -1,11 +1,16 @@
-export type Routing = {
+export type RoutingStep = {
   id: number;
-  partId: number;
-  steps: RoutingStep[];
-};
-
-type RoutingStep = {
+  routingId: number;
   workCenterId: number;
   sequence: number;
   processTimeSeconds: number;
+  setupTimeSeconds: number;
+};
+
+export type Routing = {
+  id: number;
+  partId: number;
+  name: string;
+  revision: string;
+  steps: RoutingStep[];
 };
