@@ -80,6 +80,21 @@ function App() {
     setIsRunning(false);
     setSimulationState({ wipParts: [], finishedParts: 0 });
   };
+  const deriveWorkCenterView = (
+    wipParts: WipPart[],
+    routing: Routing,
+  ): Map<number, number> => {
+    // workCenterId -> queueCount
+    const counts = new Map<number, number>();
+
+    for (const wipPart of wipParts) {
+      const workCenterId = routing.steps[wipPart.stepIndex].workCenterId;
+      const current = counts.get(workCenterId) ?? 0;
+      counts.set(workCenterId, current + 1);
+    }
+
+    return counts;
+  };
   const releaseOrder = () => {
     const newParts: WipPart[] = [];
     for (let i = 0; i < 10; i++) {
@@ -113,7 +128,9 @@ function App() {
     }
     loadWorkCenters();
   }, []);
-
+  const view = routing
+    ? deriveWorkCenterView(simulationState.wipParts, routing)
+    : new Map<number, number>();
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>
@@ -122,9 +139,15 @@ function App() {
         {isLoading ? (
           <p>Loading...</p>
         ) : (
-          workCenters.map((workCenter) => (
-            <WorkCenterCard key={workCenter.id} {...workCenter} />
-          ))
+          workCenters.map((workCenter) => {
+            return (
+              <WorkCenterCard
+                key={workCenter.id}
+                name={workCenter.name}
+                queueCount={view.get(workCenter.id) ?? 0}
+              />
+            );
+          })
         )}
       </div>
 

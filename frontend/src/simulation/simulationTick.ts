@@ -11,8 +11,27 @@ export function simulateTick(
 ): SimulationTickResult {
   const newWipParts = wipParts.map((w) => ({ ...w }));
   let finishedParts = 0;
+  const inServiceIds = new Set<number>();
+  const claimed = new Set<number>();
+
+  for (const wp of newWipParts) {
+    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    if (wp.progressSeconds > 0) {
+      inServiceIds.add(wp.id);
+      claimed.add(wcId);
+    }
+  }
+
+  for (const wp of newWipParts) {
+    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    if (!claimed.has(wcId)) {
+      inServiceIds.add(wp.id);
+      claimed.add(wcId);
+    }
+  }
   for (const wipPart of newWipParts) {
     const step = routing.steps[wipPart.stepIndex];
+    if (!inServiceIds.has(wipPart.id)) continue;
     wipPart.progressSeconds += 1;
 
     if (wipPart.progressSeconds >= step.processTimeSeconds) {
