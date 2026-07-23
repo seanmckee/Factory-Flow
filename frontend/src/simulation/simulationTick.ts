@@ -1,62 +1,54 @@
-import type { WorkCenter, WorkCenterStatus } from "../types/WorkCenter";
+import type { Routing } from "../types/Routing";
+import type { WipPart } from "../types/WipPart";
+import { sampleProcessTime } from "./sampleProcessTime";
 type SimulationTickResult = {
-  updatedWorkCenters: WorkCenter[];
+  wipParts: WipPart[];
   finishedParts: number;
 };
 export function simulateTick(
-  workCenters: WorkCenter[],
-  productionLine: number[],
+  wipParts: WipPart[],
+  routing: Routing,
 ): SimulationTickResult {
-  console.log("simulating tick");
-
-  const newWorkCenters = workCenters.map((workCenter) => ({
-    ...workCenter,
-  }));
-
+  const newWipParts = wipParts.map((w) => ({ ...w }));
   let finishedParts = 0;
-  for (const workCenter of newWorkCenters) {
-    if (workCenter.queueCount <= 0) {
-      workCenter.progressSeconds = 0;
+  const inServiceIds = new Set<number>();
+  const claimed = new Set<number>();
 
-      continue;
+  for (const wp of newWipParts) {
+    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    if (wp.progressSeconds > 0) {
+      inServiceIds.add(wp.id);
+      claimed.add(wcId);
     }
+  }
 
-    workCenter.progressSeconds += 1;
+  for (const wp of newWipParts) {
+    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    if (!claimed.has(wcId)) {
+      inServiceIds.add(wp.id);
+      claimed.add(wcId);
+    }
+  }
+  for (const wipPart of newWipParts) {
+    if (!inServiceIds.has(wipPart.id)) continue;
+    wipPart.progressSeconds += 1;
 
-    if (workCenter.progressSeconds >= workCenter.processTimeSeconds) {
-      const currentProductionStep = productionLine.indexOf(workCenter.id);
-
-      if (currentProductionStep + 1 < productionLine.length) {
-        const nextWorkCenterId = productionLine[currentProductionStep + 1];
-
-        const nextWorkCenter = newWorkCenters.find(
-          (wc) => wc.id === nextWorkCenterId,
+    if (wipPart.progressSeconds >= wipPart.actualProcessTimeSeconds) {
+      wipPart.progressSeconds = 0;
+      if (wipPart.stepIndex + 1 < routing.steps.length) {
+        wipPart.stepIndex += 1;
+        wipPart.actualProcessTimeSeconds = sampleProcessTime(
+          routing.steps[wipPart.stepIndex].processTimeSeconds,
+          0.3,
         );
-
-        if (nextWorkCenter) {
-          nextWorkCenter.queueCount += 1;
-        }
       } else {
         finishedParts += 1;
+        wipPart.stepIndex = -1;
       }
-
-      workCenter.queueCount -= 1;
-      workCenter.progressSeconds = 0;
     }
   }
-  const updatedWorkCenters = newWorkCenters.map((workCenter) => ({
-    ...workCenter,
-    status: calculateStatus(workCenter),
-  }));
-  return { updatedWorkCenters, finishedParts };
-}
-
-function calculateStatus(workCenter: WorkCenter): WorkCenterStatus {
-  let status: WorkCenterStatus;
-  if (workCenter.queueCount > 0) {
-    status = "Running";
-  } else {
-    status = "Starved";
-  }
-  return status;
+  return {
+    wipParts: newWipParts.filter((w) => w.stepIndex !== -1),
+    finishedParts,
+  };
 }

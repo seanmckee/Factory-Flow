@@ -4,8 +4,11 @@ import WorkCenterCard from "./components/WorkCenterCard";
 import type { WorkCenter, DbWorkCenter } from "./types/WorkCenter";
 import type { Part } from "./types/Part.ts";
 import PartsList from "./components/PartsList";
+import type { WipPart } from "./types/WipPart.ts";
+import type { Routing } from "./types/Routing";
+import { sampleProcessTime } from "./simulation/sampleProcessTime.ts";
 type SimulationState = {
-  workCenters: WorkCenter[];
+  wipParts: WipPart[];
   finishedParts: number;
 };
 
@@ -14,24 +17,36 @@ function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [partsList, setPartsList] = useState<Part[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationState>({
-    workCenters: [],
+    wipParts: [],
     finishedParts: 0,
   });
+  const [routing, setRouting] = useState<Routing | null>(null);
 
-  const productionOrder = [1, 2, 3, 4, 5, 6];
-
+  const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+  //  const productionOrder = [1, 2, 3, 4, 5, 6];
+  useEffect(() => {
+    async function loadRouting() {
+      try {
+        const response = await fetch("http://localhost:3000/api/routings/2");
+        if (!response.ok) throw new Error("Failed to load routing");
+        const data: Routing = await response.json();
+        setRouting(data);
+      } catch (error) {
+        console.error("Failed fetching routing", error);
+      }
+    }
+    loadRouting();
+  }, []);
   useEffect(() => {
     if (!isRunning) return;
 
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
-        const tickData = simulateTick(
-          currentSimulation.workCenters,
-          productionOrder,
-        );
+        if (!routing) return currentSimulation;
+        const tickData = simulateTick(currentSimulation.wipParts, routing);
 
         return {
-          workCenters: tickData.updatedWorkCenters,
+          wipParts: tickData.wipParts,
           finishedParts:
             currentSimulation.finishedParts + tickData.finishedParts,
         };
@@ -40,7 +55,6 @@ function App() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
-
   useEffect(() => {
     async function loadParts() {
       try {
@@ -64,23 +78,42 @@ function App() {
 
   const resetSimulation = () => {
     setIsRunning(false);
-    setSimulationState((prev) => ({
-      ...prev,
-      workCenters: prev.workCenters.map((wc) => ({
-        ...wc,
-        queueCount: 0,
-        status: "Idle",
-        progressSeconds: 0,
-      })),
-      finishedParts: 0,
-    }));
+    setSimulationState({ wipParts: [], finishedParts: 0 });
+  };
+  const deriveWorkCenterView = (
+    wipParts: WipPart[],
+    routing: Routing,
+  ): Map<number, number> => {
+    // workCenterId -> queueCount
+    const counts = new Map<number, number>();
+
+    for (const wipPart of wipParts) {
+      const workCenterId = routing.steps[wipPart.stepIndex].workCenterId;
+      const current = counts.get(workCenterId) ?? 0;
+      counts.set(workCenterId, current + 1);
+    }
+
+    return counts;
   };
   const releaseOrder = () => {
+    if (!routing) return;
+    const newParts: WipPart[] = [];
+    const firstStep = routing.steps[0];
+    for (let i = 0; i < 10; i++) {
+      newParts.push({
+        id: Date.now() + i,
+        workOrderId: 1,
+        stepIndex: 0,
+        progressSeconds: 0,
+        actualProcessTimeSeconds: sampleProcessTime(
+          firstStep.processTimeSeconds,
+          0.3,
+        ),
+      });
+    }
     setSimulationState((prev) => ({
       ...prev,
-      workCenters: prev.workCenters.map((wc) =>
-        wc.id === 1 ? { ...wc, queueCount: 50 } : wc,
-      ),
+      wipParts: [...prev.wipParts, ...newParts],
     }));
   };
   useEffect(() => {
@@ -91,18 +124,8 @@ function App() {
         if (!response.ok) {
           throw new Error("Failed to load work centers");
         }
-        const data: DbWorkCenter[] = await response.json();
-        const workCentersWithState: WorkCenter[] = data.map((wc) => ({
-          ...wc,
-          queueCount: 0,
-          status: "Idle",
-          progressSeconds: 0,
-          processTimeSeconds: 3,
-        }));
-        setSimulationState((prev) => ({
-          ...prev,
-          workCenters: workCentersWithState,
-        }));
+        const data: WorkCenter[] = await response.json();
+        setWorkCenters(data);
         setIsLoading(false);
       } catch (error) {
         console.error("Failed to load work centers. Error: ", error);
@@ -111,7 +134,9 @@ function App() {
     }
     loadWorkCenters();
   }, []);
-
+  const view = routing
+    ? deriveWorkCenterView(simulationState.wipParts, routing)
+    : new Map<number, number>();
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>
@@ -120,9 +145,15 @@ function App() {
         {isLoading ? (
           <p>Loading...</p>
         ) : (
-          simulationState.workCenters.map((workCenter) => (
-            <WorkCenterCard key={workCenter.id} {...workCenter} />
-          ))
+          workCenters.map((workCenter) => {
+            return (
+              <WorkCenterCard
+                key={workCenter.id}
+                name={workCenter.name}
+                queueCount={view.get(workCenter.id) ?? 0}
+              />
+            );
+          })
         )}
       </div>
 
