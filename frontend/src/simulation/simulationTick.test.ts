@@ -32,7 +32,13 @@ describe("simulateTick", () => {
   it("advances a part's progress by 1 second per tick", () => {
     // Arrange
     const wipParts: WipPart[] = [
-      { id: 1, workOrderId: 1, stepIndex: 0, progressSeconds: 0 },
+      {
+        id: 1,
+        workOrderId: 1,
+        stepIndex: 0,
+        progressSeconds: 0,
+        actualProcessTimeSeconds: 5,
+      },
     ];
 
     // Act
@@ -43,8 +49,20 @@ describe("simulateTick", () => {
   });
   it("only advances one part per work center (capacity of 1)", () => {
     const wipParts: WipPart[] = [
-      { id: 1, workOrderId: 1, stepIndex: 0, progressSeconds: 0 },
-      { id: 2, workOrderId: 1, stepIndex: 0, progressSeconds: 0 },
+      {
+        id: 1,
+        workOrderId: 1,
+        stepIndex: 0,
+        progressSeconds: 0,
+        actualProcessTimeSeconds: 5,
+      },
+      {
+        id: 2,
+        workOrderId: 1,
+        stepIndex: 0,
+        progressSeconds: 0,
+        actualProcessTimeSeconds: 5,
+      },
     ];
 
     const result = simulateTick(wipParts, testRouting);
@@ -55,7 +73,13 @@ describe("simulateTick", () => {
   });
   it("moves to next step when process time completes", () => {
     const wipParts: WipPart[] = [
-      { id: 1, workOrderId: 1, stepIndex: 0, progressSeconds: 4 },
+      {
+        id: 1,
+        workOrderId: 1,
+        stepIndex: 0,
+        progressSeconds: 4,
+        actualProcessTimeSeconds: 5,
+      },
     ];
     const result = simulateTick(wipParts, testRouting);
     expect(result.wipParts[0].stepIndex).toBe(1);
@@ -63,7 +87,13 @@ describe("simulateTick", () => {
   });
   it("finished part leaves array and increases finishedParts", () => {
     const wipParts: WipPart[] = [
-      { id: 1, workOrderId: 1, stepIndex: 1, progressSeconds: 4 },
+      {
+        id: 1,
+        workOrderId: 1,
+        stepIndex: 1,
+        progressSeconds: 4,
+        actualProcessTimeSeconds: 5,
+      },
     ];
     const result = simulateTick(wipParts, testRouting);
     expect(result.finishedParts).toBe(1);

@@ -6,6 +6,7 @@ import type { Part } from "./types/Part.ts";
 import PartsList from "./components/PartsList";
 import type { WipPart } from "./types/WipPart.ts";
 import type { Routing } from "./types/Routing";
+import { sampleProcessTime } from "./simulation/sampleProcessTime.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: number;
@@ -41,7 +42,6 @@ function App() {
 
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
-        console.log(currentSimulation);
         if (!routing) return currentSimulation;
         const tickData = simulateTick(currentSimulation.wipParts, routing);
 
@@ -96,13 +96,19 @@ function App() {
     return counts;
   };
   const releaseOrder = () => {
+    if (!routing) return;
     const newParts: WipPart[] = [];
+    const firstStep = routing.steps[0];
     for (let i = 0; i < 10; i++) {
       newParts.push({
         id: Date.now() + i,
         workOrderId: 1,
         stepIndex: 0,
         progressSeconds: 0,
+        actualProcessTimeSeconds: sampleProcessTime(
+          firstStep.processTimeSeconds,
+          0.3,
+        ),
       });
     }
     setSimulationState((prev) => ({

@@ -3,4 +3,5 @@ export type WipPart = {
   workOrderId: number;
   stepIndex: number;
   progressSeconds: number;
+  actualProcessTimeSeconds: number;
 };
