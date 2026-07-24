@@ -4,7 +4,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 1,
     name: "Raw Material",
-    queueCount: 100,
+    partsAtStation: 100,
     status: "Idle",
     processTimeSeconds: 1,
     progressSeconds: 0,
@@ -12,7 +12,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 2,
     name: "Cutter",
-    queueCount: 0,
+    partsAtStation: 0,
     status: "Idle",
     processTimeSeconds: 3,
     progressSeconds: 0,
@@ -20,7 +20,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 3,
     name: "Drill Press",
-    queueCount: 0,
+    partsAtStation: 0,
     status: "Idle",
     processTimeSeconds: 2,
     progressSeconds: 0,
@@ -28,7 +28,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 4,
     name: "Deburr",
-    queueCount: 0,
+    partsAtStation: 0,
     status: "Idle",
     processTimeSeconds: 4,
     progressSeconds: 0,
@@ -36,7 +36,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 5,
     name: "Inspection",
-    queueCount: 0,
+    partsAtStation: 0,
     status: "Idle",
     processTimeSeconds: 2,
     progressSeconds: 0,
@@ -44,7 +44,7 @@ export const initialWorkCenters: WorkCenter[] = [
   {
     id: 6,
     name: "Packaging",
-    queueCount: 0,
+    partsAtStation: 0,
     status: "Idle",
     processTimeSeconds: 3,
     progressSeconds: 0,

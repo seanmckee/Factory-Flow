@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { simulateTick } from "./simulation/simulationTick";
 import WorkCenterCard from "./components/WorkCenterCard";
-import type { WorkCenter, DbWorkCenter } from "./types/WorkCenter";
+import type { WorkCenter, WorkCenterView } from "./types/WorkCenter";
 import type { Part } from "./types/Part.ts";
 import PartsList from "./components/PartsList";
 import type { WipPart } from "./types/WipPart.ts";
@@ -23,7 +23,6 @@ function App() {
   const [routing, setRouting] = useState<Routing | null>(null);
 
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
-  //  const productionOrder = [1, 2, 3, 4, 5, 6];
   useEffect(() => {
     async function loadRouting() {
       try {
@@ -83,16 +82,25 @@ function App() {
   const deriveWorkCenterView = (
     wipParts: WipPart[],
     routing: Routing,
-  ): Map<number, number> => {
-    // workCenterId -> queueCount
-    const counts = new Map<number, number>();
+  ): Map<number, WorkCenterView> => {
+    // workCenterId -> partsAtStation
+    // workCenterId -> WorkCenterView (partsAtStation, percentFinished)
+    const counts = new Map<number, WorkCenterView>();
 
     for (const wipPart of wipParts) {
       const workCenterId = routing.steps[wipPart.stepIndex].workCenterId;
-      const current = counts.get(workCenterId) ?? 0;
-      counts.set(workCenterId, current + 1);
+      const existing = counts.get(workCenterId);
+      counts.set(workCenterId, {
+        partsAtStation: (existing?.partsAtStation ?? 0) + 1,
+        percentFinished:
+          wipPart.progressSeconds > 0
+            ? Math.round(
+                (wipPart.progressSeconds / wipPart.actualProcessTimeSeconds) *
+                  100,
+              )
+            : (existing?.percentFinished ?? 0),
+      });
     }
-
     return counts;
   };
   const releaseOrder = () => {
@@ -136,7 +144,7 @@ function App() {
   }, []);
   const view = routing
     ? deriveWorkCenterView(simulationState.wipParts, routing)
-    : new Map<number, number>();
+    : new Map<number, WorkCenterView>();
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>
@@ -150,7 +158,12 @@ function App() {
               <WorkCenterCard
                 key={workCenter.id}
                 name={workCenter.name}
-                queueCount={view.get(workCenter.id) ?? 0}
+                workCenterData={
+                  view.get(workCenter.id) ?? {
+                    partsAtStation: 0,
+                    percentFinished: 0,
+                  }
+                }
               />
             );
           })
