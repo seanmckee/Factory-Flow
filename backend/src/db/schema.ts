@@ -40,3 +40,16 @@ export const routingSteps = pgTable(
   },
   (table) => [unique().on(table.routingId, table.sequence)],
 );
+
+export const workOrders = pgTable("work_orders", {
+  id: serial("id").primaryKey(),
+  partId: integer("part_id").references(() => parts.id, {
+    onDelete: "restrict",
+  }),
+  routingId: integer("routing_id").references(() => routings.id, {
+    onDelete: "restrict",
+  }),
+  quantity: integer("quantity").notNull(),
+  orderNumber: varchar("order_number", { length: 255 }).notNull().unique(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+});
