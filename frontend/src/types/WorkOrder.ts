@@ -1,6 +1,8 @@
 export type WorkOrder = {
   id: number;
+  orderNumber: string;
   partId: number;
+  routingId: number;
   quantity: number;
-  completedQuantity: number;
+  partName: string;
 };

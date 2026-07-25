@@ -7,6 +7,7 @@ import PartsList from "../components/PartsList";
 import type { WipPart } from "../types/WipPart.ts";
 import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
+import type { WorkOrder } from "../types/WorkOrder.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: number;
@@ -21,12 +22,14 @@ function App() {
     finishedParts: 0,
   });
   const [routing, setRouting] = useState<Routing | null>(null);
-
+  // TODO: create type for work orders, make sure to set in the useEffect as well
+  const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
   useEffect(() => {
     async function loadRouting() {
       try {
-        const response = await fetch("http://localhost:3000/api/routings/2");
+        const response = await fetch("http://localhost:3000/api/routings/3");
         if (!response.ok) throw new Error("Failed to load routing");
         const data: Routing = await response.json();
         setRouting(data);
@@ -35,6 +38,21 @@ function App() {
       }
     }
     loadRouting();
+  }, []);
+  useEffect(() => {
+    async function loadWorkOrders() {
+      try {
+        const response = await fetch("http://localhost:3000/api/work-orders");
+
+        if (!response.ok) throw new Error("Failed to load work orders");
+        const data: WorkOrder[] = await response.json();
+        setWorkOrders(data);
+        console.log(data);
+      } catch (error) {
+        console.error("Failed fetching work orders", error);
+      }
+    }
+    loadWorkOrders();
   }, []);
   useEffect(() => {
     if (!isRunning) return;
@@ -105,12 +123,14 @@ function App() {
   };
   const releaseOrder = () => {
     if (!routing) return;
+    const order = workOrders.find((wo) => wo.id === selectedOrderId);
+    if (!order) return;
     const newParts: WipPart[] = [];
     const firstStep = routing.steps[0];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < order.quantity; i++) {
       newParts.push({
         id: Date.now() + i,
-        workOrderId: 1,
+        workOrderId: order.id,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: sampleProcessTime(
@@ -196,6 +216,25 @@ function App() {
       </div>
       <div className="flex gap-4">
         <PartsList parts={partsList} />
+      </div>
+      <div>
+        <div className="flex gap-4 items-center">
+          <select
+            value={selectedOrderId ?? ""}
+            onChange={(e) =>
+              setSelectedOrderId(e.target.value ? Number(e.target.value) : null)
+            }
+            className="border border-slate-300 rounded-lg p-2 bg-white"
+          >
+            <option value="">Select a work order</option>
+            {workOrders.map((workOrder) => (
+              <option key={workOrder.id} value={workOrder.id}>
+                {workOrder.orderNumber} · {workOrder.partName} · qty{" "}
+                {workOrder.quantity}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );
