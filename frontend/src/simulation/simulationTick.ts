@@ -7,15 +7,20 @@ type SimulationTickResult = {
 };
 export function simulateTick(
   wipParts: WipPart[],
-  routing: Routing,
+  routings: Map<number, Routing>,
 ): SimulationTickResult {
   const newWipParts = wipParts.map((w) => ({ ...w }));
   let finishedParts = 0;
-  const inServiceIds = new Set<number>();
+  const inServiceIds = new Set<string>();
   const claimed = new Set<number>();
 
   for (const wp of newWipParts) {
-    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    const partRouting = routings.get(wp.routingId);
+    if (!partRouting) {
+      console.error("No routing found for part", wp.id, wp.routingId);
+      continue;
+    }
+    const wcId = partRouting.steps[wp.stepIndex].workCenterId;
     if (wp.progressSeconds > 0) {
       inServiceIds.add(wp.id);
       claimed.add(wcId);
@@ -23,7 +28,12 @@ export function simulateTick(
   }
 
   for (const wp of newWipParts) {
-    const wcId = routing.steps[wp.stepIndex].workCenterId;
+    const partRouting = routings.get(wp.routingId);
+    if (!partRouting) {
+      console.error("No routing found for part", wp.id, wp.routingId);
+      continue;
+    }
+    const wcId = partRouting.steps[wp.stepIndex].workCenterId;
     if (!claimed.has(wcId)) {
       inServiceIds.add(wp.id);
       claimed.add(wcId);
@@ -31,14 +41,21 @@ export function simulateTick(
   }
   for (const wipPart of newWipParts) {
     if (!inServiceIds.has(wipPart.id)) continue;
+
+    const partRouting = routings.get(wipPart.routingId);
+
+    if (!partRouting) {
+      console.error("No routing found for part", wipPart.id, wipPart.routingId);
+      continue;
+    }
     wipPart.progressSeconds += 1;
 
     if (wipPart.progressSeconds >= wipPart.actualProcessTimeSeconds) {
       wipPart.progressSeconds = 0;
-      if (wipPart.stepIndex + 1 < routing.steps.length) {
+      if (wipPart.stepIndex + 1 < partRouting.steps.length) {
         wipPart.stepIndex += 1;
         wipPart.actualProcessTimeSeconds = sampleProcessTime(
-          routing.steps[wipPart.stepIndex].processTimeSeconds,
+          partRouting.steps[wipPart.stepIndex].processTimeSeconds,
           0.3,
         );
       } else {
