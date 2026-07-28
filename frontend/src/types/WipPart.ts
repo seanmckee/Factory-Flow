@@ -1,6 +1,7 @@
 export type WipPart = {
-  id: number;
+  id: string;
   workOrderId: number;
+  routingId: number;
   stepIndex: number;
   progressSeconds: number;
   actualProcessTimeSeconds: number;

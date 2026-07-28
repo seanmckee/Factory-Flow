@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { simulateTick } from "../simulation/simulationTick";
 import WorkCenterCard from "../components/WorkCenterCard";
 import type { WorkCenter, WorkCenterView } from "../types/WorkCenter";
@@ -21,24 +21,15 @@ function App() {
     wipParts: [],
     finishedParts: 0,
   });
-  const [routing, setRouting] = useState<Routing | null>(null);
-  // TODO: create type for work orders, make sure to set in the useEffect as well
+  const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+
+  const routingsRef = useRef(routings);
   useEffect(() => {
-    async function loadRouting() {
-      try {
-        const response = await fetch("http://localhost:3000/api/routings/3");
-        if (!response.ok) throw new Error("Failed to load routing");
-        const data: Routing = await response.json();
-        setRouting(data);
-      } catch (error) {
-        console.error("Failed fetching routing", error);
-      }
-    }
-    loadRouting();
-  }, []);
+    routingsRef.current = routings;
+  }, [routings]);
   useEffect(() => {
     async function loadWorkOrders() {
       try {
@@ -59,8 +50,11 @@ function App() {
 
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
-        if (!routing) return currentSimulation;
-        const tickData = simulateTick(currentSimulation.wipParts, routing);
+        //if (!routings) return currentSimulation;
+        const tickData = simulateTick(
+          currentSimulation.wipParts,
+          routingsRef.current,
+        );
 
         return {
           wipParts: tickData.wipParts,
@@ -99,14 +93,16 @@ function App() {
   };
   const deriveWorkCenterView = (
     wipParts: WipPart[],
-    routing: Routing,
+    routings: Map<number, Routing>,
   ): Map<number, WorkCenterView> => {
     // workCenterId -> partsAtStation
     // workCenterId -> WorkCenterView (partsAtStation, percentFinished)
     const counts = new Map<number, WorkCenterView>();
 
     for (const wipPart of wipParts) {
-      const workCenterId = routing.steps[wipPart.stepIndex].workCenterId;
+      const partRouting = routings.get(wipPart.routingId);
+      if (!partRouting) continue;
+      const workCenterId = partRouting.steps[wipPart.stepIndex].workCenterId;
       const existing = counts.get(workCenterId);
       counts.set(workCenterId, {
         partsAtStation: (existing?.partsAtStation ?? 0) + 1,
@@ -121,16 +117,32 @@ function App() {
     }
     return counts;
   };
-  const releaseOrder = () => {
-    if (!routing) return;
+  const releaseOrder = async () => {
     const order = workOrders.find((wo) => wo.id === selectedOrderId);
-    if (!order) return;
+    if (!order) {
+      alert("Please Select a Work Order to Release");
+      return;
+    }
+    let fetchedRouting: Routing | null = null;
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/routings/${order.routingId}`,
+      );
+      if (!response.ok) throw new Error("Failed to load routing");
+      const data: Routing = await response.json();
+      setRoutings((prev) => new Map(prev).set(order.routingId, data));
+      fetchedRouting = data;
+    } catch (error) {
+      console.error("Failed fetching routing", error);
+      return;
+    }
     const newParts: WipPart[] = [];
-    const firstStep = routing.steps[0];
+    const firstStep = fetchedRouting.steps[0];
     for (let i = 0; i < order.quantity; i++) {
       newParts.push({
-        id: Date.now() + i,
+        id: crypto.randomUUID(),
         workOrderId: order.id,
+        routingId: order.routingId,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: sampleProcessTime(
@@ -162,9 +174,7 @@ function App() {
     }
     loadWorkCenters();
   }, []);
-  const view = routing
-    ? deriveWorkCenterView(simulationState.wipParts, routing)
-    : new Map<number, WorkCenterView>();
+  const view = deriveWorkCenterView(simulationState.wipParts, routings);
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>

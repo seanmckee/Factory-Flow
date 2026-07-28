@@ -43,12 +43,20 @@ async function seed() {
     .returning();
 
   const bracket = insertedParts.find((p) => p.partNumber === "100-001")!;
+  const flange = insertedParts.find((p) => p.partNumber === "100-002")!;
+
+  const [flangeRouting] = await db
+    .insert(routings)
+    .values({ partId: flange!.id, name: "Standard Flange Process" })
+    .returning();
+
   const [bracketRouting] = await db
     .insert(routings)
     .values({ partId: bracket!.id, name: "Standard Bracket Process" })
     .returning();
 
-  if (!bracketRouting) throw new Error("Routing insert failed");
+  if (!bracketRouting || !flangeRouting)
+    throw new Error("Routing insert failed");
   const [rawMaterial, cutter, drillPress, deburr, inspection, packaging] =
     insertedWorkCenters;
   if (
@@ -61,6 +69,45 @@ async function seed() {
   ) {
     throw new Error("Work center insert failed");
   }
+
+  await db.insert(routingSteps).values([
+    {
+      routingId: flangeRouting.id,
+      workCenterId: rawMaterial.id,
+      sequence: 1,
+      processTimeSeconds: 3,
+      setupTimeSeconds: 0,
+    },
+    {
+      routingId: flangeRouting.id,
+      workCenterId: cutter.id,
+      sequence: 2,
+      processTimeSeconds: 2,
+      setupTimeSeconds: 1,
+    },
+    {
+      routingId: flangeRouting.id,
+      workCenterId: deburr.id,
+      sequence: 3,
+      processTimeSeconds: 8,
+      setupTimeSeconds: 2,
+    },
+    {
+      routingId: flangeRouting.id,
+      workCenterId: inspection.id,
+      sequence: 4,
+      processTimeSeconds: 2,
+      setupTimeSeconds: 0,
+    },
+    {
+      routingId: flangeRouting.id,
+      workCenterId: packaging.id,
+      sequence: 5,
+      processTimeSeconds: 3,
+      setupTimeSeconds: 0,
+    },
+  ]);
+
   await db.insert(routingSteps).values([
     {
       routingId: bracketRouting.id,
@@ -115,7 +162,7 @@ async function seed() {
     {
       orderNumber: "WO-1002",
       partId: bracket.id,
-      routingId: bracketRouting.id,
+      routingId: flangeRouting.id,
       quantity: 25,
     },
     {
