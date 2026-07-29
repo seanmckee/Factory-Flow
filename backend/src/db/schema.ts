@@ -9,7 +9,7 @@ export const parts = pgTable("parts", {
   id: serial("id").primaryKey(),
   partNumber: varchar("part_number", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
-  materialCostCents: integer("material_cost_cents").notNull(),
+  materialCostCents: integer("material_cost_cents").notNull().default(0),
 });
 
 export const routings = pgTable("routings", {
