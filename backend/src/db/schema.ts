@@ -9,6 +9,7 @@ export const parts = pgTable("parts", {
   id: serial("id").primaryKey(),
   partNumber: varchar("part_number", { length: 255 }).notNull().unique(),
   name: varchar("name", { length: 255 }).notNull(),
+  materialCostCents: integer("material_cost_cents").notNull().default(0),
 });
 
 export const routings = pgTable("routings", {
@@ -43,13 +44,49 @@ export const routingSteps = pgTable(
 
 export const workOrders = pgTable("work_orders", {
   id: serial("id").primaryKey(),
-  partId: integer("part_id").references(() => parts.id, {
-    onDelete: "restrict",
-  }),
-  routingId: integer("routing_id").references(() => routings.id, {
-    onDelete: "restrict",
-  }),
+  partId: integer("part_id")
+    .references(() => parts.id, {
+      onDelete: "restrict",
+    })
+    .notNull(),
+  routingId: integer("routing_id")
+    .references(() => routings.id, {
+      onDelete: "restrict",
+    })
+    .notNull(),
   quantity: integer("quantity").notNull(),
   orderNumber: varchar("order_number", { length: 255 }).notNull().unique(),
   status: varchar("status", { length: 20 }).notNull().default("pending"),
 });
+
+export const salesOrders = pgTable("sales_orders", {
+  id: serial("id").primaryKey(),
+  partId: integer("part_id")
+    .references(() => parts.id, {
+      onDelete: "restrict",
+    })
+    .notNull(),
+  quantity: integer("quantity").notNull(),
+  unitPriceCents: integer("unit_price_cents").notNull(),
+  orderNumber: varchar("order_number", { length: 255 }).notNull().unique(),
+});
+
+export const allocations = pgTable(
+  "allocations",
+  {
+    id: serial("id").primaryKey(),
+    salesOrderId: integer("sales_order_id")
+      .references(() => salesOrders.id, {
+        onDelete: "cascade",
+      })
+      .notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, {
+        onDelete: "cascade",
+      })
+      .notNull(),
+    quantity: integer("quantity").notNull(),
+  },
+
+  (table) => [unique().on(table.salesOrderId, table.workOrderId)],
+);

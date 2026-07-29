@@ -1,11 +1,17 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "d6b13f16-8e2e-423d-9c01-336e0d8bb59c",
+  "id": "576ee021-fb20-42de-98aa-209091f94bf8",
   "prevIds": [
-    "4929f837-8716-47f2-8481-2c5822b3179e"
+    "00000000-0000-0000-0000-000000000000"
   ],
   "ddl": [
+    {
+      "isRlsEnabled": false,
+      "name": "allocations",
+      "entityType": "tables",
+      "schema": "public"
+    },
     {
       "isRlsEnabled": false,
       "name": "parts",
@@ -26,6 +32,12 @@
     },
     {
       "isRlsEnabled": false,
+      "name": "sales_orders",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
       "name": "work_centers",
       "entityType": "tables",
       "schema": "public"
@@ -35,6 +47,58 @@
       "name": "work_orders",
       "entityType": "tables",
       "schema": "public"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "allocations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sales_order_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "allocations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "work_order_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "allocations"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "quantity",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "allocations"
     },
     {
       "type": "serial",
@@ -71,6 +135,19 @@
       "generated": null,
       "identity": null,
       "name": "name",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "parts"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": "0",
+      "generated": null,
+      "identity": null,
+      "name": "material_cost_cents",
       "entityType": "columns",
       "schema": "public",
       "table": "parts"
@@ -216,6 +293,71 @@
       "name": "id",
       "entityType": "columns",
       "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "part_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "quantity",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "unit_price_cents",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "type": "varchar(255)",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "order_number",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "type": "serial",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "id",
+      "entityType": "columns",
+      "schema": "public",
       "table": "work_centers"
     },
     {
@@ -247,7 +389,7 @@
     {
       "type": "integer",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -260,7 +402,7 @@
     {
       "type": "integer",
       "typeSchema": null,
-      "notNull": false,
+      "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
@@ -308,6 +450,40 @@
       "entityType": "columns",
       "schema": "public",
       "table": "work_orders"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "sales_order_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "sales_orders",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "allocations_sales_order_id_sales_orders_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "allocations"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "work_order_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "work_orders",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "allocations_work_order_id_work_orders_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "allocations"
     },
     {
       "nameExplicit": false,
@@ -372,6 +548,23 @@
       ],
       "onUpdate": "NO ACTION",
       "onDelete": "RESTRICT",
+      "name": "sales_orders_part_id_parts_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "sales_orders"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "part_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "parts",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
       "name": "work_orders_part_id_parts_id_fkey",
       "entityType": "fks",
       "schema": "public",
@@ -393,6 +586,16 @@
       "entityType": "fks",
       "schema": "public",
       "table": "work_orders"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "allocations_pkey",
+      "schema": "public",
+      "table": "allocations",
+      "entityType": "pks"
     },
     {
       "columns": [
@@ -429,6 +632,16 @@
         "id"
       ],
       "nameExplicit": false,
+      "name": "sales_orders_pkey",
+      "schema": "public",
+      "table": "sales_orders",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
       "name": "work_centers_pkey",
       "schema": "public",
       "table": "work_centers",
@@ -443,6 +656,18 @@
       "schema": "public",
       "table": "work_orders",
       "entityType": "pks"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "sales_order_id",
+        "work_order_id"
+      ],
+      "nullsNotDistinct": false,
+      "name": "allocations_sales_order_id_work_order_id_unique",
+      "entityType": "uniques",
+      "schema": "public",
+      "table": "allocations"
     },
     {
       "nameExplicit": false,
@@ -465,6 +690,17 @@
       "name": "parts_part_number_key",
       "schema": "public",
       "table": "parts",
+      "entityType": "uniques"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "order_number"
+      ],
+      "nullsNotDistinct": false,
+      "name": "sales_orders_order_number_key",
+      "schema": "public",
+      "table": "sales_orders",
       "entityType": "uniques"
     },
     {
