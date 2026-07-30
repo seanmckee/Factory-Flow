@@ -3,14 +3,15 @@ import type { WipPart } from "../types/WipPart";
 import { sampleProcessTime } from "./sampleProcessTime";
 type SimulationTickResult = {
   wipParts: WipPart[];
-  finishedParts: number;
+  finishedParts: WipPart[];
 };
+
 export function simulateTick(
   wipParts: WipPart[],
   routings: Map<number, Routing>,
 ): SimulationTickResult {
   const newWipParts = wipParts.map((w) => ({ ...w }));
-  let finishedParts = 0;
+  let finishedParts: WipPart[] = [];
   const inServiceIds = new Set<string>();
   const claimed = new Set<number>();
 
@@ -59,7 +60,8 @@ export function simulateTick(
           0.3,
         );
       } else {
-        finishedParts += 1;
+        // deal with finished parts
+        finishedParts.push(wipPart);
         wipPart.stepIndex = -1;
       }
     }

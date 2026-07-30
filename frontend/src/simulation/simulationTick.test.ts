@@ -28,75 +28,81 @@ const testRouting: Routing = {
   ],
 };
 
+const testRoutings = new Map<number, Routing>([[1, testRouting]]);
+
 describe("simulateTick", () => {
   it("advances a part's progress by 1 second per tick", () => {
     // Arrange
     const wipParts: WipPart[] = [
       {
-        id: 1,
+        id: "part-1",
         workOrderId: 1,
+        routingId: 1,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: 5,
       },
     ];
-
     // Act
-    const result = simulateTick(wipParts, testRouting);
-
+    const result = simulateTick(wipParts, testRoutings);
     // Assert
     expect(result.wipParts[0].progressSeconds).toBe(1);
   });
+
   it("only advances one part per work center (capacity of 1)", () => {
     const wipParts: WipPart[] = [
       {
-        id: 1,
+        id: "part-1",
         workOrderId: 1,
+        routingId: 1,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: 5,
       },
       {
-        id: 2,
+        id: "part-2",
         workOrderId: 1,
+        routingId: 1,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: 5,
       },
     ];
-
-    const result = simulateTick(wipParts, testRouting);
-
+    const result = simulateTick(wipParts, testRoutings);
     expect(result.wipParts[0].progressSeconds).toBe(1);
-
     expect(result.wipParts[1].progressSeconds).toBe(0);
   });
+
   it("moves to next step when process time completes", () => {
     const wipParts: WipPart[] = [
       {
-        id: 1,
+        id: "part-1",
         workOrderId: 1,
+        routingId: 1,
         stepIndex: 0,
         progressSeconds: 4,
         actualProcessTimeSeconds: 5,
       },
     ];
-    const result = simulateTick(wipParts, testRouting);
+    const result = simulateTick(wipParts, testRoutings);
     expect(result.wipParts[0].stepIndex).toBe(1);
     expect(result.wipParts[0].progressSeconds).toBe(0);
   });
-  it("finished part leaves array and increases finishedParts", () => {
+
+  it("finished part leaves wipParts and appears in finishedParts", () => {
     const wipParts: WipPart[] = [
       {
-        id: 1,
+        id: "part-1",
         workOrderId: 1,
+        routingId: 1,
         stepIndex: 1,
         progressSeconds: 4,
         actualProcessTimeSeconds: 5,
       },
     ];
-    const result = simulateTick(wipParts, testRouting);
-    expect(result.finishedParts).toBe(1);
+    const result = simulateTick(wipParts, testRoutings);
+    expect(result.finishedParts.length).toBe(1);
+    expect(result.finishedParts[0].workOrderId).toBe(1);
     expect(result.wipParts.length).toBe(0);
   });
 });

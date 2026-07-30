@@ -10,7 +10,7 @@ import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
 type SimulationState = {
   wipParts: WipPart[];
-  finishedParts: number;
+  finishedParts: WipPart[];
 };
 
 function App() {
@@ -19,7 +19,7 @@ function App() {
   const [partsList, setPartsList] = useState<Part[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
-    finishedParts: 0,
+    finishedParts: [],
   });
   const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -58,8 +58,10 @@ function App() {
 
         return {
           wipParts: tickData.wipParts,
-          finishedParts:
-            currentSimulation.finishedParts + tickData.finishedParts,
+          finishedParts: [
+            ...currentSimulation.finishedParts,
+            ...tickData.finishedParts,
+          ],
         };
       });
     }, 1000);
@@ -89,7 +91,7 @@ function App() {
 
   const resetSimulation = () => {
     setIsRunning(false);
-    setSimulationState({ wipParts: [], finishedParts: 0 });
+    setSimulationState({ wipParts: [], finishedParts: [] });
   };
   const deriveWorkCenterView = (
     wipParts: WipPart[],
@@ -174,7 +176,16 @@ function App() {
     }
     loadWorkCenters();
   }, []);
+
   const view = deriveWorkCenterView(simulationState.wipParts, routings);
+  const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
+  const finishedByWorkOrder = new Map<number, number>();
+  for (const fp of simulationState.finishedParts) {
+    finishedByWorkOrder.set(
+      fp.workOrderId,
+      (finishedByWorkOrder.get(fp.workOrderId) ?? 0) + 1,
+    );
+  }
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>
@@ -200,8 +211,16 @@ function App() {
         )}
       </div>
 
-      <div>Completed Parts: {simulationState.finishedParts}</div>
-
+      <div>
+        {[...finishedByWorkOrder].map(([workOrderId, qty]) => {
+          const wo = workOrderById.get(workOrderId);
+          return (
+            <div key={workOrderId}>
+              {wo?.orderNumber} ({wo?.partName}): {qty}
+            </div>
+          );
+        })}
+      </div>
       <div className="flex gap-4">
         <button
           className="bg-blue-500 text-white p-2 rounded-lg"
