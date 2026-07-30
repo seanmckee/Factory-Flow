@@ -3,7 +3,6 @@ import { simulateTick } from "../simulation/simulationTick";
 import WorkCenterCard from "../components/WorkCenterCard";
 import type { WorkCenter, WorkCenterView } from "../types/WorkCenter";
 import type { Part } from "../types/Part.ts";
-import PartsList from "../components/PartsList";
 import type { WipPart } from "../types/WipPart.ts";
 import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
@@ -16,7 +15,6 @@ type SimulationState = {
 function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [partsList, setPartsList] = useState<Part[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
     finishedParts: [],
@@ -68,22 +66,6 @@ function App() {
 
     return () => clearInterval(interval);
   }, [isRunning]);
-  useEffect(() => {
-    async function loadParts() {
-      try {
-        const response = await fetch("http://localhost:3000/api/parts");
-        if (!response.ok) {
-          throw new Error("Failed to load parts");
-        }
-
-        const data: Part[] = await response.json();
-        setPartsList(data);
-      } catch (error) {
-        console.error("Failed fetching Parts List", error);
-      }
-    }
-    loadParts();
-  }, []);
 
   const toggleSimulation = () => {
     setIsRunning((prev) => !prev);
@@ -242,9 +224,6 @@ function App() {
         >
           Release Order
         </button>
-      </div>
-      <div className="flex gap-4">
-        <PartsList parts={partsList} />
       </div>
       <div>
         <div className="flex gap-4 items-center">
