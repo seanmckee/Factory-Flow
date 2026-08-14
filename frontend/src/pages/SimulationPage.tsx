@@ -7,6 +7,7 @@ import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
 import ThroughputChart from "../components/ThroughputChart.tsx";
+import { smoothThroughput } from "../simulation/smoothThroughput.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
@@ -174,6 +175,7 @@ function App() {
   }, []);
 
   const view = deriveWorkCenterView(simulationState.wipParts, routings);
+  const smoothed = smoothThroughput(throughputHistory, 10);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   const finishedByWorkOrder = new Map<number, number>();
   for (const fp of simulationState.finishedParts) {
@@ -241,7 +243,7 @@ function App() {
       </div>
       <div>TickNum: {simulationState.tickNum}</div>
       <div className="w-full max-w-3xl">
-      <ThroughputChart data={throughputHistory} />
+      <ThroughputChart data={smoothed} />
 </div>
       <div>
         <div className="flex gap-4 items-center">
