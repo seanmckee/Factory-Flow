@@ -6,6 +6,7 @@ import type { WipPart } from "../types/WipPart.ts";
 import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
+import ThroughputChart from "../components/ThroughputChart.tsx";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
@@ -54,15 +55,18 @@ function App() {
 
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
-        //if (!routings) return currentSimulation;
-
         const nextTick = currentSimulation.tickNum + 1;
         const tickData = simulateTick(
           currentSimulation.wipParts,
           routingsRef.current,
-          nextTick
+          nextTick,
         );
-
+    
+        setThroughputHistory((prev) =>
+          [...prev, { tick: nextTick, cents: tickData.finishedParts.length * 3000 }]
+            .slice(-120),
+        );
+    
         return {
           wipParts: tickData.wipParts,
           finishedParts: [
@@ -236,6 +240,9 @@ function App() {
         </button>
       </div>
       <div>TickNum: {simulationState.tickNum}</div>
+      <div className="w-full max-w-3xl">
+      <ThroughputChart data={throughputHistory} />
+</div>
       <div>
         <div className="flex gap-4 items-center">
           <select
