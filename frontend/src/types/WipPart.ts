@@ -5,4 +5,5 @@ export type WipPart = {
   stepIndex: number;
   progressSeconds: number;
   actualProcessTimeSeconds: number;
+  completedAtTick?: number;
 };

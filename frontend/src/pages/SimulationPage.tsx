@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { simulateTick } from "../simulation/simulationTick";
 import WorkCenterCard from "../components/WorkCenterCard";
 import type { WorkCenter, WorkCenterView } from "../types/WorkCenter";
-import type { Part } from "../types/Part.ts";
 import type { WipPart } from "../types/WipPart.ts";
 import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
@@ -10,6 +9,7 @@ import type { WorkOrder } from "../types/WorkOrder.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
+  tickNum: number;
 };
 
 function App() {
@@ -18,11 +18,17 @@ function App() {
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
     finishedParts: [],
+    tickNum: 0,  
   });
   const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+
+  const [throughputHistory, setThroughputHistory] = useState<
+    { tick: number; cents: number }[]
+  >([]);
+
 
   const routingsRef = useRef(routings);
   useEffect(() => {
@@ -49,9 +55,12 @@ function App() {
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
         //if (!routings) return currentSimulation;
+
+        const nextTick = currentSimulation.tickNum + 1;
         const tickData = simulateTick(
           currentSimulation.wipParts,
           routingsRef.current,
+          nextTick
         );
 
         return {
@@ -60,6 +69,7 @@ function App() {
             ...currentSimulation.finishedParts,
             ...tickData.finishedParts,
           ],
+          tickNum: nextTick,
         };
       });
     }, 1000);
@@ -73,7 +83,7 @@ function App() {
 
   const resetSimulation = () => {
     setIsRunning(false);
-    setSimulationState({ wipParts: [], finishedParts: [] });
+    setSimulationState({ wipParts: [], finishedParts: [], tickNum: 0 });
   };
   const deriveWorkCenterView = (
     wipParts: WipPart[],
@@ -225,6 +235,7 @@ function App() {
           Release Order
         </button>
       </div>
+      <div>TickNum: {simulationState.tickNum}</div>
       <div>
         <div className="flex gap-4 items-center">
           <select
