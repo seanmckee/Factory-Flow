@@ -89,6 +89,7 @@ function App() {
   const resetSimulation = () => {
     setIsRunning(false);
     setSimulationState({ wipParts: [], finishedParts: [], tickNum: 0 });
+    setThroughputHistory([]);
   };
   const deriveWorkCenterView = (
     wipParts: WipPart[],
