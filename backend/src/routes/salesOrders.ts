@@ -28,7 +28,7 @@ router.get("/", async (_req, res) => {
       allocations: orders.get(s.id) ?? []
     }))
 
-    res.json({ so: soData, all: allocationData });
+    res.json(result);
   } catch (error) {
     res.status(500).json({ message: "Failed to get Sales Orders", error });
   }

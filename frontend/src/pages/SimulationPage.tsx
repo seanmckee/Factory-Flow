@@ -8,6 +8,8 @@ import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
 import ThroughputChart from "../components/ThroughputChart.tsx";
 import { smoothThroughput } from "../simulation/smoothThroughput.ts";
+import type { SalesOrder } from "../types/SalesOrder.ts";
+import type { Part } from "../types/Part.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
@@ -26,16 +28,25 @@ function App() {
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
+  const [parts, setParts] = useState<Part[]>([])
+
+  const salesOrdersRef = useRef(salesOrders);
+
+  useEffect(() => {
+    salesOrdersRef.current = salesOrders;
+  }, [salesOrders]);
 
   const [throughputHistory, setThroughputHistory] = useState<
     { tick: number; cents: number }[]
   >([]);
 
-
   const routingsRef = useRef(routings);
+
   useEffect(() => {
     routingsRef.current = routings;
   }, [routings]);
+
   useEffect(() => {
     async function loadWorkOrders() {
       try {
@@ -44,13 +55,44 @@ function App() {
         if (!response.ok) throw new Error("Failed to load work orders");
         const data: WorkOrder[] = await response.json();
         setWorkOrders(data);
-        console.log(data);
+        console.log(data)
       } catch (error) {
         console.error("Failed fetching work orders", error);
       }
     }
     loadWorkOrders();
   }, []);
+
+  useEffect(()=> {
+    async function loadSalesOrders(){
+      try {
+        const response = await fetch("http://localhost:3000/api/sales-orders");
+        if (!response.ok) throw new Error("Failed to load salesOrders");
+        const data: SalesOrder[] = await response.json();
+        setSalesOrders(data);
+      } catch (error) {
+        console.error("Failed fetching sales order allocations", error)
+      }
+    }
+    loadSalesOrders();
+  },[])
+
+  // get parts list
+  useEffect(()=>{
+    async function loadParts(){
+      try {
+        const response = await fetch("http://localhost:3000/api/parts");
+        if (!response.ok) throw new Error("Failed to load parts");
+        const data: Part[] = await response.json()
+        setParts(data)
+
+      } catch (error) {
+        console.error("Failed to fetch parts", error)
+      }
+    }
+    loadParts()
+  },[])
+
   useEffect(() => {
     if (!isRunning) return;
 
