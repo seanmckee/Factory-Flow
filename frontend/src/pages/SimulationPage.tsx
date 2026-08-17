@@ -10,6 +10,7 @@ import ThroughputChart from "../components/ThroughputChart.tsx";
 import { smoothThroughput } from "../simulation/smoothThroughput.ts";
 import type { SalesOrder } from "../types/SalesOrder.ts";
 import type { Part } from "../types/Part.ts";
+import { calculateThroughput } from "../simulation/calculateThroughput.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
@@ -22,14 +23,26 @@ function App() {
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
     finishedParts: [],
-    tickNum: 0,  
+    tickNum: 0,
   });
   const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+
+  const workOrdersRef = useRef(workOrders);
+  useEffect(() => {
+    workOrdersRef.current = workOrders;
+  }, [workOrders]);
+
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
-  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([])
-  const [parts, setParts] = useState<Part[]>([])
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
+  const [parts, setParts] = useState<Part[]>([]);
+
+  const partsRef = useRef(parts);
+
+  useEffect(() => {
+    partsRef.current = parts;
+  }, [parts]);
 
   const salesOrdersRef = useRef(salesOrders);
 
@@ -55,7 +68,7 @@ function App() {
         if (!response.ok) throw new Error("Failed to load work orders");
         const data: WorkOrder[] = await response.json();
         setWorkOrders(data);
-        console.log(data)
+        console.log(data);
       } catch (error) {
         console.error("Failed fetching work orders", error);
       }
@@ -63,35 +76,34 @@ function App() {
     loadWorkOrders();
   }, []);
 
-  useEffect(()=> {
-    async function loadSalesOrders(){
+  useEffect(() => {
+    async function loadSalesOrders() {
       try {
         const response = await fetch("http://localhost:3000/api/sales-orders");
         if (!response.ok) throw new Error("Failed to load salesOrders");
         const data: SalesOrder[] = await response.json();
         setSalesOrders(data);
       } catch (error) {
-        console.error("Failed fetching sales order allocations", error)
+        console.error("Failed fetching sales order allocations", error);
       }
     }
     loadSalesOrders();
-  },[])
+  }, []);
 
   // get parts list
-  useEffect(()=>{
-    async function loadParts(){
+  useEffect(() => {
+    async function loadParts() {
       try {
         const response = await fetch("http://localhost:3000/api/parts");
         if (!response.ok) throw new Error("Failed to load parts");
-        const data: Part[] = await response.json()
-        setParts(data)
-
+        const data: Part[] = await response.json();
+        setParts(data);
       } catch (error) {
-        console.error("Failed to fetch parts", error)
+        console.error("Failed to fetch parts", error);
       }
     }
-    loadParts()
-  },[])
+    loadParts();
+  }, []);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -104,12 +116,23 @@ function App() {
           routingsRef.current,
           nextTick,
         );
-    
+
         setThroughputHistory((prev) =>
-          [...prev, { tick: nextTick, cents: tickData.finishedParts.length * 3000 }]
-            .slice(-120),
+          [
+            ...prev,
+            {
+              tick: nextTick,
+              cents: calculateThroughput(
+                tickData.finishedParts,
+                currentSimulation.finishedParts,
+                workOrdersRef.current,
+                partsRef.current,
+                salesOrdersRef.current,
+              ),
+            },
+          ].slice(-120),
         );
-    
+
         return {
           wipParts: tickData.wipParts,
           finishedParts: [
@@ -286,8 +309,8 @@ function App() {
       </div>
       <div>TickNum: {simulationState.tickNum}</div>
       <div className="w-full max-w-3xl">
-      <ThroughputChart data={smoothed} />
-</div>
+        <ThroughputChart data={smoothed} />
+      </div>
       <div>
         <div className="flex gap-4 items-center">
           <select
