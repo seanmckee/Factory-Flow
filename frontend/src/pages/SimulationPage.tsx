@@ -7,7 +7,6 @@ import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
 import ThroughputChart from "../components/ThroughputChart.tsx";
-import { smoothThroughput } from "../simulation/smoothThroughput.ts";
 import type { SalesOrder } from "../types/SalesOrder.ts";
 import type { Part } from "../types/Part.ts";
 import { calculateThroughput } from "../simulation/calculateThroughput.ts";
@@ -36,6 +35,13 @@ function App() {
 
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+
+  const workCentersRef = useRef<Map<number, WorkCenter>>(new Map());
+
+  useEffect(() => {
+    workCentersRef.current = new Map(workCenters.map((wc) => [wc.id, wc]));
+  }, [workCenters]);
+
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
 
@@ -116,23 +122,22 @@ function App() {
           currentSimulation.wipParts,
           routingsRef.current,
           nextTick,
+          workCentersRef.current,
         );
 
-        setThroughputHistory((prev) =>
-          [
-            ...prev,
-            {
-              tick: nextTick,
-              cents: calculateThroughput(
-                tickData.finishedParts,
-                currentSimulation.finishedParts,
-                workOrdersRef.current,
-                partsRef.current,
-                salesOrdersRef.current,
-              ),
-            },
-          ].slice(-120),
-        );
+        setThroughputHistory((prev) => [
+          ...prev,
+          {
+            tick: nextTick,
+            cents: calculateThroughput(
+              tickData.finishedParts,
+              currentSimulation.finishedParts,
+              workOrdersRef.current,
+              partsRef.current,
+              salesOrdersRef.current,
+            ),
+          },
+        ]);
 
         return {
           wipParts: tickData.wipParts,
@@ -160,28 +165,73 @@ function App() {
   const deriveWorkCenterView = (
     wipParts: WipPart[],
     routings: Map<number, Routing>,
+    workCenters: Map<number, WorkCenter>,
   ): Map<number, WorkCenterView> => {
-    // workCenterId -> partsAtStation
-    // workCenterId -> WorkCenterView (partsAtStation, percentFinished)
-    const counts = new Map<number, WorkCenterView>();
+    // workCenterId -> every part whose current step is here (running + waiting)
+    const countByWorkCenter = new Map<number, number>();
+    // workCenterId -> percent complete of each part actually on a machine
+    const progressByWorkCenter = new Map<number, number[]>();
 
     for (const wipPart of wipParts) {
       const partRouting = routings.get(wipPart.routingId);
       if (!partRouting) continue;
       const workCenterId = partRouting.steps[wipPart.stepIndex].workCenterId;
-      const existing = counts.get(workCenterId);
-      counts.set(workCenterId, {
-        partsAtStation: (existing?.partsAtStation ?? 0) + 1,
-        percentFinished:
-          wipPart.progressSeconds > 0
-            ? Math.round(
-                (wipPart.progressSeconds / wipPart.actualProcessTimeSeconds) *
-                  100,
-              )
-            : (existing?.percentFinished ?? 0),
+
+      countByWorkCenter.set(
+        workCenterId,
+        (countByWorkCenter.get(workCenterId) ?? 0) + 1,
+      );
+
+      if (wipPart.progressSeconds > 0) {
+        const running = progressByWorkCenter.get(workCenterId) ?? [];
+        running.push(
+          Math.round(
+            (wipPart.progressSeconds / wipPart.actualProcessTimeSeconds) * 100,
+          ),
+        );
+        progressByWorkCenter.set(workCenterId, running);
+      }
+    }
+
+    const views = new Map<number, WorkCenterView>();
+    for (const workCenter of workCenters.values()) {
+      // sorted so a part finishing doesn't shuffle the remaining bars between rows
+      const running = (progressByWorkCenter.get(workCenter.id) ?? []).sort(
+        (a, b) => b - a,
+      );
+      views.set(workCenter.id, {
+        partsAtStation: countByWorkCenter.get(workCenter.id) ?? 0,
+        slots: Array.from(
+          { length: workCenter.capacity },
+          (_, slotIndex) => running[slotIndex] ?? null,
+        ),
+        slotsInUse: running.length,
+        utilization:
+          workCenter.capacity > 0 ? running.length / workCenter.capacity : 0,
       });
     }
-    return counts;
+    return views;
+  };
+
+  const updateCapacity = async (id: number, capacity: number) => {
+    if (!Number.isInteger(capacity) || capacity < 1) return;
+    try {
+      const response = await fetch(
+        `http://localhost:3000/api/work-centers/${id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ capacity }),
+        },
+      );
+      if (!response.ok) throw new Error("Failed to update capacity");
+      const updated: WorkCenter = await response.json();
+      setWorkCenters((prev) =>
+        prev.map((wc) => (wc.id === updated.id ? updated : wc)),
+      );
+    } catch (error) {
+      console.error("Failed to update work center capacity", error);
+    }
   };
   const releaseOrder = async () => {
     const order = workOrders.find((wo) => wo.id === selectedOrderId);
@@ -241,9 +291,13 @@ function App() {
     loadWorkCenters();
   }, []);
 
-  const view = deriveWorkCenterView(simulationState.wipParts, routings);
-  const smoothed = smoothThroughput(throughputHistory, 60);
-  const cumulative = cumulativeThroughput(smoothed);
+  const workCenterById = new Map(workCenters.map((wc) => [wc.id, wc]));
+  const view = deriveWorkCenterView(
+    simulationState.wipParts,
+    routings,
+    workCenterById,
+  );
+  const cumulative = cumulativeThroughput(throughputHistory);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   const finishedByWorkOrder = new Map<number, number>();
   for (const fp of simulationState.finishedParts) {
@@ -256,7 +310,7 @@ function App() {
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-3 gap-4 items-start">
         {isLoading ? (
           <p>Loading...</p>
         ) : (
@@ -264,13 +318,21 @@ function App() {
             return (
               <WorkCenterCard
                 key={workCenter.id}
+                id={workCenter.id}
                 name={workCenter.name}
+                capacity={workCenter.capacity}
                 workCenterData={
                   view.get(workCenter.id) ?? {
                     partsAtStation: 0,
-                    percentFinished: 0,
+                    slots: Array.from(
+                      { length: workCenter.capacity },
+                      () => null,
+                    ),
+                    slotsInUse: 0,
+                    utilization: 0,
                   }
                 }
+                onCapacityChange={updateCapacity}
               />
             );
           })

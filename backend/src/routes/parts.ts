@@ -6,7 +6,7 @@ const router = Router();
 
 router.get("/", async (_req, res) => {
   try {
-    const ps = await db.select().from(parts);
+    const ps = await db.select().from(parts).orderBy(parts.id);
     res.json(ps);
   } catch (error) {
     res.status(500).json({ message: "Error getting parts", error });

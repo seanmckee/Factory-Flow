@@ -3,6 +3,7 @@ import { integer, pgTable, varchar, serial, unique } from "drizzle-orm/pg-core";
 export const workCenters = pgTable("work_centers", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
+  capacity: integer("capacity").notNull().default(1),
 });
 
 export const parts = pgTable("parts", {

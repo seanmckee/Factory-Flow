@@ -13,8 +13,13 @@ const router = Router();
 // put an allocations array onto each matching sales order
 router.get("/", async (_req, res) => {
   try {
-    const soData = await db.select().from(salesOrders);
-    const allocationData = await db.select().from(allocations);
+    const soData = await db.select().from(salesOrders).orderBy(salesOrders.id);
+    // allocations are consumed in id order when crediting throughput, so the
+    // query has to be deterministic rather than relying on heap order
+    const allocationData = await db
+      .select()
+      .from(allocations)
+      .orderBy(allocations.id);
 
     // id, allocations
     const orders = new Map<number, typeof allocationData>()
