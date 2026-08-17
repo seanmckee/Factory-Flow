@@ -11,6 +11,7 @@ import { smoothThroughput } from "../simulation/smoothThroughput.ts";
 import type { SalesOrder } from "../types/SalesOrder.ts";
 import type { Part } from "../types/Part.ts";
 import { calculateThroughput } from "../simulation/calculateThroughput.ts";
+import { cumulativeThroughput } from "../simulation/cumulativeThroughput.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
@@ -188,7 +189,7 @@ function App() {
       alert("Please Select a Work Order to Release");
       return;
     }
-    let fetchedRouting: Routing | null = null;
+    let fetchedRouting: Routing | null;
     try {
       const response = await fetch(
         `http://localhost:3000/api/routings/${order.routingId}`,
@@ -241,7 +242,8 @@ function App() {
   }, []);
 
   const view = deriveWorkCenterView(simulationState.wipParts, routings);
-  const smoothed = smoothThroughput(throughputHistory, 10);
+  const smoothed = smoothThroughput(throughputHistory, 60);
+  const cumulative = cumulativeThroughput(smoothed);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   const finishedByWorkOrder = new Map<number, number>();
   for (const fp of simulationState.finishedParts) {
@@ -308,8 +310,8 @@ function App() {
         </button>
       </div>
       <div>TickNum: {simulationState.tickNum}</div>
-      <div className="w-full max-w-3xl">
-        <ThroughputChart data={smoothed} />
+      <div className="w-full max-w-3xl h-80 shrink-0">
+        <ThroughputChart data={cumulative} />
       </div>
       <div>
         <div className="flex gap-4 items-center">
