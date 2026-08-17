@@ -4,14 +4,16 @@ import { sampleProcessTime } from "./sampleProcessTime";
 type SimulationTickResult = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
+
 };
 
 export function simulateTick(
   wipParts: WipPart[],
   routings: Map<number, Routing>,
+  tickNum: number,
 ): SimulationTickResult {
   const newWipParts = wipParts.map((w) => ({ ...w }));
-  let finishedParts: WipPart[] = [];
+  const finishedParts: WipPart[] = [];
   const inServiceIds = new Set<string>();
   const claimed = new Set<number>();
 
@@ -61,7 +63,7 @@ export function simulateTick(
         );
       } else {
         // deal with finished parts
-        finishedParts.push(wipPart);
+        finishedParts.push({...wipPart, completedAtTick: tickNum});
         wipPart.stepIndex = -1;
       }
     }

@@ -2,34 +2,65 @@ import { useState, useEffect, useRef } from "react";
 import { simulateTick } from "../simulation/simulationTick";
 import WorkCenterCard from "../components/WorkCenterCard";
 import type { WorkCenter, WorkCenterView } from "../types/WorkCenter";
-import type { Part } from "../types/Part.ts";
-import PartsList from "../components/PartsList";
 import type { WipPart } from "../types/WipPart.ts";
 import type { Routing } from "../types/Routing";
 import { sampleProcessTime } from "../simulation/sampleProcessTime.ts";
 import type { WorkOrder } from "../types/WorkOrder.ts";
+import ThroughputChart from "../components/ThroughputChart.tsx";
+import { smoothThroughput } from "../simulation/smoothThroughput.ts";
+import type { SalesOrder } from "../types/SalesOrder.ts";
+import type { Part } from "../types/Part.ts";
+import { calculateThroughput } from "../simulation/calculateThroughput.ts";
+import { cumulativeThroughput } from "../simulation/cumulativeThroughput.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
+  tickNum: number;
 };
 
 function App() {
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [partsList, setPartsList] = useState<Part[]>([]);
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
     finishedParts: [],
+    tickNum: 0,
   });
   const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+
+  const workOrdersRef = useRef(workOrders);
+  useEffect(() => {
+    workOrdersRef.current = workOrders;
+  }, [workOrders]);
+
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
+  const [parts, setParts] = useState<Part[]>([]);
+
+  const partsRef = useRef(parts);
+
+  useEffect(() => {
+    partsRef.current = parts;
+  }, [parts]);
+
+  const salesOrdersRef = useRef(salesOrders);
+
+  useEffect(() => {
+    salesOrdersRef.current = salesOrders;
+  }, [salesOrders]);
+
+  const [throughputHistory, setThroughputHistory] = useState<
+    { tick: number; cents: number }[]
+  >([]);
 
   const routingsRef = useRef(routings);
+
   useEffect(() => {
     routingsRef.current = routings;
   }, [routings]);
+
   useEffect(() => {
     async function loadWorkOrders() {
       try {
@@ -45,15 +76,62 @@ function App() {
     }
     loadWorkOrders();
   }, []);
+
+  useEffect(() => {
+    async function loadSalesOrders() {
+      try {
+        const response = await fetch("http://localhost:3000/api/sales-orders");
+        if (!response.ok) throw new Error("Failed to load salesOrders");
+        const data: SalesOrder[] = await response.json();
+        setSalesOrders(data);
+      } catch (error) {
+        console.error("Failed fetching sales order allocations", error);
+      }
+    }
+    loadSalesOrders();
+  }, []);
+
+  // get parts list
+  useEffect(() => {
+    async function loadParts() {
+      try {
+        const response = await fetch("http://localhost:3000/api/parts");
+        if (!response.ok) throw new Error("Failed to load parts");
+        const data: Part[] = await response.json();
+        setParts(data);
+      } catch (error) {
+        console.error("Failed to fetch parts", error);
+      }
+    }
+    loadParts();
+  }, []);
+
   useEffect(() => {
     if (!isRunning) return;
 
     const interval = setInterval(() => {
       setSimulationState((currentSimulation) => {
-        //if (!routings) return currentSimulation;
+        const nextTick = currentSimulation.tickNum + 1;
         const tickData = simulateTick(
           currentSimulation.wipParts,
           routingsRef.current,
+          nextTick,
+        );
+
+        setThroughputHistory((prev) =>
+          [
+            ...prev,
+            {
+              tick: nextTick,
+              cents: calculateThroughput(
+                tickData.finishedParts,
+                currentSimulation.finishedParts,
+                workOrdersRef.current,
+                partsRef.current,
+                salesOrdersRef.current,
+              ),
+            },
+          ].slice(-120),
         );
 
         return {
@@ -62,28 +140,13 @@ function App() {
             ...currentSimulation.finishedParts,
             ...tickData.finishedParts,
           ],
+          tickNum: nextTick,
         };
       });
     }, 1000);
 
     return () => clearInterval(interval);
   }, [isRunning]);
-  useEffect(() => {
-    async function loadParts() {
-      try {
-        const response = await fetch("http://localhost:3000/api/parts");
-        if (!response.ok) {
-          throw new Error("Failed to load parts");
-        }
-
-        const data: Part[] = await response.json();
-        setPartsList(data);
-      } catch (error) {
-        console.error("Failed fetching Parts List", error);
-      }
-    }
-    loadParts();
-  }, []);
 
   const toggleSimulation = () => {
     setIsRunning((prev) => !prev);
@@ -91,7 +154,8 @@ function App() {
 
   const resetSimulation = () => {
     setIsRunning(false);
-    setSimulationState({ wipParts: [], finishedParts: [] });
+    setSimulationState({ wipParts: [], finishedParts: [], tickNum: 0 });
+    setThroughputHistory([]);
   };
   const deriveWorkCenterView = (
     wipParts: WipPart[],
@@ -125,7 +189,7 @@ function App() {
       alert("Please Select a Work Order to Release");
       return;
     }
-    let fetchedRouting: Routing | null = null;
+    let fetchedRouting: Routing | null;
     try {
       const response = await fetch(
         `http://localhost:3000/api/routings/${order.routingId}`,
@@ -178,6 +242,8 @@ function App() {
   }, []);
 
   const view = deriveWorkCenterView(simulationState.wipParts, routings);
+  const smoothed = smoothThroughput(throughputHistory, 60);
+  const cumulative = cumulativeThroughput(smoothed);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   const finishedByWorkOrder = new Map<number, number>();
   for (const fp of simulationState.finishedParts) {
@@ -243,8 +309,9 @@ function App() {
           Release Order
         </button>
       </div>
-      <div className="flex gap-4">
-        <PartsList parts={partsList} />
+      <div>TickNum: {simulationState.tickNum}</div>
+      <div className="w-full max-w-3xl h-80 shrink-0">
+        <ThroughputChart data={cumulative} />
       </div>
       <div>
         <div className="flex gap-4 items-center">
