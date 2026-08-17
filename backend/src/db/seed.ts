@@ -27,12 +27,12 @@ async function seed() {
   const insertedWorkCenters = await db
     .insert(workCenters)
     .values([
-      { name: "Raw Material" },
-      { name: "Cutter" },
-      { name: "Drill Press" },
-      { name: "Deburr" },
-      { name: "Inspection" },
-      { name: "Packaging" },
+      { name: "Raw Material", capacity: 1 },
+      { name: "Cutter", capacity: 1 },
+      { name: "Drill Press", capacity: 1 },
+      { name: "Deburr", capacity: 1 },
+      { name: "Inspection", capacity: 1 },
+      { name: "Packaging", capacity: 1 },
     ])
     .returning();
 

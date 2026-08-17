@@ -19,7 +19,8 @@ router.get("/", async (_req, res) => {
         partName: parts.name,
       })
       .from(workOrders)
-      .innerJoin(parts, eq(workOrders.partId, parts.id));
+      .innerJoin(parts, eq(workOrders.partId, parts.id))
+      .orderBy(workOrders.id);
 
     res.json(orders);
   } catch (error) {
