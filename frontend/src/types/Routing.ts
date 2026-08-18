@@ -14,3 +14,6 @@ export type Routing = {
   revision: string;
   steps: RoutingStep[];
 };
+
+/** GET /api/routings returns routings without their steps; GET /:id includes them. */
+export type RoutingSummary = Omit<Routing, "steps">;
