@@ -2,6 +2,8 @@ import { Router } from "express";
 import { eq } from "drizzle-orm";
 import { db } from "../db/index.js";
 import { workCenters } from "../db/schema.js";
+import { parseOr400 } from "../lib/validate.js";
+import { idParamSchema, updateWorkCenterSchema } from "../schemas/orders.js";
 
 const router = Router();
 
@@ -18,22 +20,16 @@ router.get("/", async (_req, res) => {
 
 router.patch("/:id", async (req, res) => {
   try {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id)) {
-      return res.status(400).json({ message: "Invalid work center id" });
-    }
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
 
-    const { capacity } = req.body;
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      return res
-        .status(400)
-        .json({ message: "capacity must be an integer >= 1" });
-    }
+    const body = parseOr400(updateWorkCenterSchema, req.body, res);
+    if (!body) return;
 
     const [updated] = await db
       .update(workCenters)
-      .set({ capacity })
-      .where(eq(workCenters.id, id))
+      .set({ capacity: body.capacity })
+      .where(eq(workCenters.id, params.id))
       .returning();
 
     if (!updated) {

@@ -13,6 +13,10 @@ const workOrders = [
     quantity: 5,
     orderNumber: "WO-1003",
     partName: "Bracket",
+    partNumber: "100-001",
+    status: "pending",
+    // throughput reads allocations off the sales orders, not off the work order
+    allocations: [],
   },
 ];
 

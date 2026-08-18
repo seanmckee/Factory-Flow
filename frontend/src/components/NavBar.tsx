@@ -1,19 +1,34 @@
 import { NavLink } from "react-router-dom";
 
-function Navbar() {
-  const linkClass = ({ isActive }: { isActive: boolean }) =>
-    isActive
-      ? "px-3 py-2 rounded-md font-medium bg-slate-200 text-slate-900"
-      : "px-3 py-2 rounded-md font-medium text-slate-600 hover:bg-slate-100";
+const linkClass = ({ isActive }: { isActive: boolean }) =>
+  isActive
+    ? "block px-3 py-2 rounded-md font-medium bg-slate-200 text-slate-900"
+    : "block px-3 py-2 rounded-md font-medium text-slate-600 hover:bg-slate-100";
 
+function SectionLabel({ children }: { children: string }) {
   return (
-    <nav className="flex gap-2 items-center border-b border-slate-300 px-6 py-3">
-      <span className="font-bold mr-4">Factory Flow</span>
-      <NavLink to="/" className={linkClass}>
+    <p className="px-3 pt-4 pb-1 text-xs uppercase tracking-wide text-slate-400">
+      {children}
+    </p>
+  );
+}
+
+function Navbar() {
+  return (
+    <nav className="w-56 shrink-0 border-r border-slate-300 bg-white px-3 py-4">
+      <span className="block px-3 pb-2 font-bold">Factory Flow</span>
+
+      <NavLink to="/" end className={linkClass}>
         Simulator
       </NavLink>
-      <NavLink to="/create" className={linkClass}>
-        Create
+
+      {/* Module sections - factory setup (parts, routings, work centers) lands here next */}
+      <SectionLabel>Orders</SectionLabel>
+      <NavLink to="/orders/sales" className={linkClass}>
+        Sales Orders
+      </NavLink>
+      <NavLink to="/orders/work" className={linkClass}>
+        Work Orders
       </NavLink>
     </nav>
   );

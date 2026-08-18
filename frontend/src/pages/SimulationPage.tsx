@@ -67,6 +67,8 @@ function App() {
     routingsRef.current = routings;
   }, [routings]);
 
+  // runs on every mount, and React Router remounts this page on navigation, so
+  // work orders created in the order entry module show up without a reload
   useEffect(() => {
     async function loadWorkOrders() {
       try {
@@ -75,7 +77,6 @@ function App() {
         if (!response.ok) throw new Error("Failed to load work orders");
         const data: WorkOrder[] = await response.json();
         setWorkOrders(data);
-        console.log(data);
       } catch (error) {
         console.error("Failed fetching work orders", error);
       }

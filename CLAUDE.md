@@ -39,14 +39,17 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 
 - ESM with `"module": "nodenext"` — **relative imports must carry the `.js` extension** (`./db/index.js`), even though the sources are `.ts`.
 - `tsconfig.json` enables `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; array indexing and destructuring yield `T | undefined`, so seed/route code explicitly null-checks after `.returning()`.
-- Each router in `src/routes/` is a default-exported `Router` mounted at `/api/<resource>` in `src/server.ts`. All endpoints are currently read-only GETs.
+- Each router in `src/routes/` is a default-exported `Router` mounted at `/api/<resource>` in `src/server.ts`. Sales orders and work orders expose `POST` and `DELETE /:id` alongside their GETs; work centers expose `PATCH /:id`.
+- Request bodies, path params, and query params are validated with zod schemas in `src/schemas/orders.ts`, applied via `parseOr400` (`src/lib/validate.ts`), which writes a `400 { message }` and returns null so the route early-returns. Every error response in the API is `{ message }`, and the frontend toasts that text verbatim.
+- Writes that span tables run in `db.transaction()`; helpers inside a transaction throw `HttpError` (`src/lib/httpError.ts`) to both roll back and carry a status. This is why `db/index.ts` uses the Neon WebSocket `Pool` rather than the HTTP driver, which has no transaction support.
+- Allocation rules live in `src/lib/allocate.ts` as pure functions taking plain objects, so they are unit-testable without a database. Allocations for a work order **must** be inserted in one statement, oldest-sales-order-first: ids come out ascending in insert order, and `calculateThroughput` credits finished units in allocation-id order.
 - Joins/aggregation are done in JS after separate `db.select()` calls rather than in SQL (see `salesOrders.ts` grouping allocations by sales order, `routings.ts` attaching ordered `steps`).
 
 ## Frontend architecture
 
-Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`), with `SimulationPage` at `/` and `CreatePage` at `/create`.
+Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/` and the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work`. `/create` was a stub page and now redirects to `/orders/sales`.
 
-The backend base URL is hard-coded as `http://localhost:3000` in `SimulationPage` fetches — there is no API client module or env var yet.
+`src/api/client.ts` holds the API base URL (still hard-coded `http://localhost:3000` — no env var yet) plus `getJson`/`postJson`/`deleteJson` and `ApiError`, which carries the status and parsed body so callers can branch on a 409 instead of only toasting. `SimulationPage` predates it and still calls `fetch` directly.
 
 `src/data/*.ts` are stale unused fixtures that no longer match the current types. Don't use them as a reference.
 
@@ -55,6 +58,7 @@ The backend base URL is hard-coded as `http://localhost:3000` in `SimulationPage
 All engine logic is pure functions, unit-tested with vitest under a `node` environment (no jsdom, no component tests). `SimulationPage` is the only stateful driver: a `setInterval(…, 1000)` calls `simulateTick` once per real second, so **one tick = one simulated second**.
 
 `simulateTick(wipParts, routings, tickNum)` invariants:
+
 - Every work center has **capacity 1**. Claiming happens in two passes: parts already in service (`progressSeconds > 0`) claim their work center first, then idle parts take whatever centers remain free. Unclaimed parts simply don't advance that tick — queueing is implicit, there is no queue data structure.
 - A part completing its last step is pushed to `finishedParts` with `completedAtTick` and marked `stepIndex = -1`, which the final `filter` uses to drop it from WIP.
 - On each step transition a fresh `actualProcessTimeSeconds` is drawn from `sampleProcessTime(nominal, 0.3)` — uniform ±30% around the routing's nominal time, floored at 1. This statistical variation is the point of the model, not noise to be removed.
@@ -74,3 +78,22 @@ Routings are fetched lazily: `releaseOrder` GETs `/api/routings/:id` for the sel
 ## Styling
 
 Tailwind v4 via the `@tailwindcss/vite` plugin — configured through `src/index.css`, with no `tailwind.config.js`.
+
+## Working agreement
+
+Keep changes small enough to review in one sitting. One concern per branch.
+
+- Infrastructure changes (dependencies, drivers, config) go in their own
+  branch, separate from features that use them.
+- If a plan spans more than ~5 files or ~250 lines, stop and propose how to
+  split it before writing code.
+- Work in stages and stop for review between them. Default order:
+  schema/migration → engine + tests → API → UI.
+- Write tests alongside the code, not after. Tests are the spec for what
+  correct means.
+- When a change invalidates something documented in this file, update it as
+  part of the same change.
+
+The repo owner makes design decisions. Prefer implementing a specified change
+over proposing architecture. If a change needs a decision that isn't in the
+spec, stop and ask.
