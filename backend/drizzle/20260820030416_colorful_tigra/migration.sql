@@ -1,0 +1,1 @@
+ALTER TABLE "work_centers" ADD CONSTRAINT "work_centers_name_key" UNIQUE("name");

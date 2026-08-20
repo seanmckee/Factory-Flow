@@ -2,7 +2,9 @@ import { integer, pgTable, varchar, serial, unique } from "drizzle-orm/pg-core";
 
 export const workCenters = pgTable("work_centers", {
   id: serial("id").primaryKey(),
-  name: varchar("name", { length: 255 }).notNull(),
+  // unique like parts.part_number - two identically named centers are
+  // indistinguishable on the simulator grid and in routing step pickers
+  name: varchar("name", { length: 255 }).notNull().unique(),
   capacity: integer("capacity").notNull().default(1),
 });
 
