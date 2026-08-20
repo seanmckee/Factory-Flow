@@ -81,19 +81,12 @@ Tailwind v4 via the `@tailwindcss/vite` plugin — configured through `src/index
 
 ## Working agreement
 
-Keep changes small enough to review in one sitting. One concern per branch.
+The global working agreement in `~/.claude/CLAUDE.md` applies. Project-specific
+additions:
 
-- Infrastructure changes (dependencies, drivers, config) go in their own
-  branch, separate from features that use them.
-- If a plan spans more than ~5 files or ~250 lines, stop and propose how to
-  split it before writing code.
-- Work in stages and stop for review between them. Default order:
-  schema/migration → engine + tests → API → UI.
-- Write tests alongside the code, not after. Tests are the spec for what
-  correct means.
-- When a change invalidates something documented in this file, update it as
-  part of the same change.
-
-The repo owner makes design decisions. Prefer implementing a specified change
-over proposing architecture. If a change needs a decision that isn't in the
-spec, stop and ask.
+- Default unit order for a feature: schema/migration → engine + tests → API → UI.
+  Each is its own commit.
+- Write tests alongside the code, not after. Tests are the spec for what correct
+  means.
+- When a change invalidates something documented in this file, update it as part
+  of the same commit.
