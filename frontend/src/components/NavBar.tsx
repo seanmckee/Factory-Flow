@@ -22,13 +22,18 @@ function Navbar() {
         Simulator
       </NavLink>
 
-      {/* Module sections - factory setup (parts, routings, work centers) lands here next */}
       <SectionLabel>Orders</SectionLabel>
       <NavLink to="/orders/sales" className={linkClass}>
         Sales Orders
       </NavLink>
       <NavLink to="/orders/work" className={linkClass}>
         Work Orders
+      </NavLink>
+
+      {/* Factory setup - parts and routings land here next */}
+      <SectionLabel>Setup</SectionLabel>
+      <NavLink to="/setup/work-centers" className={linkClass}>
+        Work Centers
       </NavLink>
     </nav>
   );
