@@ -30,9 +30,33 @@ export const createWorkOrderSchema = z.object({
   allocationQuantity: positiveInt("allocationQuantity").nullish(),
 });
 
-export const updateWorkCenterSchema = z.object({
-  capacity: positiveInt("capacity"),
+/** Work center names are unique, so they carry the same trim/length rules everywhere. */
+function workCenterName() {
+  return z
+    .string({ error: "name must be text" })
+    .trim()
+    .min(1, { error: "name is required" })
+    .max(255, { error: "name must be 255 characters or fewer" });
+}
+
+export const createWorkCenterSchema = z.object({
+  name: workCenterName(),
+  // omitted means "take the column default of 1"
+  capacity: positiveInt("capacity").optional(),
 });
+
+/**
+ * Both fields optional so a rename and a capacity change can arrive separately.
+ * The refine keeps an empty body a 400 rather than a no-op 200.
+ */
+export const updateWorkCenterSchema = z
+  .object({
+    name: workCenterName().optional(),
+    capacity: positiveInt("capacity").optional(),
+  })
+  .refine((body) => body.name !== undefined || body.capacity !== undefined, {
+    error: "provide name or capacity",
+  });
 
 /**
  * ?force=true on a destructive route.
@@ -56,3 +80,4 @@ export const routingQuerySchema = z.object({
 
 export type CreateSalesOrderBody = z.infer<typeof createSalesOrderSchema>;
 export type CreateWorkOrderBody = z.infer<typeof createWorkOrderSchema>;
+export type CreateWorkCenterBody = z.infer<typeof createWorkCenterSchema>;
