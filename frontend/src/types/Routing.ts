@@ -15,5 +15,9 @@ export type Routing = {
   steps: RoutingStep[];
 };
 
-/** GET /api/routings returns routings without their steps; GET /:id includes them. */
-export type RoutingSummary = Omit<Routing, "steps">;
+/**
+ * GET /api/routings returns routings without their steps; GET /:id includes
+ * them. The summary carries stepCount instead, because a routing with no steps
+ * can't be produced and the list needs to say so.
+ */
+export type RoutingSummary = Omit<Routing, "steps"> & { stepCount: number };

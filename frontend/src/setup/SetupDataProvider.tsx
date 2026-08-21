@@ -27,6 +27,10 @@ export default function SetupDataProvider({
     setWorkCenters(await getJson<WorkCenter[]>("/api/work-centers"));
   }, []);
 
+  const refetchRoutings = useCallback(async () => {
+    setRoutings(await getJson<RoutingSummary[]>("/api/routings"));
+  }, []);
+
   // deleting a part cascades its routings, so both lists have to refetch
   const refetchParts = useCallback(async () => {
     const [partsData, routingsData] = await Promise.all([
@@ -81,6 +85,7 @@ export default function SetupDataProvider({
       error,
       refetchWorkCenters,
       refetchParts,
+      refetchRoutings,
     }),
     [
       workCenters,
@@ -90,6 +95,7 @@ export default function SetupDataProvider({
       error,
       refetchWorkCenters,
       refetchParts,
+      refetchRoutings,
     ],
   );
 

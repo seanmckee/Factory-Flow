@@ -70,11 +70,17 @@ export function Td({
   children,
   numeric,
   className,
+  colSpan,
 }: {
   children?: ReactNode;
   numeric?: boolean;
   className?: string;
+  colSpan?: number;
 }) {
   const base = numeric ? "p-2 text-right tabular-nums" : "p-2";
-  return <td className={className ? `${base} ${className}` : base}>{children}</td>;
+  return (
+    <td className={className ? `${base} ${className}` : base} colSpan={colSpan}>
+      {children}
+    </td>
+  );
 }

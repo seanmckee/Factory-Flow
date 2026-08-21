@@ -11,6 +11,7 @@ export type SetupDataValue = {
   error: string | null;
   refetchWorkCenters: () => Promise<void>;
   refetchParts: () => Promise<void>;
+  refetchRoutings: () => Promise<void>;
 };
 
 export const SetupDataContext = createContext<SetupDataValue | null>(null);
