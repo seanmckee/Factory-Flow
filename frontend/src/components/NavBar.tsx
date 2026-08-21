@@ -30,10 +30,13 @@ function Navbar() {
         Work Orders
       </NavLink>
 
-      {/* Factory setup - parts and routings land here next */}
+      {/* Factory setup - routings land here next */}
       <SectionLabel>Setup</SectionLabel>
       <NavLink to="/setup/work-centers" className={linkClass}>
         Work Centers
+      </NavLink>
+      <NavLink to="/setup/parts" className={linkClass}>
+        Parts
       </NavLink>
     </nav>
   );

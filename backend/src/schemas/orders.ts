@@ -1,10 +1,17 @@
-import { z } from "zod";
+import { string, z } from "zod";
 
-/** Positive integer with messages worth showing to a user - zod's defaults are terse. */
+/** Positive integer with messages worth showing to a user - zod's defaults are terse.  */
 function positiveInt(label: string) {
   return z
     .int({ error: `${label} must be a whole number` })
     .positive({ error: `${label} must be greater than zero` });
+}
+
+/** Non-negative integer with messages worth showing to a user - zod's defaults are terse. */
+function nonNegativeInt(label: string) {
+  return z
+    .int({ error: `${label} must be a whole number` })
+    .nonnegative({ error: `${label} must be greater than or equal to zero` });
 }
 
 /** Numeric path params, e.g. /api/routings/:id */
@@ -57,6 +64,44 @@ export const updateWorkCenterSchema = z
   .refine((body) => body.name !== undefined || body.capacity !== undefined, {
     error: "provide name or capacity",
   });
+
+// Parts
+
+export const createPartSchema = z.object({
+  partNumber: string({ error: "partNumber must be text" })
+    .trim()
+    .min(1, { error: "partNumber is required" })
+    .max(255, { error: "partNumber must be 255 characters or fewer" }),
+  name: string({ error: "name must be text" })
+    .trim()
+    .min(1, { error: "name is required" })
+    .max(255, { error: "name must be 255 characters or fewer" }),
+  materialCostCents: nonNegativeInt("materialCostCents"),
+});
+
+export const updatePartSchema = z
+  .object({
+    partNumber: string({ error: "partNumber must be text" })
+      .trim()
+      .min(1, { error: "partNumber is required" })
+      .max(255, { error: "partNumber must be 255 characters or fewer" })
+      .optional(),
+    name: string({ error: "name must be text" })
+      .trim()
+      .min(1, { error: "name is required" })
+      .max(255, { error: "name must be 255 characters or fewer" })
+      .optional(),
+    materialCostCents: nonNegativeInt("materialCostCents").optional(),
+  })
+  .refine(
+    (body) =>
+      body.partNumber !== undefined ||
+      body.name !== undefined ||
+      body.materialCostCents !== undefined,
+    {
+      error: "provide partNumber, name, or materialCostCents",
+    },
+  );
 
 /**
  * ?force=true on a destructive route.

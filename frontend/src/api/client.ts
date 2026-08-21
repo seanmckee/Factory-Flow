@@ -74,10 +74,23 @@ export async function deleteJson<T>(path: string): Promise<T> {
   return response.json();
 }
 
+/**
+ * A 409 from a delete that would destroy linked rows but is still allowed with
+ * ?force=true. Every such body carries message + requiresConfirmation; the
+ * detail field differs per resource, so each is optional and the page reads
+ * the one its endpoint sends.
+ *
+ * A 409 WITHOUT requiresConfirmation is a different thing - a delete that is
+ * refused outright, e.g. a work center held by ON DELETE RESTRICT. Those are
+ * deliberately not matched here so they fall through to an error toast.
+ */
 export type DeleteConflict = {
   message: string;
   requiresConfirmation: true;
-  allocations: { orderNumber: string; quantity: number }[];
+  /** Sales and work orders: allocations the cascade would remove. */
+  allocations?: { orderNumber: string; quantity: number }[];
+  /** Parts: routings the cascade would remove, as "Name rev X". */
+  routings?: string[];
 };
 
 /**

@@ -27,6 +27,16 @@ export default function SetupDataProvider({
     setWorkCenters(await getJson<WorkCenter[]>("/api/work-centers"));
   }, []);
 
+  // deleting a part cascades its routings, so both lists have to refetch
+  const refetchParts = useCallback(async () => {
+    const [partsData, routingsData] = await Promise.all([
+      getJson<Part[]>("/api/parts"),
+      getJson<RoutingSummary[]>("/api/routings"),
+    ]);
+    setParts(partsData);
+    setRoutings(routingsData);
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -70,8 +80,17 @@ export default function SetupDataProvider({
       loading,
       error,
       refetchWorkCenters,
+      refetchParts,
     }),
-    [workCenters, parts, routings, loading, error, refetchWorkCenters],
+    [
+      workCenters,
+      parts,
+      routings,
+      loading,
+      error,
+      refetchWorkCenters,
+      refetchParts,
+    ],
   );
 
   return <SetupDataContext value={value}>{children}</SetupDataContext>;

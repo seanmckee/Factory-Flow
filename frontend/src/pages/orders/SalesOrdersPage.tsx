@@ -121,7 +121,7 @@ export default function SalesOrdersPage() {
         setPendingDelete({
           id: salesOrder.id,
           orderNumber: salesOrder.orderNumber,
-          allocations: conflict.allocations,
+          allocations: conflict.allocations ?? [],
         });
         return;
       }

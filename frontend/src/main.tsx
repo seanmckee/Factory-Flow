@@ -8,6 +8,7 @@ import SalesOrdersPage from "./pages/orders/SalesOrdersPage";
 import WorkOrdersPage from "./pages/orders/WorkOrdersPage";
 import SetupLayout from "./pages/setup/SetupLayout";
 import WorkCentersPage from "./pages/setup/WorkCentersPage";
+import PartsPage from "./pages/setup/PartsPage";
 import "./index.css";
 
 const router = createBrowserRouter([
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="work-centers" replace /> },
           { path: "work-centers", element: <WorkCentersPage /> },
+          { path: "parts", element: <PartsPage /> },
         ],
       },
       // /create was the old stub page
