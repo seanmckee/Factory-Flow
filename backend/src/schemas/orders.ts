@@ -103,6 +103,53 @@ export const updatePartSchema = z
     },
   );
 
+// Routings
+
+function routingText(label: string) {
+  return z
+    .string({ error: `${label} must be text` })
+    .trim()
+    .min(1, { error: `${label} is required` })
+    .max(255, { error: `${label} must be 255 characters or fewer` });
+}
+
+/**
+ * One operation. `sequence` is deliberately absent: position comes from the
+ * array index, so the client never has to keep sequence numbers consistent
+ * against UNIQUE(routing_id, sequence).
+ */
+const routingStepSchema = z.object({
+  workCenterId: positiveInt("workCenterId"),
+  processTimeSeconds: positiveInt("processTimeSeconds"),
+  // zero is a legitimate setup time - see the seeded Raw Material step
+  setupTimeSeconds: nonNegativeInt("setupTimeSeconds"),
+});
+
+const stepListSchema = z
+  .array(routingStepSchema)
+  .min(1, { error: "a routing needs at least one step" })
+  .max(50, { error: "a routing can have at most 50 steps" });
+
+export const createRoutingSchema = z.object({
+  partId: positiveInt("partId"),
+  name: routingText("name"),
+  // omitted takes the column default of "A"
+  revision: routingText("revision").optional(),
+  steps: stepListSchema,
+});
+
+export const updateRoutingSchema = z
+  .object({
+    name: routingText("name").optional(),
+    revision: routingText("revision").optional(),
+  })
+  .refine((body) => body.name !== undefined || body.revision !== undefined, {
+    error: "provide name or revision",
+  });
+
+/** Whole-list replace - see PUT /api/routings/:id/steps. */
+export const replaceStepsSchema = z.object({ steps: stepListSchema });
+
 /**
  * ?force=true on a destructive route.
  *
@@ -126,3 +173,4 @@ export const routingQuerySchema = z.object({
 export type CreateSalesOrderBody = z.infer<typeof createSalesOrderSchema>;
 export type CreateWorkOrderBody = z.infer<typeof createWorkOrderSchema>;
 export type CreateWorkCenterBody = z.infer<typeof createWorkCenterSchema>;
+export type CreateRoutingBody = z.infer<typeof createRoutingSchema>;
