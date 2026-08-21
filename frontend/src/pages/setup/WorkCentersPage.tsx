@@ -1,15 +1,20 @@
 import { useState } from "react";
-import { Trash2 } from "lucide-react";
 import { deleteJson, patchJson, postJson } from "../../api/client";
 import { useSetupData } from "../../setup/SetupDataContext";
 import { useToast } from "../../toast/ToastContext";
+import {
+  Field,
+  FormCard,
+  SubmitButton,
+  inputClass,
+} from "../../components/ui/Form";
+import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+import DeleteButton from "../../components/ui/DeleteButton";
+import InlineInput from "../../components/ui/InlineInput";
 import type { WorkCenter } from "../../types/WorkCenter";
 
 /** The row being edited. Only one row is editable at a time. */
 type Draft = { id: number; name: string; capacity: string };
-
-const inputClass = "border border-slate-300 rounded-lg p-2 bg-white";
-const labelClass = "flex flex-col gap-1 text-sm text-slate-600";
 
 export default function WorkCentersPage() {
   const { workCenters, loading, error, refetchWorkCenters } = useSetupData();
@@ -155,12 +160,8 @@ export default function WorkCentersPage() {
         many parts at once — the lever for elevating a bottleneck.
       </p>
 
-      <form
-        onSubmit={submit}
-        className="mt-6 flex max-w-3xl flex-col gap-4 rounded-lg border border-slate-300 bg-white p-6"
-      >
-        <label className={labelClass}>
-          Name
+      <FormCard onSubmit={submit}>
+        <Field label="Name">
           <input
             type="text"
             value={name}
@@ -168,10 +169,9 @@ export default function WorkCentersPage() {
             placeholder="Heat Treat"
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Machines
+        <Field label="Machines">
           <input
             type="number"
             min={1}
@@ -180,38 +180,32 @@ export default function WorkCentersPage() {
             onChange={(event) => setCapacity(event.target.value)}
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="self-start bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-        >
-          {submitting ? "Creating…" : "Create Work Center"}
-        </button>
-      </form>
+        <SubmitButton busy={submitting} busyLabel="Creating…">
+          Create Work Center
+        </SubmitButton>
+      </FormCard>
 
       <p className="mt-6 text-sm text-slate-500">
         Nothing routes to a new work center until a routing step uses it, so it
         stays idle on the simulator until then.
       </p>
 
-      <div className="mt-2 overflow-x-auto rounded-lg border border-slate-300 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-100 text-left text-slate-600">
-            <tr>
-              <th className="p-2">Name</th>
-              <th className="p-2 text-right">Machines</th>
-              <th className="p-2"></th>
-            </tr>
-          </thead>
+      <div className="mt-2">
+        <Table>
+          <THead>
+            <Th>Name</Th>
+            <Th numeric>Machines</Th>
+            <Th />
+          </THead>
           <tbody>
             {workCenters.map((workCenter) => {
               const editing = draft?.id === workCenter.id ? draft : null;
               return (
-                <tr key={workCenter.id} className="border-t border-slate-200">
-                  <td className="p-2">
-                    <input
+                <Tr key={workCenter.id}>
+                  <Td>
+                    <InlineInput
                       type="text"
                       aria-label={`Rename ${workCenter.name}`}
                       disabled={busyId === workCenter.id}
@@ -223,12 +217,13 @@ export default function WorkCentersPage() {
                         )
                       }
                       onBlur={() => commitEdit(workCenter)}
-                      className="w-full rounded border border-transparent bg-transparent p-1 hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50"
+                      className="w-full"
                     />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
+                  </Td>
+                  <Td className="text-right">
+                    <InlineInput
                       type="number"
+                      numeric
                       min={1}
                       step={1}
                       aria-label={`Machines at ${workCenter.name}`}
@@ -244,25 +239,21 @@ export default function WorkCentersPage() {
                         )
                       }
                       onBlur={() => commitEdit(workCenter)}
-                      className="w-20 rounded border border-transparent bg-transparent p-1 text-right tabular-nums hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50"
+                      className="w-20"
                     />
-                  </td>
-                  <td className="p-2 text-right">
-                    <button
-                      type="button"
-                      aria-label={`Delete ${workCenter.name}`}
-                      disabled={busyId === workCenter.id}
+                  </Td>
+                  <Td className="text-right">
+                    <DeleteButton
+                      label={workCenter.name}
+                      busy={busyId === workCenter.id}
                       onClick={() => runDelete(workCenter)}
-                      className="rounded px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
+                    />
+                  </Td>
+                </Tr>
               );
             })}
           </tbody>
-        </table>
+        </Table>
       </div>
     </div>
   );

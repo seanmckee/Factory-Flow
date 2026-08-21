@@ -1,10 +1,17 @@
 import { useCallback, useState } from "react";
-import { Trash2 } from "lucide-react";
 import { deleteConflict, deleteJson, postJson } from "../../api/client";
 import { useOrdersData } from "../../orders/OrdersDataContext";
 import { useToast } from "../../toast/ToastContext";
 import CollapsibleSection from "../../components/orders/CollapsibleSection";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
+import {
+  Field,
+  FormCard,
+  SubmitButton,
+  inputClass,
+} from "../../components/ui/Form";
+import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+import DeleteButton from "../../components/ui/DeleteButton";
 import {
   allocatedQty,
   dollarsToCents,
@@ -20,9 +27,6 @@ type PendingDelete = {
   orderNumber: string;
   allocations: { orderNumber: string; quantity: number }[];
 };
-
-const inputClass = "border border-slate-300 rounded-lg p-2 bg-white";
-const labelClass = "flex flex-col gap-1 text-sm text-slate-600";
 
 export default function SalesOrdersPage() {
   const {
@@ -150,12 +154,8 @@ export default function SalesOrdersPage() {
         Sales orders record customer demand. They don't create work orders.
       </p>
 
-      <form
-        onSubmit={submit}
-        className="mt-6 flex max-w-3xl flex-col gap-4 rounded-lg border border-slate-300 bg-white p-6"
-      >
-        <label className={labelClass}>
-          Part
+      <FormCard onSubmit={submit}>
+        <Field label="Part">
           <select
             value={partId}
             onChange={(event) => setPartId(event.target.value)}
@@ -169,10 +169,9 @@ export default function SalesOrdersPage() {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Quantity
+        <Field label="Quantity">
           <input
             type="number"
             min={1}
@@ -181,10 +180,9 @@ export default function SalesOrdersPage() {
             onChange={(event) => setQuantity(event.target.value)}
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Unit price (USD)
+        <Field label="Unit price (USD)">
           <input
             type="number"
             min="0.01"
@@ -193,7 +191,7 @@ export default function SalesOrdersPage() {
             onChange={(event) => setUnitPrice(event.target.value)}
             className={inputClass}
           />
-        </label>
+        </Field>
 
         {/* Shown as soon as a part is picked - the most useful moment is
             "part chosen, price blank", when you need to know what to beat. */}
@@ -243,87 +241,69 @@ export default function SalesOrdersPage() {
           </div>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="self-start bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-        >
-          {submitting ? "Creating…" : "Create Sales Order"}
-        </button>
-      </form>
+        <SubmitButton busy={submitting} busyLabel="Creating…">
+          Create Sales Order
+        </SubmitButton>
+      </FormCard>
 
       <CollapsibleSection title="sales orders" count={salesOrders.length}>
-        <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-100 text-left text-slate-600">
-              <tr>
-                <th className="p-2">Order</th>
-                <th className="p-2">Part</th>
-                <th className="p-2 text-right">Ordered</th>
-                <th className="p-2 text-right">Allocated</th>
-                <th className="p-2 text-right">Remaining</th>
-                <th className="p-2 text-right">Unit price</th>
-                <th className="p-2 text-right">Throughput/unit</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {salesOrders.map((salesOrder) => {
-                const part = partById.get(salesOrder.partId);
-                const remaining = remainingQty(salesOrder);
-                // realized only on allocated, finished units - not "profit"
-                const perUnit = part
-                  ? throughputPerUnitCents(
-                      salesOrder.unitPriceCents,
-                      part.materialCostCents,
-                    )
-                  : null;
-                return (
-                  <tr key={salesOrder.id} className="border-t border-slate-200">
-                    <td className="p-2 font-medium">{salesOrder.orderNumber}</td>
-                    <td className="p-2">
-                      {part ? `${part.partNumber} · ${part.name}` : "—"}
-                    </td>
-                    <td className="p-2 text-right tabular-nums">
-                      {salesOrder.quantity}
-                    </td>
-                    <td className="p-2 text-right tabular-nums">
-                      {allocatedQty(salesOrder)}
-                    </td>
-                    <td
-                      className={`p-2 text-right tabular-nums ${
-                        remaining > 0 ? "text-slate-900" : "text-slate-400"
-                      }`}
-                    >
-                      {remaining}
-                    </td>
-                    <td className="p-2 text-right tabular-nums">
-                      {formatCents(salesOrder.unitPriceCents)}
-                    </td>
-                    <td
-                      className={`p-2 text-right tabular-nums ${
-                        perUnit !== null && perUnit <= 0 ? "text-red-600" : ""
-                      }`}
-                    >
-                      {perUnit === null ? "—" : formatSignedCents(perUnit)}
-                    </td>
-                    <td className="p-2 text-right">
-                      <button
-                        type="button"
-                        aria-label={`Delete ${salesOrder.orderNumber}`}
-                        disabled={deletingId === salesOrder.id}
-                        onClick={() => runDelete(salesOrder, false)}
-                        className="rounded px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <THead>
+            <Th>Order</Th>
+            <Th>Part</Th>
+            <Th numeric>Ordered</Th>
+            <Th numeric>Allocated</Th>
+            <Th numeric>Remaining</Th>
+            <Th numeric>Unit price</Th>
+            <Th numeric>Throughput/unit</Th>
+            <Th />
+          </THead>
+          <tbody>
+            {salesOrders.map((salesOrder) => {
+              const part = partById.get(salesOrder.partId);
+              const remaining = remainingQty(salesOrder);
+              // realized only on allocated, finished units - not "profit"
+              const perUnit = part
+                ? throughputPerUnitCents(
+                    salesOrder.unitPriceCents,
+                    part.materialCostCents,
+                  )
+                : null;
+              return (
+                <Tr key={salesOrder.id}>
+                  <Td className="font-medium">{salesOrder.orderNumber}</Td>
+                  <Td>{part ? `${part.partNumber} · ${part.name}` : "—"}</Td>
+                  <Td numeric>{salesOrder.quantity}</Td>
+                  <Td numeric>{allocatedQty(salesOrder)}</Td>
+                  <Td
+                    numeric
+                    className={
+                      remaining > 0 ? "text-slate-900" : "text-slate-400"
+                    }
+                  >
+                    {remaining}
+                  </Td>
+                  <Td numeric>{formatCents(salesOrder.unitPriceCents)}</Td>
+                  <Td
+                    numeric
+                    className={
+                      perUnit !== null && perUnit <= 0 ? "text-red-600" : ""
+                    }
+                  >
+                    {perUnit === null ? "—" : formatSignedCents(perUnit)}
+                  </Td>
+                  <Td className="text-right">
+                    <DeleteButton
+                      label={salesOrder.orderNumber}
+                      busy={deletingId === salesOrder.id}
+                      onClick={() => runDelete(salesOrder, false)}
+                    />
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </Table>
       </CollapsibleSection>
 
       {pendingDelete && (
