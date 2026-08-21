@@ -10,6 +10,7 @@ export type SetupDataValue = {
   loading: boolean;
   error: string | null;
   refetchWorkCenters: () => Promise<void>;
+  refetchParts: () => Promise<void>;
 };
 
 export const SetupDataContext = createContext<SetupDataValue | null>(null);

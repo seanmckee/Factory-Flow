@@ -173,7 +173,7 @@ export default function WorkOrdersPage() {
         setPendingDelete({
           id: workOrder.id,
           orderNumber: workOrder.orderNumber,
-          allocations: conflict.allocations,
+          allocations: conflict.allocations ?? [],
         });
         return;
       }
