@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import { Trash2 } from "lucide-react";
 import {
   deleteConflict,
   deleteJson,
@@ -9,6 +8,15 @@ import {
 import { useSetupData } from "../../setup/SetupDataContext";
 import { useToast } from "../../toast/ToastContext";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
+import {
+  Field,
+  FormCard,
+  SubmitButton,
+  inputClass,
+} from "../../components/ui/Form";
+import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+import DeleteButton from "../../components/ui/DeleteButton";
+import InlineInput from "../../components/ui/InlineInput";
 import { dollarsToCents } from "../../orders/salesOrderMath";
 import type { Part } from "../../types/Part";
 
@@ -21,9 +29,6 @@ type Draft = {
 };
 
 type PendingDelete = { id: number; partNumber: string; routings: string[] };
-
-const inputClass = "border border-slate-300 rounded-lg p-2 bg-white";
-const labelClass = "flex flex-col gap-1 text-sm text-slate-600";
 
 /** Cents to the dollars string the inline input edits. */
 function centsToDollars(cents: number): string {
@@ -222,12 +227,8 @@ export default function PartsPage() {
         to give throughput, so it is the only variable cost in the model.
       </p>
 
-      <form
-        onSubmit={submit}
-        className="mt-6 flex max-w-3xl flex-col gap-4 rounded-lg border border-slate-300 bg-white p-6"
-      >
-        <label className={labelClass}>
-          Part number
+      <FormCard onSubmit={submit}>
+        <Field label="Part number">
           <input
             type="text"
             value={partNumber}
@@ -235,10 +236,9 @@ export default function PartsPage() {
             placeholder="300-001"
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Name
+        <Field label="Name">
           <input
             type="text"
             value={name}
@@ -246,10 +246,9 @@ export default function PartsPage() {
             placeholder="Bushing"
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Material cost (USD)
+        <Field label="Material cost (USD)">
           <input
             type="number"
             min="0"
@@ -258,41 +257,35 @@ export default function PartsPage() {
             onChange={(event) => setMaterialCost(event.target.value)}
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="self-start bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-        >
-          {submitting ? "Creating…" : "Create Part"}
-        </button>
-      </form>
+        <SubmitButton busy={submitting} busyLabel="Creating…">
+          Create Part
+        </SubmitButton>
+      </FormCard>
 
       <p className="mt-6 text-sm text-slate-500">
         A part with no routing can't be built — no work order can be created for
         it until one exists.
       </p>
 
-      <div className="mt-2 overflow-x-auto rounded-lg border border-slate-300 bg-white">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-100 text-left text-slate-600">
-            <tr>
-              <th className="p-2">Part number</th>
-              <th className="p-2">Name</th>
-              <th className="p-2 text-right">Material cost</th>
-              <th className="p-2 text-right">Routings</th>
-              <th className="p-2"></th>
-            </tr>
-          </thead>
+      <div className="mt-2">
+        <Table>
+          <THead>
+            <Th>Part number</Th>
+            <Th>Name</Th>
+            <Th numeric>Material cost</Th>
+            <Th numeric>Routings</Th>
+            <Th />
+          </THead>
           <tbody>
             {parts.map((part) => {
               const editing = draft?.id === part.id ? draft : null;
               const count = routingCount.get(part.id) ?? 0;
               return (
-                <tr key={part.id} className="border-t border-slate-200">
-                  <td className="p-2">
-                    <input
+                <Tr key={part.id}>
+                  <Td>
+                    <InlineInput
                       type="text"
                       aria-label={`Part number for ${part.name}`}
                       disabled={busyId === part.id}
@@ -308,11 +301,11 @@ export default function PartsPage() {
                         )
                       }
                       onBlur={() => commitEdit(part)}
-                      className="w-full rounded border border-transparent bg-transparent p-1 hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50"
+                      className="w-full"
                     />
-                  </td>
-                  <td className="p-2">
-                    <input
+                  </Td>
+                  <Td>
+                    <InlineInput
                       type="text"
                       aria-label={`Name for ${part.partNumber}`}
                       disabled={busyId === part.id}
@@ -325,12 +318,13 @@ export default function PartsPage() {
                         )
                       }
                       onBlur={() => commitEdit(part)}
-                      className="w-full rounded border border-transparent bg-transparent p-1 hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50"
+                      className="w-full"
                     />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
+                  </Td>
+                  <Td className="text-right">
+                    <InlineInput
                       type="number"
+                      numeric
                       min="0"
                       step="0.01"
                       aria-label={`Material cost for ${part.partNumber}`}
@@ -351,32 +345,27 @@ export default function PartsPage() {
                         )
                       }
                       onBlur={() => commitEdit(part)}
-                      className="w-24 rounded border border-transparent bg-transparent p-1 text-right tabular-nums hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50"
+                      className="w-24"
                     />
-                  </td>
-                  <td
-                    className={`p-2 text-right tabular-nums ${
-                      count === 0 ? "text-red-600" : "text-slate-500"
-                    }`}
+                  </Td>
+                  <Td
+                    numeric
+                    className={count === 0 ? "text-red-600" : "text-slate-500"}
                   >
                     {count}
-                  </td>
-                  <td className="p-2 text-right">
-                    <button
-                      type="button"
-                      aria-label={`Delete ${part.partNumber}`}
-                      disabled={busyId === part.id}
+                  </Td>
+                  <Td className="text-right">
+                    <DeleteButton
+                      label={part.partNumber}
+                      busy={busyId === part.id}
                       onClick={() => runDelete(part, false)}
-                      className="rounded px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </td>
-                </tr>
+                    />
+                  </Td>
+                </Tr>
               );
             })}
           </tbody>
-        </table>
+        </Table>
       </div>
 
       {pendingDelete && (
