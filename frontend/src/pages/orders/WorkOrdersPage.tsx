@@ -1,11 +1,18 @@
 import { useCallback, useState } from "react";
-import { Trash2 } from "lucide-react";
 import { deleteConflict, deleteJson, postJson } from "../../api/client";
 import { useOrdersData } from "../../orders/OrdersDataContext";
 import { useToast } from "../../toast/ToastContext";
 import CollapsibleSection from "../../components/orders/CollapsibleSection";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
 import DemandPanel from "../../components/orders/DemandPanel";
+import {
+  Field,
+  FormCard,
+  SubmitButton,
+  inputClass,
+} from "../../components/ui/Form";
+import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+import DeleteButton from "../../components/ui/DeleteButton";
 import { formatCents, isOpen, remainingQty } from "../../orders/salesOrderMath";
 import { summarizeDemand } from "../../orders/demand";
 import type { WorkOrder } from "../../types/WorkOrder";
@@ -15,9 +22,6 @@ type PendingDelete = {
   orderNumber: string;
   allocations: { orderNumber: string; quantity: number }[];
 };
-
-const inputClass = "border border-slate-300 rounded-lg p-2 bg-white";
-const labelClass = "flex flex-col gap-1 text-sm text-slate-600";
 
 export default function WorkOrdersPage() {
   const {
@@ -210,12 +214,8 @@ export default function WorkOrdersPage() {
         onPickPart={buildForPart}
       />
 
-      <form
-        onSubmit={submit}
-        className="mt-6 flex max-w-3xl flex-col gap-4 rounded-lg border border-slate-300 bg-white p-6"
-      >
-        <label className={labelClass}>
-          Part
+      <FormCard onSubmit={submit}>
+        <Field label="Part">
           <select
             value={partId}
             onChange={(event) => changePart(event.target.value)}
@@ -229,10 +229,9 @@ export default function WorkOrdersPage() {
               </option>
             ))}
           </select>
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Routing
+        <Field label="Routing">
           <select
             value={routingId}
             onChange={(event) => setRoutingId(event.target.value)}
@@ -251,10 +250,9 @@ export default function WorkOrdersPage() {
               This part has no routing, so it can't be produced yet.
             </span>
           )}
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Quantity
+        <Field label="Quantity">
           <input
             type="number"
             min={1}
@@ -263,10 +261,9 @@ export default function WorkOrdersPage() {
             onChange={(event) => setQuantity(event.target.value)}
             className={inputClass}
           />
-        </label>
+        </Field>
 
-        <label className={labelClass}>
-          Allocate to sales order
+        <Field label="Allocate to sales order">
           <select
             value={salesOrderId}
             onChange={(event) => changeSalesOrder(event.target.value)}
@@ -286,11 +283,10 @@ export default function WorkOrdersPage() {
               No open demand for this part — the whole order becomes inventory.
             </span>
           )}
-        </label>
+        </Field>
 
         {salesOrderId && (
-          <label className={labelClass}>
-            Allocation quantity
+          <Field label="Allocation quantity">
             <input
               type="number"
               min={1}
@@ -299,87 +295,71 @@ export default function WorkOrdersPage() {
               onChange={(event) => setAllocationQuantity(event.target.value)}
               className={inputClass}
             />
-          </label>
+          </Field>
         )}
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="self-start bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
-        >
-          {submitting ? "Creating…" : "Create Work Order"}
-        </button>
-      </form>
+        <SubmitButton busy={submitting} busyLabel="Creating…">
+          Create Work Order
+        </SubmitButton>
+      </FormCard>
 
       <CollapsibleSection title="work orders" count={workOrders.length}>
-        <div className="overflow-x-auto rounded-lg border border-slate-300 bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-100 text-left text-slate-600">
-              <tr>
-                <th className="p-2">Order</th>
-                <th className="p-2">Part</th>
-                <th className="p-2">Routing</th>
-                <th className="p-2 text-right">Quantity</th>
-                <th className="p-2">Status</th>
-                <th className="p-2">Allocated to</th>
-                <th className="p-2"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {workOrders.map((workOrder) => {
-                const routing = routingById.get(workOrder.routingId);
-                const part = partById.get(workOrder.partId);
-                const allocated = workOrder.allocations.reduce(
-                  (total, allocation) => total + allocation.quantity,
-                  0,
-                );
-                const inventory = workOrder.quantity - allocated;
-                return (
-                  <tr key={workOrder.id} className="border-t border-slate-200">
-                    <td className="p-2 font-medium">{workOrder.orderNumber}</td>
-                    <td className="p-2">
-                      {part ? `${part.partNumber} · ${part.name}` : "—"}
-                    </td>
-                    <td className="p-2">{routing?.name ?? "—"}</td>
-                    <td className="p-2 text-right tabular-nums">
-                      {workOrder.quantity}
-                    </td>
-                    <td className="p-2">{workOrder.status}</td>
-                    <td className="p-2">
-                      {workOrder.allocations.length === 0 ? (
-                        <span className="text-slate-400">unallocated</span>
-                      ) : (
-                        workOrder.allocations
-                          .map(
-                            (allocation) =>
-                              `${allocation.salesOrderNumber} (${allocation.quantity})`,
-                          )
-                          .join(", ")
-                      )}
-                      {inventory > 0 && workOrder.allocations.length > 0 && (
-                        <span className="text-slate-400">
-                          {" "}
-                          · {inventory} inventory
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-2 text-right">
-                      <button
-                        type="button"
-                        aria-label={`Delete ${workOrder.orderNumber}`}
-                        disabled={deletingId === workOrder.id}
-                        onClick={() => runDelete(workOrder, false)}
-                        className="rounded px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <Table>
+          <THead>
+            <Th>Order</Th>
+            <Th>Part</Th>
+            <Th>Routing</Th>
+            <Th numeric>Quantity</Th>
+            <Th>Status</Th>
+            <Th>Allocated to</Th>
+            <Th />
+          </THead>
+          <tbody>
+            {workOrders.map((workOrder) => {
+              const routing = routingById.get(workOrder.routingId);
+              const part = partById.get(workOrder.partId);
+              const allocated = workOrder.allocations.reduce(
+                (total, allocation) => total + allocation.quantity,
+                0,
+              );
+              const inventory = workOrder.quantity - allocated;
+              return (
+                <Tr key={workOrder.id}>
+                  <Td className="font-medium">{workOrder.orderNumber}</Td>
+                  <Td>{part ? `${part.partNumber} · ${part.name}` : "—"}</Td>
+                  <Td>{routing?.name ?? "—"}</Td>
+                  <Td numeric>{workOrder.quantity}</Td>
+                  <Td>{workOrder.status}</Td>
+                  <Td>
+                    {workOrder.allocations.length === 0 ? (
+                      <span className="text-slate-400">unallocated</span>
+                    ) : (
+                      workOrder.allocations
+                        .map(
+                          (allocation) =>
+                            `${allocation.salesOrderNumber} (${allocation.quantity})`,
+                        )
+                        .join(", ")
+                    )}
+                    {inventory > 0 && workOrder.allocations.length > 0 && (
+                      <span className="text-slate-400">
+                        {" "}
+                        · {inventory} inventory
+                      </span>
+                    )}
+                  </Td>
+                  <Td className="text-right">
+                    <DeleteButton
+                      label={workOrder.orderNumber}
+                      busy={deletingId === workOrder.id}
+                      onClick={() => runDelete(workOrder, false)}
+                    />
+                  </Td>
+                </Tr>
+              );
+            })}
+          </tbody>
+        </Table>
       </CollapsibleSection>
 
       {pendingDelete && (
