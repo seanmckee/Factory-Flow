@@ -8,9 +8,9 @@ that completes it.
 
 ---
 
-**You are here:** Unit 0 done. Nothing else started.
+**You are here:** Track 0 — `chore/backend-outdir` done.
 
-**Next up:** `chore/backend-outdir` — must land before backend vitest.
+**Next up:** `chore/backend-vitest`.
 
 ---
 
@@ -31,7 +31,7 @@ let the factory lose money → fork and compare → agent.
 
 Own branches, own commits. Both block putting engine code and tests in the backend.
 
-- [ ] `chore/backend-outdir` — `rootDir`/`outDir` are commented out in
+- [x] `chore/backend-outdir` — `rootDir`/`outDir` are commented out in
       `backend/tsconfig.json`, so `tsc` emits ~60 `.js`/`.d.ts`/`.map` files into
       `src/` and `npm start` can't work. Must land before vitest, which would
       otherwise pick up emitted `*.test.js` as duplicate suites and make
