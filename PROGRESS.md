@@ -8,12 +8,12 @@ that completes it.
 
 ---
 
-**You are here:** Track 1, unit 1.0 done — `calculateThroughput` takes prior
-counts, so a tick no longer rescans the finished history.
+**You are here:** Track 1, unit 1.1 done — the backend has the engine's types.
+Units 1.1–1.3 share one PR (`feat/engine-to-backend`), one commit each; 1.0
+shipped on its own branch because it is a frontend refactor, not part of the
+move.
 
-**Next up:** Track 1, unit 1.1 — retype the engine in the backend. Units 1.1–1.3
-share one PR (`feat/engine-to-backend`), one commit each; 1.0 shipped on its own
-branch because it is a frontend refactor, not part of the move.
+**Next up:** Track 1, unit 1.2 — port `sampleProcessTime` and `simulateTick`.
 
 ---
 
@@ -55,8 +55,14 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
       instead of the whole finished history. **Frontend, under the existing
       tests**, before anything moves — it's O(n²) today and it's what would force
       a persisted run to reload its entire history every tick.
-- [ ] 1.1 `backend/src/simulation/types.ts` — a retyping, not a copy. The Drizzle
-      types are different shapes.
+- [x] 1.1 `backend/src/simulation/types.ts` — a retyping, not a copy. The Drizzle
+      types are different shapes. **Decided:** narrow structural types carrying
+      only the fields the engine reads, so Drizzle rows satisfy them without
+      mapping; `FinishedPart` split out of `WipPart` in place of the
+      `stepIndex: -1` sentinel; `routingId` stays on the in-memory `WipPart`
+      (hydrated from the work order) though it is not a stored column;
+      allocations stay flat, as in the table, rather than nested under sales
+      orders as the API returns them.
 - [ ] 1.2 Port `sampleProcessTime` + `simulateTick` + tests. Strip the per-draw
       `console.log`. **Seed the RNG here** (decided 2026-08-22): `rng_seed` on
       the run, or make the draw a pure function of `(seed, part_uuid,
