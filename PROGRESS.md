@@ -76,10 +76,30 @@ The "observations" half the agent needs. Today the only observation is money.
 
 Where a run becomes a server-side object an agent can address.
 
-- [ ] 3.1 Schema + migration — five tables. `run_finished_parts` carries **frozen
-      money columns**, because allocations mutate and would otherwise silently
-      rewrite a finished run's chart. No `work_center_id` on `run_wip_parts` —
-      derive it.
+- [ ] 3.1 Schema + migration — five tables:
+      - `simulation_runs` — name, status, `tick_num`, `rng_seed`, plus
+        `parent_run_id` / `forked_at_tick` reserved for Track 7.
+      - `run_wip_parts` — run CASCADE, `part_uuid`, `work_order_id` RESTRICT,
+        `step_index`, progress + actual time, `UNIQUE(run_id, part_uuid)`.
+        **No `work_center_id`** — derive it from the routing the engine already
+        holds in a Map each tick. Storing it adds a 500 path on work-centre
+        delete that doesn't exist today and forces
+        `PUT /api/routings/:id/steps` to mutate live runs. **No `routing_id`** —
+        `work_orders.routing_id` is already RESTRICT, so it buys nothing.
+      - `run_finished_parts` — append-only, `completed_at_tick`, plus **frozen
+        money columns** (`throughput_cents`, `sales_order_id`,
+        `unit_price_cents`, `material_cost_cents`) captured at finish time.
+        Allocations mutate — they cascade with sales orders and are recreated by
+        every new work order — so without freezing, deleting a sales order
+        silently rewrites a finished run's chart, since `calculateThroughput`
+        skips missing records and credits $0 rather than failing. Order by
+        `(completed_at_tick, id)`, not id alone.
+      - `run_ticks` — `(run_id, tick_num, throughput_cents)`. The chart reads
+        this. Do **not** plan to recompute it from `run_finished_parts`.
+      - `run_released_orders` — `(run_id, work_order_id)` UNIQUE. Guards
+        double-release (`releaseOrder` has no guard today, and persisted phantom
+        parts would accrue real carrying cost in Track 6) and defines which
+        orders a run owns.
 - [ ] 3.2 Run service. **Never persist per tick** — load once, advance N ticks in
       memory, write once per batch, one transaction. Neon over a WebSocket pool
       makes every write a round trip; per-tick writes make Track 4 impossible.
@@ -90,6 +110,15 @@ Where a run becomes a server-side object an agent can address.
       commit, so two engines never coexist untested. `cumulativeThroughput.ts`
       stays — it's a chart transform, not physics.
 - [ ] 3.5 Update `CLAUDE.md` and the README's "entirely ephemeral" limitation.
+      Document that a crash loses at most one batch of ticks.
+
+**Open decision, Track 3:** snapshot routings into the run at release time
+(`run_routing_steps`)? `PUT /api/routings/:id/steps` currently claims an
+in-flight run "keeps the routing it was released with" — but that is a frontend
+caching accident, and it evaporates the moment the backend engine re-reads
+`routing_steps` each tick, so the guarantee in the docs becomes false during
+this track. A snapshot is the real fix and is what Track 7 forking needs anyway
+("same state, new branch"). Deferrable, but decide it deliberately.
 
 ## Track 4 onward — re-plan when reached
 
