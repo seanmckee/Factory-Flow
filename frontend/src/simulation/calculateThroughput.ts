@@ -3,9 +3,17 @@ import type { WipPart } from "../types/WipPart";
 import type { WorkOrder } from "../types/WorkOrder";
 import type { SalesOrder, Allocation } from "../types/SalesOrder";
 
+/**
+ * Credits each just-finished unit against the allocation covering it.
+ *
+ * `priorCounts` maps a work order to how many of its units finished before this
+ * tick. The caller maintains it incrementally: rescanning the whole finished
+ * history here made a tick cost O(finished^2) over a run, and a persisted run
+ * would have had to reload its entire history every tick to call this.
+ */
 export function calculateThroughput(
   justFinished: WipPart[],
-  allFinished: WipPart[],
+  priorCounts: Map<number, number>,
   workOrders: WorkOrder[],
   parts: Part[],
   salesOrders: SalesOrder[],
@@ -47,9 +55,7 @@ export function calculateThroughput(
 
     const materialCost = part.materialCostCents;
 
-    const priorCount = allFinished.filter(
-      (p) => p.workOrderId === finishedPart.workOrderId,
-    ).length;
+    const priorCount = priorCounts.get(finishedPart.workOrderId) ?? 0;
 
     const alreadyThisTick = completedSoFar.get(finishedPart.workOrderId) ?? 0;
     const unitIndex = priorCount + alreadyThisTick;
