@@ -48,11 +48,14 @@ const makePart = (workOrderId: number) => ({
   actualProcessTimeSeconds: 5,
 });
 
+// how many units of a work order finished before this tick
+const priorCounts = (count: number) => new Map([[10, count]]);
+
 describe("calculateThroughput", () => {
   it("prices the first unit against the first allocation", () => {
     const result = calculateThroughput(
       [makePart(10)],
-      [],
+      new Map(),
       workOrders,
       parts,
       salesOrders,
@@ -61,10 +64,9 @@ describe("calculateThroughput", () => {
   });
 
   it("prices the third unit against the second allocation", () => {
-    const prior = [makePart(10), makePart(10)];
     const result = calculateThroughput(
       [makePart(10)],
-      prior,
+      priorCounts(2),
       workOrders,
       parts,
       salesOrders,
@@ -73,10 +75,9 @@ describe("calculateThroughput", () => {
   });
 
   it("values unallocated units at zero", () => {
-    const prior = Array.from({ length: 5 }, () => makePart(10));
     const result = calculateThroughput(
       [makePart(10)],
-      prior,
+      priorCounts(5),
       workOrders,
       parts,
       salesOrders,

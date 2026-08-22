@@ -14,6 +14,9 @@ import { cumulativeThroughput } from "../simulation/cumulativeThroughput.ts";
 type SimulationState = {
   wipParts: WipPart[];
   finishedParts: WipPart[];
+  // workOrderId -> units finished so far; maintained as parts finish so
+  // throughput never has to rescan the whole history
+  finishedByWorkOrder: Map<number, number>;
   tickNum: number;
 };
 
@@ -23,6 +26,7 @@ function App() {
   const [simulationState, setSimulationState] = useState<SimulationState>({
     wipParts: [],
     finishedParts: [],
+    finishedByWorkOrder: new Map(),
     tickNum: 0,
   });
   const [routings, setRoutings] = useState<Map<number, Routing>>(new Map());
@@ -132,7 +136,7 @@ function App() {
             tick: nextTick,
             cents: calculateThroughput(
               tickData.finishedParts,
-              currentSimulation.finishedParts,
+              currentSimulation.finishedByWorkOrder,
               workOrdersRef.current,
               partsRef.current,
               salesOrdersRef.current,
@@ -140,12 +144,23 @@ function App() {
           },
         ]);
 
+        const finishedByWorkOrder = new Map(
+          currentSimulation.finishedByWorkOrder,
+        );
+        for (const finishedPart of tickData.finishedParts) {
+          finishedByWorkOrder.set(
+            finishedPart.workOrderId,
+            (finishedByWorkOrder.get(finishedPart.workOrderId) ?? 0) + 1,
+          );
+        }
+
         return {
           wipParts: tickData.wipParts,
           finishedParts: [
             ...currentSimulation.finishedParts,
             ...tickData.finishedParts,
           ],
+          finishedByWorkOrder,
           tickNum: nextTick,
         };
       });
@@ -160,7 +175,12 @@ function App() {
 
   const resetSimulation = () => {
     setIsRunning(false);
-    setSimulationState({ wipParts: [], finishedParts: [], tickNum: 0 });
+    setSimulationState({
+      wipParts: [],
+      finishedParts: [],
+      finishedByWorkOrder: new Map(),
+      tickNum: 0,
+    });
     setThroughputHistory([]);
   };
   const deriveWorkCenterView = (
@@ -300,13 +320,7 @@ function App() {
   );
   const cumulative = cumulativeThroughput(throughputHistory);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
-  const finishedByWorkOrder = new Map<number, number>();
-  for (const fp of simulationState.finishedParts) {
-    finishedByWorkOrder.set(
-      fp.workOrderId,
-      (finishedByWorkOrder.get(fp.workOrderId) ?? 0) + 1,
-    );
-  }
+  const finishedByWorkOrder = simulationState.finishedByWorkOrder;
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
       <h1 className="text-3xl font-bold">Factory Simulator</h1>

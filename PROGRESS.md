@@ -8,10 +8,12 @@ that completes it.
 
 ---
 
-**You are here:** Track 0 complete. Backend has a build and a test runner.
+**You are here:** Track 1, unit 1.0 done — `calculateThroughput` takes prior
+counts, so a tick no longer rescans the finished history.
 
-**Next up:** Track 1, unit 1.0 — the `calculateThroughput` signature refactor,
-in the frontend, before anything moves.
+**Next up:** Track 1, unit 1.1 — retype the engine in the backend. Units 1.1–1.3
+share one PR (`feat/engine-to-backend`), one commit each; 1.0 shipped on its own
+branch because it is a frontend refactor, not part of the move.
 
 ---
 
@@ -49,7 +51,7 @@ hand-written type mirrors, as it already does for every API shape. No workspace
 tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
 **`strict` off**, backend is `nodenext` + strict + `noUncheckedIndexedAccess`).
 
-- [ ] 1.0 Refactor `calculateThroughput` to take `Map<workOrderId, priorCount>`
+- [x] 1.0 Refactor `calculateThroughput` to take `Map<workOrderId, priorCount>`
       instead of the whole finished history. **Frontend, under the existing
       tests**, before anything moves — it's O(n²) today and it's what would force
       a persisted run to reload its entire history every tick.
@@ -60,6 +62,12 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
       the run, or make the draw a pure function of `(seed, part_uuid,
       step_index)` so it needs no persisted cursor. Without this, Track 7's fork
       comparison measures noise rather than the decision that changed.
+      **Decided:** the pure `(seed, part_uuid, step_index)` form — stateless, so
+      a run stores only `rng_seed` and a fork replays exactly with nothing to
+      restore. Also decided: a part whose `stepIndex` has run past the end of a
+      shortened routing (the latent bug below) **finishes at the current tick** —
+      the removed work no longer exists, so it is credited normally rather than
+      freezing in WIP or vanishing.
 - [ ] 1.3 Port `calculateThroughput` + tests. Don't port `smoothThroughput` —
       dead code, superseded by Track 5.
 
