@@ -103,6 +103,10 @@ Tailwind v4 via the `@tailwindcss/vite` plugin — configured through `src/index
 The global working agreement in `~/.claude/CLAUDE.md` applies. Project-specific
 additions:
 
+- **Where we are: read `PROGRESS.md` before starting work.** It is the
+  operational ledger — one line per unit, with the current position at the top.
+  Tick a unit's box in the same commit that completes it. The README holds the
+  narrative roadmap; `PROGRESS.md` holds what to do next.
 - Default unit order for a feature: schema/migration → engine + tests → API → UI.
   Each is its own commit.
 - Write tests alongside the code, not after. Tests are the spec for what correct
