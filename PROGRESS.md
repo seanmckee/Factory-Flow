@@ -8,9 +8,10 @@ that completes it.
 
 ---
 
-**You are here:** Track 0 — `chore/backend-outdir` done.
+**You are here:** Track 0 complete. Backend has a build and a test runner.
 
-**Next up:** `chore/backend-vitest`.
+**Next up:** Track 1, unit 1.0 — the `calculateThroughput` signature refactor,
+in the frontend, before anything moves.
 
 ---
 
@@ -36,7 +37,7 @@ Own branches, own commits. Both block putting engine code and tests in the backe
       `src/` and `npm start` can't work. Must land before vitest, which would
       otherwise pick up emitted `*.test.js` as duplicate suites and make
       `tsx watch` restart on its own output.
-- [ ] `chore/backend-vitest` — backend has no test runner at all. `environment:
+- [x] `chore/backend-vitest` — backend has no test runner at all. `environment:
       node`, mirroring the frontend. Note `"types": []` in tsconfig: import test
       globals explicitly.
 
