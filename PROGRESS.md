@@ -8,12 +8,12 @@ that completes it.
 
 ---
 
-**You are here:** Track 1, unit 1.1 done — the backend has the engine's types.
-Units 1.1–1.3 share one PR (`feat/engine-to-backend`), one commit each; 1.0
-shipped on its own branch because it is a frontend refactor, not part of the
-move.
+**You are here:** Track 1, unit 1.2 done — the backend has a seeded, replayable
+tick. 1.1 shipped in `feat/engine-to-backend`; 1.2–1.3 continue on
+`feat/engine-to-backend-tick`, one commit each. 1.0 shipped on its own branch
+because it is a frontend refactor, not part of the move.
 
-**Next up:** Track 1, unit 1.2 — port `sampleProcessTime` and `simulateTick`.
+**Next up:** Track 1, unit 1.3 — port `calculateThroughput`.
 
 ---
 
@@ -63,7 +63,7 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
       (hydrated from the work order) though it is not a stored column;
       allocations stay flat, as in the table, rather than nested under sales
       orders as the API returns them.
-- [ ] 1.2 Port `sampleProcessTime` + `simulateTick` + tests. Strip the per-draw
+- [x] 1.2 Port `sampleProcessTime` + `simulateTick` + tests. Strip the per-draw
       `console.log`. **Seed the RNG here** (decided 2026-08-22): `rng_seed` on
       the run, or make the draw a pure function of `(seed, part_uuid,
       step_index)` so it needs no persisted cursor. Without this, Track 7's fork
@@ -73,7 +73,11 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
       restore. Also decided: a part whose `stepIndex` has run past the end of a
       shortened routing (the latent bug below) **finishes at the current tick** —
       the removed work no longer exists, so it is credited normally rather than
-      freezing in WIP or vanishing.
+      freezing in WIP or vanishing. **Decided during the port:** a missing
+      routing or work center **throws** rather than logging and skipping as the
+      frontend does — it is a loader bug or a corrupt run, and with Track 3
+      advancing N ticks per transaction, failing loudly rolls the batch back
+      instead of silently freezing parts that Track 6 would charge rent on.
 - [ ] 1.3 Port `calculateThroughput` + tests. Don't port `smoothThroughput` —
       dead code, superseded by Track 5.
 
@@ -151,8 +155,8 @@ this track. A snapshot is the real fix and is what Track 7 forking needs anyway
 ## Known latent bug
 
 Shortening a routing's step list strands in-flight parts with
-`stepIndex >= steps.length`. `simulationTick.ts` indexes `steps[stepIndex]` at
-four sites with no guard and the frontend has `strict` off, so this is a live
-crash reachable through the routing editor. The backend's stricter flags will
-force it to be handled during the Track 1 port — a bare `continue` would freeze
-the part in WIP forever.
+`stepIndex >= steps.length`. The frontend's `simulationTick.ts` indexes
+`steps[stepIndex]` at four sites with no guard and has `strict` off, so this is
+a live crash reachable through the routing editor. The backend port handles it
+(1.2: the stranded part finishes at the current tick), but the frontend engine
+keeps the bug until 3.4 deletes it.
