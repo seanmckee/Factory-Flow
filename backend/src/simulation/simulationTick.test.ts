@@ -25,6 +25,7 @@ const makeWipPart = (id: string, overrides: Partial<WipPart> = {}): WipPart => (
   id,
   workOrderId: 1,
   routingId: 1,
+  releasedAtTick: 0,
   stepIndex: 0,
   progressSeconds: 0,
   actualProcessTimeSeconds: 5,
@@ -69,7 +70,7 @@ describe("simulateTick", () => {
       7,
     );
     expect(result.finishedParts).toEqual([
-      { id: "part-1", workOrderId: 1, completedAtTick: 7 },
+      { id: "part-1", workOrderId: 1, releasedAtTick: 0, completedAtTick: 7 },
     ]);
     expect(result.wipParts.length).toBe(0);
   });
@@ -179,7 +180,7 @@ describe("simulateTick", () => {
       );
 
       expect(result.finishedParts).toEqual([
-        { id: "part-1", workOrderId: 1, completedAtTick: 9 },
+        { id: "part-1", workOrderId: 1, releasedAtTick: 0, completedAtTick: 9 },
       ]);
       expect(result.wipParts.length).toBe(0);
     });
@@ -210,6 +211,24 @@ describe("simulateTick", () => {
     expect(() =>
       simulateTick([makeWipPart("part-1")], testRoutings, 1, new Map(), SEED),
     ).toThrow(/work center 10/);
+  });
+
+  it("carries releasedAtTick from the part onto the finished record", () => {
+    const result = tick(
+      [
+        makeWipPart("part-1", {
+          releasedAtTick: 12,
+          stepIndex: 1,
+          progressSeconds: 4,
+        }),
+      ],
+      testWorkCenters,
+      20,
+    );
+
+    expect(result.finishedParts).toEqual([
+      { id: "part-1", workOrderId: 1, releasedAtTick: 12, completedAtTick: 20 },
+    ]);
   });
 
   describe("metrics", () => {

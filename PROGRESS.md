@@ -12,11 +12,17 @@ that completes it.
 replayable tick, and the money model. Nothing drives it yet; the frontend still
 runs its own copy until 3.4 deletes it. 1.1 shipped in `feat/engine-to-backend`;
 1.2–1.3 in `feat/engine-to-backend-tick`. 1.0 shipped on its own branch because
-it is a frontend refactor, not part of the move. Track 2 is most of the way:
-the tick reports what each work center did while it ran, and a window of those
-observations reduces to utilization, queue depth and WIP.
+it is a frontend refactor, not part of the move. Track 2 done: the tick reports
+what each work center did while it ran, and a window of those observations
+reduces to utilization, queue depth, WIP and cycle time. Still nothing
+persists it — the engine computes the observations and throws them away at the
+end of the request, which is what Track 3 fixes.
 
-**Next up:** Track 2, unit 2.3 — cycle time.
+**Next up:** Track 3, unit 3.1 — the schema and migration for run persistence.
+Its `run_ticks` / `run_tick_work_centers` / `released_at_tick` columns are
+already decided in Track 2's note below. Two open decisions are not: what
+"reset" means (3.3), and whether routings are snapshotted into a run at release
+time.
 
 ---
 
@@ -134,18 +140,28 @@ which cannot answer "how busy was the drill press over the last 500 ticks".
       honoured the column; 1 is only its default), the stale claim that the
       frontend owns the engine, and the "work centre capacity > 1" entry in the
       README's still-to-build list.
-- [ ] 2.3 Cycle time. **Decided:** `releasedAtTick` goes on `WipPart` and is
+- [x] 2.3 Cycle time. **Decided:** `releasedAtTick` goes on `WipPart` and is
       carried onto `FinishedPart` at finish, rather than living on
       `run_released_orders` as a per-work-order release tick. The two are equal
       today — a work order's parts are all instantiated at one release — but the
       part-level field survives batch splitting and per-part release, and keeps
-      cycle time out of a join.
+      cycle time out of a join. `aggregateCycleTime` takes only the finished
+      records, windowed by the caller on `completedAtTick`, independently of the
+      tick series. **Decided:** report a median and a 95th percentile beside the
+      mean, by nearest rank so every figure is a cycle time some part actually
+      had — a due date is missed by the tail, and one late part drags a mean
+      well past the typical part. **Decided:** an empty input returns *nulls*,
+      not the zeroes `aggregateMetrics` reports, because "nothing finished" is
+      not a cycle time of zero — and zero is itself reachable, since a part
+      stranded by a shortened routing finishes on the tick it is seen. A
+      negative cycle time throws, as a corrupt run.
 
 **Decided for Track 3.1** (settled here so the migration isn't designed blind):
-Track 2 persists nothing, but 2.2's shape dictates the columns. `run_ticks`
+Track 2 persists nothing, but its shapes dictate the columns. `run_ticks`
 becomes `(run_id, tick_num, throughput_cents, wip_count)`, and per-center
 occupancy lands in a new `run_tick_work_centers`
-`(run_id, tick_num, work_center_id, busy, queued)`. Rejected: running
+`(run_id, tick_num, work_center_id, busy, queued)`. `run_wip_parts` and
+`run_finished_parts` each gain `released_at_tick`. Rejected: running
 accumulators on the run row — cheaper to write, but lifetime averages only, and
 Phase 6 explicitly wants a window.
 

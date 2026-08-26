@@ -81,6 +81,17 @@ observed ticks), queue depth and WIP, and per-centre `observedTicks` is the
 denominator so a work center created mid-run isn't reported idle for time it
 did not exist.
 
+Cycle time comes from the other series: `WipPart` carries `releasedAtTick` for
+its whole life and `finish()` copies it onto the `FinishedPart`, so
+`aggregateCycleTime` needs nothing but the finished records.
+`completedAtTick - releasedAtTick` counts queueing, not just processing.
+Windowing is the **caller's** job for both aggregates — filter by tick and hand
+over what falls inside — so one function serves a live batch and a stored range.
+They window independently, on `TickMetrics.tickNum` and on
+`FinishedPart.completedAtTick` respectively. Empty inputs don't throw: a run
+that never advanced has no ticks, and `aggregateCycleTime` returns nulls rather
+than zeroes because zero is itself a reachable cycle time.
+
 ## Frontend architecture
 
 Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts` and `RoutingsPage` at `/setup/routings`. `/create` was a stub page and now redirects to `/orders/sales`.

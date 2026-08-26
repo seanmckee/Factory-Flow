@@ -1,5 +1,5 @@
 import type { TickMetrics } from "./simulationTick.js";
-import type { WorkCenter } from "./types.js";
+import type { FinishedPart, WorkCenter } from "./types.js";
 
 /**
  * How one work center behaved over a window of ticks.
@@ -121,4 +121,84 @@ export function aggregateMetrics(
       };
     }),
   };
+}
+
+/**
+ * How long parts took to get through the shop.
+ *
+ * Every field is null when nothing finished, rather than zero as
+ * `aggregateMetrics` reports its rates. The difference is deliberate: a work
+ * center that did no work genuinely was 0% utilized, but "no parts finished"
+ * does not mean cycle time was zero — and zero is itself reachable, since a
+ * part stranded by a shortened routing finishes on the tick it is seen.
+ */
+export type CycleTimeAggregate = {
+  /** Parts the aggregate is over. */
+  count: number;
+  meanSeconds: number | null;
+  minSeconds: number | null;
+  maxSeconds: number | null;
+  /**
+   * Nearest-rank percentiles, no interpolation: the value at
+   * `ceil(p × count)` in sorted order, so both are always a cycle time some
+   * part actually had. The median is the typical part; the 95th is the tail
+   * that misses a due date, which is the half a mean hides.
+   */
+  medianSeconds: number | null;
+  p95Seconds: number | null;
+};
+
+/**
+ * Cycle time per part is `completedAtTick - releasedAtTick`, one tick being one
+ * simulated second. It counts queueing, not just processing — a part waiting
+ * its turn is accruing cycle time and, from Track 6, carrying cost.
+ *
+ * Windowing is the caller's job, as in `aggregateMetrics`: filter by
+ * `completedAtTick` and hand over what falls inside. The two windows are
+ * independent, since finished parts are an append-only series of their own.
+ */
+export function aggregateCycleTime(
+  finishedParts: FinishedPart[],
+): CycleTimeAggregate {
+  const cycleTimes: number[] = [];
+  let total = 0;
+
+  for (const part of finishedParts) {
+    const cycleTime = part.completedAtTick - part.releasedAtTick;
+    if (cycleTime < 0) {
+      throw new Error(
+        `Part ${part.id} finished at tick ${part.completedAtTick}, before it was released at ${part.releasedAtTick}`,
+      );
+    }
+    cycleTimes.push(cycleTime);
+    total += cycleTime;
+  }
+
+  const count = cycleTimes.length;
+  if (count === 0) {
+    return {
+      count: 0,
+      meanSeconds: null,
+      minSeconds: null,
+      maxSeconds: null,
+      medianSeconds: null,
+      p95Seconds: null,
+    };
+  }
+
+  cycleTimes.sort((a, b) => a - b);
+  return {
+    count,
+    meanSeconds: total / count,
+    minSeconds: cycleTimes[0] ?? null,
+    maxSeconds: cycleTimes[count - 1] ?? null,
+    medianSeconds: percentile(cycleTimes, 0.5),
+    p95Seconds: percentile(cycleTimes, 0.95),
+  };
+}
+
+/** Nearest rank over an already-sorted, non-empty list. */
+function percentile(sorted: number[], fraction: number): number | null {
+  const rank = Math.ceil(fraction * sorted.length);
+  return sorted[Math.max(0, rank - 1)] ?? null;
 }

@@ -231,6 +231,7 @@ function finish(part: WipPart, tickNum: number): FinishedPart {
   return {
     id: part.id,
     workOrderId: part.workOrderId,
+    releasedAtTick: part.releasedAtTick,
     completedAtTick: tickNum,
   };
 }

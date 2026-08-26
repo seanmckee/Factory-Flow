@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { aggregateMetrics } from "./metrics.js";
+import { aggregateCycleTime, aggregateMetrics } from "./metrics.js";
 import { simulateTick } from "./simulationTick.js";
 import type { TickMetrics } from "./simulationTick.js";
-import type { Routing, WipPart, WorkCenter } from "./types.js";
+import type { FinishedPart, Routing, WipPart, WorkCenter } from "./types.js";
 
 const makeWorkCenters = (...centers: [id: number, capacity: number][]) =>
   new Map<number, WorkCenter>(
@@ -208,6 +208,7 @@ describe("aggregateMetrics", () => {
         id: "part-1",
         workOrderId: 1,
         routingId: 1,
+        releasedAtTick: 0,
         stepIndex: 0,
         progressSeconds: 0,
         actualProcessTimeSeconds: 3,
@@ -228,5 +229,90 @@ describe("aggregateMetrics", () => {
     expect(at(result, 10)?.utilization).toBe(1);
     expect(at(result, 20)?.utilization).toBe(0);
     expect(result.meanWip).toBe(1);
+  });
+});
+
+describe("aggregateCycleTime", () => {
+  let nextId = 0;
+  const finished = (releasedAtTick: number, completedAtTick: number): FinishedPart => ({
+    id: `part-${++nextId}`,
+    workOrderId: 1,
+    releasedAtTick,
+    completedAtTick,
+  });
+
+  it("measures a part from release to completion", () => {
+    const result = aggregateCycleTime([finished(10, 34)]);
+
+    expect(result.count).toBe(1);
+    expect(result.meanSeconds).toBe(24);
+    expect(result.minSeconds).toBe(24);
+    expect(result.maxSeconds).toBe(24);
+  });
+
+  it("counts waiting, not just processing", () => {
+    // both parts were released together; the second sat in a queue behind the
+    // first and its cycle time says so
+    const result = aggregateCycleTime([finished(0, 10), finished(0, 40)]);
+
+    expect(result.minSeconds).toBe(10);
+    expect(result.maxSeconds).toBe(40);
+    expect(result.meanSeconds).toBe(25);
+  });
+
+  it("reports the tail the mean hides", () => {
+    const result = aggregateCycleTime([
+      finished(0, 2),
+      finished(0, 4),
+      finished(0, 6),
+      finished(0, 8),
+      finished(0, 100),
+    ]);
+
+    // one late part drags the mean four times past the typical part
+    expect(result.meanSeconds).toBe(24);
+    expect(result.medianSeconds).toBe(6);
+    expect(result.p95Seconds).toBe(100);
+  });
+
+  it("takes percentiles by nearest rank, so every value is one a part had", () => {
+    const parts = Array.from({ length: 20 }, (_, i) => finished(0, i + 1));
+    const result = aggregateCycleTime(parts);
+
+    expect(result.medianSeconds).toBe(10);
+    expect(result.p95Seconds).toBe(19);
+  });
+
+  it("aggregates regardless of the order it is handed", () => {
+    const result = aggregateCycleTime([finished(0, 9), finished(0, 3), finished(0, 6)]);
+
+    expect(result.minSeconds).toBe(3);
+    expect(result.medianSeconds).toBe(6);
+    expect(result.maxSeconds).toBe(9);
+  });
+
+  it("allows a cycle time of zero", () => {
+    // a part stranded by a shortened routing finishes on the tick it is seen
+    const result = aggregateCycleTime([finished(7, 7)]);
+
+    expect(result.count).toBe(1);
+    expect(result.meanSeconds).toBe(0);
+  });
+
+  it("reports nulls, not zeroes, when nothing has finished", () => {
+    expect(aggregateCycleTime([])).toEqual({
+      count: 0,
+      meanSeconds: null,
+      minSeconds: null,
+      maxSeconds: null,
+      medianSeconds: null,
+      p95Seconds: null,
+    });
+  });
+
+  it("throws when a part finished before it was released", () => {
+    expect(() => aggregateCycleTime([finished(30, 12)])).toThrow(
+      /before it was released/,
+    );
   });
 });

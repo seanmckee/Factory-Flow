@@ -20,6 +20,16 @@ export type WipPart = {
    * routings and never has to reach back through the work order.
    */
   routingId: number;
+  /**
+   * The tick this part was released onto the floor, carried for the whole of
+   * its life so that cycle time is `completedAtTick - releasedAtTick`.
+   *
+   * Every part of a work order is instantiated at one release, so this equals
+   * a per-work-order release tick today and could have lived on the run's
+   * released-orders row instead. It is on the part because that survives batch
+   * splitting and per-part release, and keeps cycle time out of a join.
+   */
+  releasedAtTick: number;
   /** 0-based position in the routing's steps, in sequence order */
   stepIndex: number;
   progressSeconds: number;
@@ -37,6 +47,8 @@ export type WipPart = {
 export type FinishedPart = {
   id: string;
   workOrderId: number;
+  /** carried through from the `WipPart` this was; see the note there */
+  releasedAtTick: number;
   completedAtTick: number;
 };
 

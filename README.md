@@ -44,7 +44,7 @@ Rather than optimizing individual machines, Factory Flow aims to simulate an ent
 - One tick = one simulated second, driven by a 1s interval on the page.
 - A work center runs up to its `capacity` in parallel (1 by default); parts already in service claim their centre first, idle parts take what's left. Queueing is implicit — unclaimed parts simply don't advance.
 - Process times are sampled per step as uniform ±30% around the routing's nominal time. The statistical variation is the model, not noise.
-- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Engine-side so far; nothing displays it yet.
+- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Finished parts carry the tick they were released on, so cycle time measures queueing as well as processing, with a median and a 95th percentile alongside the mean. Engine-side so far; nothing displays it yet.
 - **Throughput is measured in cents, not parts**: a finished unit earns `unit price − material cost` only if an allocation covers it. Finish order decides which sales order (and which price) a unit is credited to.
 - Live throughput chart: per-tick throughput → last 120 ticks → 60-tick trailing mean → cumulative.
 
