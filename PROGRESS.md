@@ -8,12 +8,13 @@ that completes it.
 
 ---
 
-**You are here:** Track 1, unit 1.2 done — the backend has a seeded, replayable
-tick. 1.1 shipped in `feat/engine-to-backend`; 1.2–1.3 continue on
-`feat/engine-to-backend-tick`, one commit each. 1.0 shipped on its own branch
-because it is a frontend refactor, not part of the move.
+**You are here:** Track 1 done — the backend owns the engine: types, a seeded
+replayable tick, and the money model. Nothing drives it yet; the frontend still
+runs its own copy until 3.4 deletes it. 1.1 shipped in `feat/engine-to-backend`;
+1.2–1.3 in `feat/engine-to-backend-tick`. 1.0 shipped on its own branch because
+it is a frontend refactor, not part of the move.
 
-**Next up:** Track 1, unit 1.3 — port `calculateThroughput`.
+**Next up:** Track 2, unit 2.1 — utilization, queue depth and WIP count.
 
 ---
 
@@ -78,8 +79,15 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
       frontend does — it is a loader bug or a corrupt run, and with Track 3
       advancing N ticks per transaction, failing loudly rolls the batch back
       instead of silently freezing parts that Track 6 would charge rent on.
-- [ ] 1.3 Port `calculateThroughput` + tests. Don't port `smoothThroughput` —
-      dead code, superseded by Track 5.
+- [x] 1.3 Port `calculateThroughput` + tests. Don't port `smoothThroughput` —
+      dead code, superseded by Track 5. **Decided:** a record that is referenced
+      but absent (the finished part's work order, that work order's part, an
+      allocation's sales order) **throws**, as in 1.2 — the agent compares runs
+      on money, and a silent zero reads to it as a policy that lost money rather
+      than as a bug. An *uncovered* unit is not a missing record and still earns
+      zero; deleting a sales order cascades its allocations away, so it surfaces
+      as uncovered units rather than as a dangling reference, and advancing a
+      live run keeps working.
 
 ## Track 2 — Instrumentation (`feat/simulation-metrics`)
 
