@@ -40,10 +40,11 @@ Rather than optimizing individual machines, Factory Flow aims to simulate an ent
 
 **Simulation (`/`)**
 
-- Pure-function tick engine (`frontend/src/simulation/`), unit-tested with vitest.
+- Pure-function tick engine, unit-tested with vitest. It now lives in `backend/src/simulation/`; the page still drives an unchanged copy in `frontend/src/simulation/` until runs move server-side.
 - One tick = one simulated second, driven by a 1s interval on the page.
-- Every work center has capacity 1; parts already in service claim their centre first, idle parts take what's left. Queueing is implicit — unclaimed parts simply don't advance.
+- A work center runs up to its `capacity` in parallel (1 by default); parts already in service claim their centre first, idle parts take what's left. Queueing is implicit — unclaimed parts simply don't advance.
 - Process times are sampled per step as uniform ±30% around the routing's nominal time. The statistical variation is the model, not noise.
+- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Finished parts carry the tick they were released on, so cycle time measures queueing as well as processing, with a median and a 95th percentile alongside the mean. Engine-side so far; nothing displays it yet.
 - **Throughput is measured in cents, not parts**: a finished unit earns `unit price − material cost` only if an allocation covers it. Finish order decides which sales order (and which price) a unit is credited to.
 - Live throughput chart: per-tick throughput → last 120 ticks → 60-tick trailing mean → cumulative.
 
@@ -167,7 +168,6 @@ Independent of the phases above, the domain model needs:
 - Inventory management.
 - Multiple production lines.
 - Machine downtime and operator availability.
-- Work centre capacity > 1.
 - Due dates on orders (a prerequisite for both lateness prediction and late penalties).
 - Explicit queues, so queue dynamics can be measured rather than inferred.
 - Shift calendars, wage rates, and per-work-centre cost rates as master data.

@@ -21,6 +21,7 @@ let nextPartId = 0;
 const finished = (workOrderId: number): FinishedPart => ({
   id: `part-${++nextPartId}`,
   workOrderId,
+  releasedAtTick: 0,
   completedAtTick: 1,
 });
 
