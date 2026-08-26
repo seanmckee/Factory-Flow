@@ -7,11 +7,56 @@ import type {
   WorkCenter,
 } from "./types.js";
 
+/**
+ * What one work center did during one tick. The two claim passes below already
+ * decide this; before Track 2 the tick computed it and threw it away, and the
+ * frontend re-derived a worse version of it from the post-tick part list.
+ *
+ * That snapshot cannot be recovered afterwards: a part that finished this tick
+ * held a machine for the whole of it and is gone from `wipParts` by the time
+ * anyone looks, so a centre's busiest ticks are exactly the ones a snapshot
+ * undercounts. Emitting it here also keeps the claim rules in one place.
+ */
+export type TickWorkCenterMetrics = {
+  workCenterId: number;
+  /**
+   * Machines occupied this tick, not parts — the same number while a part
+   * occupies one machine, but it is what divides by `capacity` to give
+   * utilization, so it is counted as machines.
+   */
+  busy: number;
+  /**
+   * Parts whose current step is at this center but which claimed no machine:
+   * queue depth, measured rather than inferred. Queueing has no data structure
+   * in the engine, so this is the only place it is visible.
+   */
+  queued: number;
+};
+
+/** One tick's observations, the raw material Track 2's aggregations run over. */
+export type TickMetrics = {
+  /**
+   * Parts still on the floor at the end of the tick. Equal to
+   * `wipParts.length`, and reported anyway because WIP is mutable state: once
+   * a run has advanced, no stored table can say what it was at tick 300.
+   */
+  wipCount: number;
+  /**
+   * One entry per work center passed in, including centers that sat idle — a
+   * centre at 0/0 is an observation, not an absence, and Track 6 charges it
+   * rent either way. Aggregations downstream depend on the denominator not
+   * moving as centers drop in and out of the series.
+   */
+  workCenters: TickWorkCenterMetrics[];
+};
+
 export type SimulationTickResult = {
   /** the parts still on the floor, as of the end of the tick */
   wipParts: WipPart[];
   /** only those that completed during *this* tick, not the run's history */
   finishedParts: FinishedPart[];
+  /** what the floor was doing while it happened */
+  metrics: TickMetrics;
 };
 
 /**
@@ -126,11 +171,43 @@ export function simulateTick(
     );
   }
 
+  const remaining = claims
+    .map((c) => c.part)
+    .filter((part) => !finishedIds.has(part.id));
+
   return {
-    wipParts: claims
-      .map((c) => c.part)
-      .filter((part) => !finishedIds.has(part.id)),
+    wipParts: remaining,
     finishedParts,
+    metrics: collectMetrics(claims, inUse, inService, workCenters, remaining),
+  };
+}
+
+/**
+ * Reads the tick's occupancy off the decisions already made. A part stranded
+ * past the end of a shortened routing never reached `claims`, so it counts as
+ * neither busy nor queued — it finished without holding a machine, which is the
+ * same rule `resolve` applies.
+ */
+function collectMetrics(
+  claims: Claim[],
+  inUse: Map<number, number>,
+  inService: Set<string>,
+  workCenters: Map<number, WorkCenter>,
+  remaining: WipPart[],
+): TickMetrics {
+  const queued = new Map<number, number>();
+  for (const { part, step } of claims) {
+    if (inService.has(part.id)) continue;
+    queued.set(step.workCenterId, (queued.get(step.workCenterId) ?? 0) + 1);
+  }
+
+  return {
+    wipCount: remaining.length,
+    workCenters: [...workCenters.values()].map((workCenter) => ({
+      workCenterId: workCenter.id,
+      busy: inUse.get(workCenter.id) ?? 0,
+      queued: queued.get(workCenter.id) ?? 0,
+    })),
   };
 }
 

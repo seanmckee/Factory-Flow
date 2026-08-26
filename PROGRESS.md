@@ -12,9 +12,10 @@ that completes it.
 replayable tick, and the money model. Nothing drives it yet; the frontend still
 runs its own copy until 3.4 deletes it. 1.1 shipped in `feat/engine-to-backend`;
 1.2–1.3 in `feat/engine-to-backend-tick`. 1.0 shipped on its own branch because
-it is a frontend refactor, not part of the move.
+it is a frontend refactor, not part of the move. Track 2 has started: the tick
+now reports what each work center did while it ran.
 
-**Next up:** Track 2, unit 2.1 — utilization, queue depth and WIP count.
+**Next up:** Track 2, unit 2.2 — the aggregation module over those tick metrics.
 
 ---
 
@@ -93,10 +94,51 @@ tooling — the two tsconfigs are actively incompatible (frontend is `bundler` +
 
 The "observations" half the agent needs. Today the only observation is money.
 
-- [ ] 2.1 Utilization, queue depth, WIP count — generalise the logic already in
-      `deriveWorkCenterView`, which computes this for display only.
-- [ ] 2.2 Cycle time. **Open decision:** needs `releasedAtTick` on `WipPart`,
-      which changes the engine's core type.
+Split into three units (decided 2026-08-25), not the two originally listed.
+**Decided:** metrics are *emitted by the tick*, not generalised out of
+`deriveWorkCenterView` as this file previously said. That function is a
+post-tick snapshot of `wipParts`, and a part that finished during the tick held
+a machine for all of it yet is gone from the list by the time a snapshot looks —
+so a centre's busiest ticks are exactly the ones it undercounts. It also can't
+tell an admitted part from a mid-process one without duplicating the claim
+passes, and instantaneous `slotsInUse / capacity` can only ever read 0, ½, 1,
+which cannot answer "how busy was the drill press over the last 500 ticks".
+`simulateTick` already computes all of it and threw it away.
+
+- [x] 2.1 `SimulationTickResult.metrics` — `wipCount` plus per-work-center
+      `busy` / `queued`, read off the `inUse` / `inService` state the two claim
+      passes already build. **Decided:** one entry per work center *including
+      idle ones* (a centre at 0/0 is an observation, and Track 6 charges it rent
+      either way) so the denominator doesn't move as centers drop in and out of
+      the series; `busy` counts *machines*, not parts, because it is what
+      divides by `capacity`; a part stranded past a shortened routing counts as
+      neither, matching 1.2's rule that it holds no machine on the way out;
+      `wipCount` is emitted despite equalling `wipParts.length` because WIP is
+      mutable state — no stored table can say what it was at tick 300.
+- [ ] 2.2 `metrics.ts` — aggregation over a `TickMetrics[]` window: utilization
+      as busy-machine-ticks ÷ (capacity × ticks), mean queue depth, mean/final
+      WIP. Windowed by tick range so Phase 6's "metrics scoped to a time period"
+      isn't a rewrite. Also fixes the now-false "every work center has capacity
+      1" line in `CLAUDE.md` and the README — dividing by `capacity` is what
+      makes it false.
+- [ ] 2.3 Cycle time. **Decided:** `releasedAtTick` goes on `WipPart` and is
+      carried onto `FinishedPart` at finish, rather than living on
+      `run_released_orders` as a per-work-order release tick. The two are equal
+      today — a work order's parts are all instantiated at one release — but the
+      part-level field survives batch splitting and per-part release, and keeps
+      cycle time out of a join.
+
+**Decided for Track 3.1** (settled here so the migration isn't designed blind):
+Track 2 persists nothing, but 2.2's shape dictates the columns. `run_ticks`
+becomes `(run_id, tick_num, throughput_cents, wip_count)`, and per-center
+occupancy lands in a new `run_tick_work_centers`
+`(run_id, tick_num, work_center_id, busy, queued)`. Rejected: running
+accumulators on the run row — cheaper to write, but lifetime averages only, and
+Phase 6 explicitly wants a window.
+
+**Deferred to Track 6:** WIP valued in money (material cost tied up on the
+floor) and any per-centre cost rate. Pulling them forward means guessing at the
+cost model. 2.2 reports WIP as a count.
 
 ## Track 3 — Run persistence (`feat/run-persistence`)
 
@@ -120,8 +162,10 @@ Where a run becomes a server-side object an agent can address.
         silently rewrites a finished run's chart, since `calculateThroughput`
         skips missing records and credits $0 rather than failing. Order by
         `(completed_at_tick, id)`, not id alone.
-      - `run_ticks` — `(run_id, tick_num, throughput_cents)`. The chart reads
-        this. Do **not** plan to recompute it from `run_finished_parts`.
+      - `run_ticks` — `(run_id, tick_num, throughput_cents, wip_count)`, plus
+        `run_tick_work_centers` `(run_id, tick_num, work_center_id, busy,
+        queued)`; see Track 2's decision note for why. The chart reads this. Do
+        **not** plan to recompute it from `run_finished_parts`.
       - `run_released_orders` — `(run_id, work_order_id)` UNIQUE. Guards
         double-release (`releaseOrder` has no guard today, and persisted phantom
         parts would accrue real carrying cost in Track 6) and defines which

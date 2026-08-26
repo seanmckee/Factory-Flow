@@ -211,4 +211,75 @@ describe("simulateTick", () => {
       simulateTick([makeWipPart("part-1")], testRoutings, 1, new Map(), SEED),
     ).toThrow(/work center 10/);
   });
+
+  describe("metrics", () => {
+    const at = (result: ReturnType<typeof tick>, workCenterId: number) =>
+      result.metrics.workCenters.find((wc) => wc.workCenterId === workCenterId);
+
+    it("reports one entry per work center, including idle ones", () => {
+      const result = tick([makeWipPart("part-1")]);
+
+      expect(result.metrics.workCenters.map((wc) => wc.workCenterId)).toEqual([
+        10, 20,
+      ]);
+      expect(at(result, 20)).toEqual({ workCenterId: 20, busy: 0, queued: 0 });
+    });
+
+    it("counts machines in use, not parts at the center", () => {
+      const result = tick(
+        [makeWipPart("part-1"), makeWipPart("part-2"), makeWipPart("part-3")],
+        makeWorkCenters(2),
+      );
+
+      expect(at(result, 10)).toEqual({ workCenterId: 10, busy: 2, queued: 1 });
+    });
+
+    it("counts a part that claimed no machine as queued", () => {
+      const result = tick([makeWipPart("part-1"), makeWipPart("part-2")]);
+
+      expect(at(result, 10)).toEqual({ workCenterId: 10, busy: 1, queued: 1 });
+    });
+
+    it("counts the machine a part finished on as busy", () => {
+      // the case a post-tick snapshot cannot see: the part held the machine for
+      // the whole tick and is gone from wipParts by the time anyone looks
+      const result = tick([
+        makeWipPart("part-1", { stepIndex: 1, progressSeconds: 4 }),
+      ]);
+
+      expect(result.wipParts).toEqual([]);
+      expect(at(result, 20)?.busy).toBe(1);
+    });
+
+    it("reports the parts left on the floor as wipCount", () => {
+      const result = tick([
+        makeWipPart("part-1", { stepIndex: 1, progressSeconds: 4 }),
+        makeWipPart("part-2"),
+        makeWipPart("part-3"),
+      ]);
+
+      expect(result.metrics.wipCount).toBe(2);
+      expect(result.metrics.wipCount).toBe(result.wipParts.length);
+    });
+
+    it("counts a part stranded by a shortened routing as neither", () => {
+      const shortened = new Map<number, Routing>([
+        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5 }] }],
+      ]);
+      const result = simulateTick(
+        [makeWipPart("stranded", { stepIndex: 1, progressSeconds: 3 })],
+        shortened,
+        1,
+        testWorkCenters,
+        SEED,
+      );
+
+      expect(result.finishedParts.length).toBe(1);
+      expect(result.metrics.wipCount).toBe(0);
+      expect(result.metrics.workCenters).toEqual([
+        { workCenterId: 10, busy: 0, queued: 0 },
+        { workCenterId: 20, busy: 0, queued: 0 },
+      ]);
+    });
+  });
 });
