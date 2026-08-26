@@ -222,6 +222,7 @@ describe("simulateTick", () => {
       expect(result.metrics.workCenters.map((wc) => wc.workCenterId)).toEqual([
         10, 20,
       ]);
+      expect(result.metrics.tickNum).toBe(1);
       expect(at(result, 20)).toEqual({ workCenterId: 20, busy: 0, queued: 0 });
     });
 

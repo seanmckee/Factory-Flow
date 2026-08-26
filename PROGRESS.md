@@ -12,10 +12,11 @@ that completes it.
 replayable tick, and the money model. Nothing drives it yet; the frontend still
 runs its own copy until 3.4 deletes it. 1.1 shipped in `feat/engine-to-backend`;
 1.2–1.3 in `feat/engine-to-backend-tick`. 1.0 shipped on its own branch because
-it is a frontend refactor, not part of the move. Track 2 has started: the tick
-now reports what each work center did while it ran.
+it is a frontend refactor, not part of the move. Track 2 is most of the way:
+the tick reports what each work center did while it ran, and a window of those
+observations reduces to utilization, queue depth and WIP.
 
-**Next up:** Track 2, unit 2.2 — the aggregation module over those tick metrics.
+**Next up:** Track 2, unit 2.3 — cycle time.
 
 ---
 
@@ -115,12 +116,24 @@ which cannot answer "how busy was the drill press over the last 500 ticks".
       neither, matching 1.2's rule that it holds no machine on the way out;
       `wipCount` is emitted despite equalling `wipParts.length` because WIP is
       mutable state — no stored table can say what it was at tick 300.
-- [ ] 2.2 `metrics.ts` — aggregation over a `TickMetrics[]` window: utilization
-      as busy-machine-ticks ÷ (capacity × ticks), mean queue depth, mean/final
-      WIP. Windowed by tick range so Phase 6's "metrics scoped to a time period"
-      isn't a rewrite. Also fixes the now-false "every work center has capacity
-      1" line in `CLAUDE.md` and the README — dividing by `capacity` is what
-      makes it false.
+- [x] 2.2 `metrics.ts` — `aggregateMetrics(series, workCenters)` over a
+      `TickMetrics[]` window: utilization, mean and worst queue depth, mean,
+      peak and final WIP. **Decided:** windowing is the *caller's* job (a
+      `WHERE tick_num BETWEEN`, or a slice) and this aggregates exactly what it
+      is handed — the same function then serves a live batch and a stored range
+      without a second code path. **Decided:** `tickNum` moved onto
+      `TickMetrics` (amending 2.1) so a batch of 500 observations is stored and
+      read back as rows keyed by tick without zipping against a separate list.
+      **Decided:** the utilization denominator is per-centre `observedTicks`,
+      not the window's tick count — a work center created mid-run has no
+      observations before it existed, and dividing those in reports it idle for
+      time it did not exist. **Decided:** an empty window returns zeroes and
+      null bounds rather than throwing; a run that has never advanced
+      legitimately has no ticks. Also fixed the now-false "every work center has
+      capacity 1" line in `CLAUDE.md` and the README (both engines have always
+      honoured the column; 1 is only its default), the stale claim that the
+      frontend owns the engine, and the "work centre capacity > 1" entry in the
+      README's still-to-build list.
 - [ ] 2.3 Cycle time. **Decided:** `releasedAtTick` goes on `WipPart` and is
       carried onto `FinishedPart` at finish, rather than living on
       `run_released_orders` as a per-work-order release tick. The two are equal

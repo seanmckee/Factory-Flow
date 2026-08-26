@@ -11,7 +11,7 @@ Factory Flow is a manufacturing simulation platform inspired by Goldratt's _The 
 Two independent npm projects — no workspace/monorepo tooling. Install and run each separately; a change touching both requires two dev servers.
 
 - `backend/` — Express 5 REST API + Drizzle ORM over Neon serverless Postgres
-- `frontend/` — Vite + React 19 + Tailwind v4 + React Router; owns the simulation engine
+- `frontend/` — Vite + React 19 + Tailwind v4 + React Router; still runs its own copy of the simulation engine, deleted once the backend drives runs
 
 ## Commands
 
@@ -51,6 +51,36 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - Allocation rules live in `src/lib/allocate.ts` as pure functions taking plain objects, so they are unit-testable without a database. Allocations for a work order **must** be inserted in one statement, oldest-sales-order-first: ids come out ascending in insert order, and `calculateThroughput` credits finished units in allocation-id order.
 - Joins/aggregation are done in JS after separate `db.select()` calls rather than in SQL (see `salesOrders.ts` grouping allocations by sales order, `routings.ts` attaching ordered `steps`).
 
+### Simulation engine (`backend/src/simulation/`)
+
+The backend owns the engine: `types.ts` (narrow structural input types that
+Drizzle rows satisfy without mapping), `sampleProcessTime.ts`, `simulationTick.ts`
+and `calculateThroughput.ts`. Pure functions, no DB and no HTTP, unit-tested
+under `environment: node`. The frontend keeps a copy until it switches over.
+
+Two rules the port established, and both matter to how failures surface:
+
+- Randomness is **not** drawn at call time. `sampleProcessTime` is a pure
+  function of `(seed, partId, stepIndex)`, so a run persists a single `rng_seed`
+  and nothing else — a replay or a fork reproduces every draw with no cursor to
+  restore. Don't reintroduce `Math.random()`.
+- A referenced-but-absent record **throws** (a part's routing, a step's work
+  center, a finished part's work order, an allocation's sales order). A silent
+  zero reads to a fork comparison as a policy that lost money rather than as a
+  bug. An *uncovered* unit is different — it legitimately earns nothing.
+
+`simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
+`wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
+the map, idle ones included**. `busy` counts machines, not parts. This is
+emitted rather than derived afterwards because a part that finished during the
+tick held a machine for all of it and is gone from `wipParts` by the time
+anything could look — so a centre's busiest ticks are exactly what a post-tick
+snapshot undercounts. Keep the list total: `aggregateMetrics` in `metrics.ts`
+reduces a window of these to utilization (busy machine-ticks ÷ capacity ×
+observed ticks), queue depth and WIP, and per-centre `observedTicks` is the
+denominator so a work center created mid-run isn't reported idle for time it
+did not exist.
+
 ## Frontend architecture
 
 Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts` and `RoutingsPage` at `/setup/routings`. `/create` was a stub page and now redirects to `/orders/sales`.
@@ -67,7 +97,7 @@ All engine logic is pure functions, unit-tested with vitest under a `node` envir
 
 `simulateTick(wipParts, routings, tickNum)` invariants:
 
-- Every work center has **capacity 1**. Claiming happens in two passes: parts already in service (`progressSeconds > 0`) claim their work center first, then idle parts take whatever centers remain free. Unclaimed parts simply don't advance that tick — queueing is implicit, there is no queue data structure.
+- A work center runs up to `capacity` parts at once — the column defaults to 1 and is editable from the simulation page, so don't treat 1 as an invariant. Claiming happens in two passes: parts already in service (`progressSeconds > 0`) claim their work center first, then idle parts take whatever machines remain free. Unclaimed parts simply don't advance that tick — queueing is implicit, there is no queue data structure.
 - A part completing its last step is pushed to `finishedParts` with `completedAtTick` and marked `stepIndex = -1`, which the final `filter` uses to drop it from WIP.
 - On each step transition a fresh `actualProcessTimeSeconds` is drawn from `sampleProcessTime(nominal, 0.3)` — uniform ±30% around the routing's nominal time, floored at 1. This statistical variation is the point of the model, not noise to be removed.
 

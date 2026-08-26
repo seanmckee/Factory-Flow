@@ -36,6 +36,13 @@ export type TickWorkCenterMetrics = {
 /** One tick's observations, the raw material Track 2's aggregations run over. */
 export type TickMetrics = {
   /**
+   * The tick these observations are of. Redundant with the argument the caller
+   * passed in, and carried anyway so the record is self-describing: a batch of
+   * 500 of these is collected, stored and read back as rows keyed by tick, and
+   * nothing has to zip it against a separate list of tick numbers to do it.
+   */
+  tickNum: number;
+  /**
    * Parts still on the floor at the end of the tick. Equal to
    * `wipParts.length`, and reported anyway because WIP is mutable state: once
    * a run has advanced, no stored table can say what it was at tick 300.
@@ -178,7 +185,14 @@ export function simulateTick(
   return {
     wipParts: remaining,
     finishedParts,
-    metrics: collectMetrics(claims, inUse, inService, workCenters, remaining),
+    metrics: collectMetrics(
+      claims,
+      inUse,
+      inService,
+      workCenters,
+      remaining,
+      tickNum,
+    ),
   };
 }
 
@@ -194,6 +208,7 @@ function collectMetrics(
   inService: Set<string>,
   workCenters: Map<number, WorkCenter>,
   remaining: WipPart[],
+  tickNum: number,
 ): TickMetrics {
   const queued = new Map<number, number>();
   for (const { part, step } of claims) {
@@ -202,6 +217,7 @@ function collectMetrics(
   }
 
   return {
+    tickNum,
     wipCount: remaining.length,
     workCenters: [...workCenters.values()].map((workCenter) => ({
       workCenterId: workCenter.id,
