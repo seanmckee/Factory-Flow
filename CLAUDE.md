@@ -190,7 +190,8 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 ### Driving a run (`src/pages/SimulationPage.tsx`)
 
 **The frontend has no engine.** It was deleted when the page switched over;
-`src/simulation/` holds only `cumulativeThroughput.ts`, a chart transform. Don't
+`src/simulation/` holds only chart transforms (`cumulativeThroughput.ts`,
+`throughputRate.ts`), pure and unit-tested. Don't
 reintroduce simulation logic here — the backend owns it, and two copies drifted
 badly the one time they coexisted.
 
@@ -243,25 +244,34 @@ and an action toast lives 12 s rather than 3.5 s). It is worded as an assertion
 the user is making, not a retry: if the run really is advancing elsewhere,
 clearing the lock lets two writers rewrite the same WIP rows.
 
-`RunMetricsStrip` is what a jump lands on — one row from `GET /:id/metrics`,
-**not** a dashboard, and Track 5 replaces it. It shows the whole run when a run
-is opened and re-windows onto the jump's own ticks (`startTick + 1 …
-startTick + done`) right after a jump, and it is **never** fetched on the
-clock's beat: `/metrics` reads and aggregates every tick row, per-centre row
-and finished part in the window. The window label comes from the *response*,
-so a strip left over from an earlier window states what it covers rather than
+`RunDashboard` (the Dashboard tab, Track 5) is what a jump lands on — stat cards
+(window throughput, finished count, cycle time, WIP) over a work-centre table
+ranked by **utilization descending**, the constraint on top; ranking is safe
+there because the pane redraws only when a window is asked for, unlike the
+floor, whose row order stays stable by name. The utilization bar shifts to the
+`saturated` token at 90%. It shows the whole run when a run is opened,
+re-windows onto the jump's own ticks (`startTick + 1 … startTick + done`)
+right after a jump, and adds window controls (whole run, last-N presets, a
+custom from–to) — the only ways `/metrics` is fetched, and **never** on the
+clock's beat: it reads and aggregates every tick row, per-centre row and
+finished part in the window. The window label comes from the *response*, so a
+dashboard left over from an earlier window states what it covers rather than
 misleading — the ledger's own case is a centre reading 10% utilization over a
-run and 52% over the ticks it worked. Work-centre *names* come off `/floor`,
-since `/metrics` carries ids and a run keeps no copy of the names.
+run and 52% over the ticks it worked. Work-centre *names and frozen
+capacities* come off `/floor`, since `/metrics` carries ids and a run keeps no
+copy of the names.
 
 The page is two persistent control bars (run picking/creation, then
 transport: clock, release, fast-forward) over three tabs — **Floor**,
-**Throughput**, **Metrics** — so every control stays on screen and Track 5's
-dashboard has a pane (`Metrics`) waiting for it. The floor is
+**Trends**, **Dashboard** — named by view shape (a snapshot of now, series
+over time, an aggregate over a window), because "Throughput" stopped being an
+honest tab name once rate and WIP moved in and "Metrics" overlapped it —
+throughput is itself a metric. Every control stays on screen. The floor is
 `WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
 order — the floor redraws every tick, so the queue signal is the badge and the
-Waiting column, never the row order; the chart tab reads `GET /:id/ticks` fed
-through `cumulativeThroughput`. The table shows the run's **frozen** capacity
+Waiting column, never the row order; the chart tab reads `GET /:id/ticks` and
+draws three series from it (cumulative, rate, WIP — see the chart pipeline
+below). The table shows the run's **frozen** capacity
 read-only — editing the live work center would change nothing about a run
 already created — and no "% utilized", which was `slotsInUse / capacity` and
 could only read 0% or 100% for a single machine.
@@ -270,10 +280,16 @@ could only read 0% or 100% for a single machine.
 
 Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The chart pipeline in `SimulationPage` is the run's stored per-tick money,
-accumulated: `GET /:id/ticks` → `openingCents(history, run.throughputCents)`
-→ `cumulativeThroughput(history, opening)` → `ThroughputChart` (recharts).
-The **opening balance is not optional**. `/ticks` keeps only the newest 5000
+The Trends tab draws three series from one `GET /:id/ticks` response,
+each in a titled card with a hover hint saying what the chart answers,
+each through `TickSeriesChart` (the one recharts wrapper — data plus
+formatters, token colours): the stored per-tick money **accumulated**
+(`openingCents(history, run.throughputCents)` →
+`cumulativeThroughput(history, opening)`), the same money as a **trailing
+rate** in cents per simulated minute (`throughputRate`, 60-tick window — the
+successor to the deleted `smoothThroughput`), and per-tick **WIP** as a step
+line straight off `wipCount`. For the cumulative curve the **opening balance
+is not optional**. `/ticks` keeps only the newest 5000
 rows, so past tick 5000 the series is a *suffix* of the run and a curve
 accumulated from zero re-bases and contradicts the money in the line above it
 — one fast-forward press reaches that. It is exact rather than approximate
@@ -283,6 +299,13 @@ earned before the window is the total minus the window's own sum, and no API
 change is needed. It floors at zero: the summary and the series are two
 requests, and an advance landing between them leaves the window holding money
 the total has not counted yet.
+
+The rate and WIP series are local by construction, so the suffix needs no
+opening correction for them — but the cap does create a *left edge*:
+`throughputRate` divides points earlier than the window into the series by
+the ticks actually covered, never by the full window, because the data before
+a suffix isn't zero, it's absent, and a full-window divisor would draw a fake
+ramp at the start of every fast-forwarded chart.
 
 ### React state notes
 

@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { FastForward, Play, Plus, Square, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FastForward, Info, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
 import SimulatingOverlay from "../components/SimulatingOverlay";
-import RunMetricsStrip from "../components/RunMetricsStrip";
-import ThroughputChart from "../components/ThroughputChart";
+import RunDashboard from "../components/RunDashboard";
+import TickSeriesChart from "../components/TickSeriesChart";
 import {
   cumulativeThroughput,
   openingCents,
 } from "../simulation/cumulativeThroughput";
+import { throughputRate } from "../simulation/throughputRate";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -47,6 +48,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Field } from "../components/ui/Field";
 
 /** One tick is one simulated second, so ticking once a second runs real-time. */
@@ -84,6 +91,40 @@ type JumpProgress = {
   ticksTotal: number | null;
   tickNum: number | null;
 };
+
+/**
+ * A chart in a card, titled, with a hover hint saying what the chart answers.
+ * The y-axis label says what is plotted; the hint says why you'd look at it.
+ */
+function ChartCard({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card p-4">
+      <div className="flex shrink-0 items-center gap-1.5 pb-2">
+        <span className="text-sm font-medium">{title}</span>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger
+              className="text-muted-foreground hover:text-foreground"
+              aria-label={`What "${title}" shows`}
+            >
+              <Info className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipContent className="max-w-72">{hint}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+      <div className="min-h-0 flex-1">{children}</div>
+    </div>
+  );
+}
 
 /** One figure in the run bar's readout. */
 function Stat({ label, value }: { label: string; value: string }) {
@@ -452,16 +493,32 @@ function SimulationPage() {
   };
 
   // `/ticks` keeps only the newest 5000 rows, so past tick 5000 this series is
-  // a suffix of the run: the curve carries on from what the run had already
-  // earned rather than re-basing at zero and contradicting the money above it.
-  const history = series.map((sample) => ({
-    tick: sample.tickNum,
-    cents: sample.throughputCents,
-  }));
-  const cumulative = cumulativeThroughput(
-    history,
-    openingCents(history, run?.throughputCents ?? 0),
-  );
+  // a suffix of the run: the cumulative curve carries on from what the run had
+  // already earned rather than re-basing at zero and contradicting the money
+  // above it. The rate and WIP series are local by construction, so the suffix
+  // needs no such correction for them.
+  const runTotalCents = run?.throughputCents ?? 0;
+  const charts = useMemo(() => {
+    const history = series.map((sample) => ({
+      tick: sample.tickNum,
+      cents: sample.throughputCents,
+    }));
+    const toPoint = ({ tick, cents }: { tick: number; cents: number }) => ({
+      tick,
+      value: cents,
+    });
+    return {
+      cumulative: cumulativeThroughput(
+        history,
+        openingCents(history, runTotalCents),
+      ).map(toPoint),
+      rate: throughputRate(history).map(toPoint),
+      wip: series.map((sample) => ({
+        tick: sample.tickNum,
+        value: sample.wipCount,
+      })),
+    };
+  }, [series, runTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
@@ -470,11 +527,6 @@ function SimulationPage() {
     (run?.releasedOrders ?? []).map((released) => released.workOrderId),
   );
   const releasableOrders = workOrders.filter((wo) => !releasedIds.has(wo.id));
-  // `/metrics` carries work center ids and no names — a run keeps no copy of
-  // them, so the floor's live names are where the strip gets them
-  const centerNames = new Map(
-    (floor?.workCenters ?? []).map((center) => [center.workCenterId, center.name]),
-  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-6">
@@ -639,10 +691,15 @@ function SimulationPage() {
 
       {run ? (
         <Tabs defaultValue="floor" className="flex min-h-0 flex-1 flex-col gap-3">
+          {/* Three view shapes, named by shape rather than by one metric:
+              Floor is a snapshot of now, Trends are series over time, and
+              Dashboard is an aggregate over a window. ("Throughput" stopped
+              being an honest tab name once rate and WIP moved in, and
+              "Metrics" overlapped it — throughput is itself a metric.) */}
           <TabsList className="shrink-0 self-start">
             <TabsTrigger value="floor">Floor</TabsTrigger>
-            <TabsTrigger value="throughput">Throughput</TabsTrigger>
-            <TabsTrigger value="metrics">Metrics</TabsTrigger>
+            <TabsTrigger value="trends">Trends</TabsTrigger>
+            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           </TabsList>
 
           <TabsContent
@@ -679,16 +736,72 @@ function SimulationPage() {
             </div>
           </TabsContent>
 
-          <TabsContent value="throughput" className="min-h-0 flex-1">
-            <div className="h-full rounded-lg border bg-card p-4">
-              <ThroughputChart data={cumulative} />
+          {/* Cumulative money on top, then the two local series: the rate is
+              where a stall or a burst is a shape rather than a change of
+              slope, and WIP is the book's other axis. The region scrolls on a
+              short viewport; the page doesn't. */}
+          <TabsContent value="trends" className="min-h-0 flex-1 overflow-auto">
+            <div className="grid h-full min-h-[36rem] grid-cols-2 grid-rows-[3fr_2fr] gap-3">
+              <div className="col-span-2 min-h-0">
+                <ChartCard
+                  title="Cumulative throughput"
+                  hint="The score: money made through sales since the run began, as a running total. It only ever climbs, so read the slope — a flat stretch is a stall, and the rate chart below shows the same thing as a shape."
+                >
+                  <TickSeriesChart
+                    data={charts.cumulative}
+                    yLabel="Cumulative Throughput ($)"
+                    tooltipLabel="Throughput"
+                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}`}
+                    formatAxis={(cents) => (cents / 100).toFixed(0)}
+                  />
+                </ChartCard>
+              </div>
+              <div className="min-h-0">
+                <ChartCard
+                  title="Throughput rate"
+                  hint="How fast the run is earning right now: the same money as a trailing rate over the last simulated minute. Bursts and stalls show directly, where the cumulative curve only bends."
+                >
+                  <TickSeriesChart
+                    data={charts.rate}
+                    yLabel="Rate ($/min)"
+                    tooltipLabel="Rate"
+                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}/min`}
+                    formatAxis={(cents) => (cents / 100).toFixed(0)}
+                    stroke="var(--chart-2)"
+                  />
+                </ChartCard>
+              </div>
+              <div className="min-h-0">
+                <ChartCard
+                  title="Work in process"
+                  hint="Parts released but not yet finished, per tick. Rising WIP against a flat rate means parts are piling up at a constraint rather than flowing — the floor tab shows where."
+                >
+                  <TickSeriesChart
+                    data={charts.wip}
+                    yLabel="WIP (parts)"
+                    tooltipLabel="WIP"
+                    formatValue={(parts) => `${parts.toLocaleString()} parts`}
+                    formatAxis={(parts) => String(parts)}
+                    stroke="var(--chart-3)"
+                    type="stepAfter"
+                  />
+                </ChartCard>
+              </div>
             </div>
           </TabsContent>
 
-          {/* Track 5's dashboard lands in this pane; the strip is its placeholder. */}
-          <TabsContent value="metrics" className="min-h-0 flex-1 overflow-auto">
+          <TabsContent value="dashboard" className="flex min-h-0 flex-1 flex-col">
             {metrics ? (
-              <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
+              <RunDashboard
+                metrics={metrics}
+                // `/metrics` carries work center ids and no names or capacities
+                // — the floor's frozen copy is where both come from
+                centers={floor?.workCenters ?? []}
+                tickNum={run.tickNum}
+                onWindow={(fromTick, toTick) =>
+                  loadMetrics(run.id, fromTick, toTick)
+                }
+              />
             ) : (
               <p className="text-sm text-muted-foreground">
                 No metrics yet — advance the run to observe some ticks.
