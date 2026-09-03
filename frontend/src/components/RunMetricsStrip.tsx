@@ -23,10 +23,10 @@ function formatSeconds(seconds: number | null) {
 function Figure({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex flex-col">
-      <span className="text-xs uppercase tracking-wide text-slate-400">
+      <span className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="tabular-nums text-slate-700">{value}</span>
+      <span className="tabular-nums text-foreground">{value}</span>
     </div>
   );
 }
@@ -53,8 +53,8 @@ function RunMetricsStrip({
   );
 
   return (
-    <div className="flex w-full max-w-3xl flex-col gap-2 rounded-lg border border-slate-300 bg-white p-4 text-sm">
-      <p className="text-xs text-slate-500 tabular-nums">
+    <div className="flex w-full flex-col gap-3 rounded-lg border bg-card p-4 text-sm">
+      <p className="text-xs text-muted-foreground tabular-nums">
         Ticks {fromTick.toLocaleString()}–{toTick.toLocaleString()} ·{" "}
         {flow.tickCount.toLocaleString()} observed
       </p>

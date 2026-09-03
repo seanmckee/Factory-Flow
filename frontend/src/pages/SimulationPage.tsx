@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import WorkCenterCard from "../components/WorkCenterCard";
+import { FastForward, Play, Plus, Square, Trash2 } from "lucide-react";
+import WorkCenterTable from "../components/WorkCenterTable";
 import SimulatingOverlay from "../components/SimulatingOverlay";
 import RunMetricsStrip from "../components/RunMetricsStrip";
 import ThroughputChart from "../components/ThroughputChart";
@@ -27,7 +28,26 @@ import {
 } from "../api/runs";
 import type { WorkOrder } from "../types/WorkOrder";
 import { useToast } from "../toast/ToastContext";
-import { inputClass } from "../components/ui/Form";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Field } from "../components/ui/Field";
 
 /** One tick is one simulated second, so ticking once a second runs real-time. */
 const TICK_INTERVAL_MS = 1000;
@@ -65,6 +85,16 @@ type JumpProgress = {
   tickNum: number | null;
 };
 
+/** One figure in the run bar's readout. */
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span className="font-medium">{value}</span>
+    </span>
+  );
+}
+
 /**
  * Drives a server-side run. The engine lives in the backend — this page picks
  * a run, releases work orders into it, advances it a tick at a time and draws
@@ -85,6 +115,7 @@ function SimulationPage() {
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [newRunName, setNewRunName] = useState("");
+  const [newRunOpen, setNewRunOpen] = useState(false);
 
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -371,6 +402,7 @@ function SimulationPage() {
       setRuns((prev) => [...prev, created]);
       selectRun(created.id);
       setNewRunName("");
+      setNewRunOpen(false);
       showToast(`Run "${created.name}" created with seed ${created.rngSeed}`);
     } catch (error) {
       report(error, "Failed to create the run");
@@ -425,166 +457,229 @@ function SimulationPage() {
   );
 
   return (
-    <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
-      <h1 className="text-3xl font-bold">Factory Simulator</h1>
-
-      <div className="flex flex-wrap gap-3 items-end justify-center">
-        <label className="flex flex-col gap-1 text-sm text-slate-600">
-          Run
-          <select
-            value={runId ?? ""}
-            onChange={(e) =>
-              selectRun(e.target.value ? Number(e.target.value) : null)
-            }
-            disabled={jump !== null}
-            className={inputClass}
-          >
-            <option value="">No run selected</option>
-            {runs.map((option) => (
-              <option key={option.id} value={option.id}>
-                #{option.id} · {option.name} · tick {option.tickNum}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm text-slate-600">
-          New run
-          <input
-            value={newRunName}
-            onChange={(e) => setNewRunName(e.target.value)}
-            placeholder="e.g. release everything"
-            className={inputClass}
-          />
-        </label>
-        <button
-          className="bg-slate-700 text-white p-2 rounded-lg disabled:opacity-40"
-          onClick={onCreateRun}
+    <div className="flex h-full min-h-0 flex-col gap-3 p-6">
+      {/* Run bar: pick or create the run everything below drives. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <Select
+          value={runId === null ? "" : String(runId)}
+          onValueChange={(value) => selectRun(Number(value))}
           disabled={jump !== null}
         >
-          Create Run
-        </button>
-        <button
-          className="bg-red-600 text-white p-2 rounded-lg disabled:opacity-40"
+          <SelectTrigger className="w-64">
+            <SelectValue placeholder="No run selected" />
+          </SelectTrigger>
+          <SelectContent>
+            {runs.map((option) => (
+              <SelectItem key={option.id} value={String(option.id)}>
+                #{option.id} · {option.name} · tick{" "}
+                {option.tickNum.toLocaleString()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <Dialog open={newRunOpen} onOpenChange={setNewRunOpen}>
+          <DialogTrigger asChild>
+            <Button variant="outline" disabled={jump !== null}>
+              <Plus className="size-4" /> New Run
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-sm">
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                onCreateRun();
+              }}
+              className="flex flex-col gap-4"
+            >
+              <DialogHeader>
+                <DialogTitle>New run</DialogTitle>
+                <DialogDescription>
+                  Freezes today's work centers and draws its own seed — re-creating
+                  a run with the same seed reproduces it exactly.
+                </DialogDescription>
+              </DialogHeader>
+              <Field label="Name">
+                <Input
+                  value={newRunName}
+                  onChange={(event) => setNewRunName(event.target.value)}
+                  placeholder="e.g. release everything"
+                />
+              </Field>
+              <DialogFooter>
+                <Button type="submit">Create Run</Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        <Button
+          variant="ghost"
           onClick={onDeleteRun}
           disabled={runId === null || jump !== null}
+          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         >
-          Delete Run
-        </button>
-      </div>
+          <Trash2 className="size-4" /> Delete Run
+        </Button>
 
-      {run && (
-        <div className="flex gap-6 text-sm tabular-nums text-slate-700">
-          <span>Tick {run.tickNum}</span>
-          <span>WIP {run.wipCount}</span>
-          <span>Finished {run.finishedCount}</span>
-          <span>
-            Throughput ${(run.throughputCents / 100).toFixed(2)}
-          </span>
-          <span className="text-slate-500">seed {run.rngSeed}</span>
-        </div>
-      )}
-
-      <div className="grid grid-cols-3 gap-4 items-start">
-        {isLoading ? (
-          <p>Loading...</p>
-        ) : (
-          floor?.workCenters.map((center) => (
-            <WorkCenterCard key={center.workCenterId} center={center} />
-          ))
+        {run && (
+          <div className="ml-auto flex flex-wrap items-center gap-4 tabular-nums">
+            <Stat label="Tick" value={run.tickNum.toLocaleString()} />
+            <Stat label="WIP" value={run.wipCount.toLocaleString()} />
+            <Stat label="Finished" value={run.finishedCount.toLocaleString()} />
+            <Stat
+              label="Throughput"
+              value={`$${(run.throughputCents / 100).toFixed(2)}`}
+            />
+            <span className="text-xs text-muted-foreground">
+              seed {run.rngSeed}
+            </span>
+          </div>
         )}
       </div>
 
-      {!isLoading && !run && (
-        <p className="text-slate-500">
-          Create a run to put this factory to work.
-        </p>
-      )}
-
-      <div className="text-sm text-slate-600">
-        {run?.releasedOrders.map((released) => {
-          const wo = workOrderById.get(released.workOrderId);
-          return (
-            <div key={released.workOrderId}>
-              {wo?.orderNumber ?? `WO ${released.workOrderId}`}
-              {wo?.partName ? ` (${wo.partName})` : ""} · routing{" "}
-              {released.routingId} rev {released.routingRevision}
-            </div>
-          );
-        })}
-      </div>
-
-      {metrics && (
-        <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
-      )}
-
-      <div className="flex gap-4">
-        <button
-          className="bg-blue-500 text-white p-2 rounded-lg disabled:opacity-40"
+      {/* Transport bar: the clock, releasing, and the jumps. Always on screen —
+          the scroll-to-act problem this layout replaced was the point. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
+        <Button
+          size="sm"
+          variant={isRunning ? "secondary" : "default"}
           onClick={() => setIsRunning((prev) => !prev)}
           disabled={runId === null || jump !== null}
         >
-          {isRunning ? "Stop Simulation" : "Start Simulation"}
-        </button>
+          {isRunning ? (
+            <>
+              <Square className="size-4" /> Stop
+            </>
+          ) : (
+            <>
+              <Play className="size-4" /> Start
+            </>
+          )}
+        </Button>
 
-        <button
-          className="bg-green-500 text-white p-2 rounded-lg disabled:opacity-40"
+        <div className="h-6 w-px bg-border" />
+
+        <Select
+          value={selectedOrderId === null ? "" : String(selectedOrderId)}
+          onValueChange={(value) => setSelectedOrderId(Number(value))}
+        >
+          <SelectTrigger size="sm" className="w-72">
+            <SelectValue placeholder="Select a work order" />
+          </SelectTrigger>
+          <SelectContent>
+            {workOrders.map((workOrder) => (
+              <SelectItem key={workOrder.id} value={String(workOrder.id)}>
+                {workOrder.orderNumber} · {workOrder.partName} · qty{" "}
+                {workOrder.quantity}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          variant="secondary"
           onClick={onRelease}
           disabled={runId === null || jump !== null}
         >
           Release Order
-        </button>
-      </div>
+        </Button>
 
-      {/* Fast-forward. The clock above is for watching; these are for seeing
-          where a run ends up, which is what the presets and until-idle answer. */}
-      <div className="flex flex-wrap gap-2 items-center justify-center">
-        <span className="text-sm text-slate-500">Fast-forward</span>
+        <div className="h-6 w-px bg-border" />
+
+        {/* Fast-forward. The clock is for watching; these are for seeing where
+            a run ends up, which is what the presets and until-idle answer. */}
+        <span className="text-xs text-muted-foreground">Fast-forward</span>
         {JUMP_TICKS.map((ticks) => (
-          <button
+          <Button
             key={ticks}
-            className="bg-slate-700 text-white px-3 py-2 rounded-lg text-sm tabular-nums disabled:opacity-40"
+            size="sm"
+            variant="outline"
+            className="tabular-nums"
             onClick={() => runJump(ticks)}
             disabled={runId === null || jump !== null}
           >
             +{ticks.toLocaleString()}
-          </button>
+          </Button>
         ))}
-        <button
-          className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm disabled:opacity-40"
+        <Button
+          size="sm"
+          variant="outline"
           onClick={() => runJump("idle")}
           disabled={runId === null || jump !== null}
         >
-          Run until idle
-        </button>
+          <FastForward className="size-4" /> Run until idle
+        </Button>
       </div>
 
-      <div className="w-full max-w-3xl h-80 shrink-0">
-        <ThroughputChart data={cumulative} />
-      </div>
+      {run ? (
+        <Tabs defaultValue="floor" className="flex min-h-0 flex-1 flex-col gap-3">
+          <TabsList className="shrink-0 self-start">
+            <TabsTrigger value="floor">Floor</TabsTrigger>
+            <TabsTrigger value="throughput">Throughput</TabsTrigger>
+            <TabsTrigger value="metrics">Metrics</TabsTrigger>
+          </TabsList>
 
-      <div className="flex gap-4 items-center">
-        <select
-          value={selectedOrderId ?? ""}
-          onChange={(e) =>
-            setSelectedOrderId(e.target.value ? Number(e.target.value) : null)
-          }
-          className={inputClass}
-        >
-          <option value="">Select a work order</option>
-          {workOrders.map((workOrder) => (
-            <option key={workOrder.id} value={workOrder.id}>
-              {workOrder.orderNumber} · {workOrder.partName} · qty{" "}
-              {workOrder.quantity}
-            </option>
-          ))}
-        </select>
-      </div>
+          <TabsContent
+            value="floor"
+            className="flex min-h-0 flex-1 flex-col gap-2"
+          >
+            <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
+              {floor && <WorkCenterTable centers={floor.workCenters} />}
+            </div>
+            <div className="shrink-0 text-xs text-muted-foreground">
+              {run.releasedOrders.length === 0 ? (
+                <p>
+                  Nothing released yet — pick a work order in the bar above and
+                  release it onto the floor.
+                </p>
+              ) : (
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                  {run.releasedOrders.map((released) => {
+                    const wo = workOrderById.get(released.workOrderId);
+                    return (
+                      <span key={released.workOrderId}>
+                        {wo?.orderNumber ?? `WO ${released.workOrderId}`}
+                        {wo?.partName ? ` (${wo.partName})` : ""} · routing{" "}
+                        {released.routingId} rev {released.routingRevision}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="mt-1 text-muted-foreground/70">
+                Machine counts are frozen when a run is created. Change them in
+                Factory Setup and they apply to the next run.
+              </p>
+            </div>
+          </TabsContent>
 
-      <p className="text-xs text-slate-500 max-w-2xl text-center">
-        Machine counts are frozen when a run is created. Change them in Factory
-        Setup and they apply to the next run.
-      </p>
+          <TabsContent value="throughput" className="min-h-0 flex-1">
+            <div className="h-full rounded-lg border bg-card p-4">
+              <ThroughputChart data={cumulative} />
+            </div>
+          </TabsContent>
+
+          {/* Track 5's dashboard lands in this pane; the strip is its placeholder. */}
+          <TabsContent value="metrics" className="min-h-0 flex-1 overflow-auto">
+            {metrics ? (
+              <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No metrics yet — advance the run to observe some ticks.
+              </p>
+            )}
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed">
+          <p className="text-sm text-muted-foreground">
+            {isLoading
+              ? "Loading…"
+              : "Create a run to put this factory to work."}
+          </p>
+        </div>
+      )}
 
       {jump && showOverlay && (
         <SimulatingOverlay

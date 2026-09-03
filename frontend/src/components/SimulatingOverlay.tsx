@@ -1,3 +1,6 @@
+import { Button } from "@/components/ui/button";
+import { Progress } from "@/components/ui/progress";
+
 /**
  * Covers the page while a fast-forward runs.
  *
@@ -41,39 +44,32 @@ function SimulatingOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="Simulating"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 backdrop-blur-sm"
     >
-      <div className="flex w-80 flex-col gap-4 rounded-xl bg-white p-6 shadow-xl">
+      <div className="flex w-80 flex-col gap-4 rounded-xl border bg-card p-6 shadow-xl">
         <div className="flex flex-col gap-1">
           <p className="font-medium">Simulating</p>
-          <p className="text-sm text-slate-500">{label}</p>
+          <p className="text-sm text-muted-foreground">{label}</p>
         </div>
 
-        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-          {determinate ? (
-            <div
-              className="h-full rounded-full bg-blue-500 transition-all duration-200 ease-linear"
-              style={{ width: `${percent}%` }}
-            />
-          ) : (
-            <div className="h-full w-full animate-pulse rounded-full bg-blue-500" />
-          )}
-        </div>
+        {determinate ? (
+          <Progress value={percent} />
+        ) : (
+          <div className="h-2 w-full overflow-hidden rounded-full bg-primary/20">
+            <div className="h-full w-full animate-pulse rounded-full bg-primary" />
+          </div>
+        )}
 
-        <p className="text-sm text-slate-600 tabular-nums" aria-live="polite">
+        <p className="text-sm text-muted-foreground tabular-nums" aria-live="polite">
           {determinate
             ? `${ticksDone.toLocaleString()} of ${ticksTotal?.toLocaleString()} ticks`
             : `${ticksDone.toLocaleString()} ticks`}
           {tickNum === null ? "" : ` · now at tick ${tickNum.toLocaleString()}`}
         </p>
 
-        <button
-          className="rounded-lg bg-slate-700 p-2 text-white disabled:opacity-40"
-          onClick={onStop}
-          disabled={stopping}
-        >
+        <Button variant="secondary" onClick={onStop} disabled={stopping}>
           {stopping ? "Stopping after this batch..." : "Stop"}
-        </button>
+        </Button>
       </div>
     </div>
   );
