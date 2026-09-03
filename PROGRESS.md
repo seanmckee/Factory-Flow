@@ -8,16 +8,13 @@ that completes it.
 
 ---
 
-**You are here:** **Track 4.5 (dark redesign) is complete, awaiting a browser
-pass.** The app is dark-only on a semantic token layer (shadcn/ui, zinc),
-every page owns its viewport with creation in dialogs, and the simulator is
-two control bars over Floor / Throughput / Metrics tabs — the Metrics pane is
-where Track 5's dashboard lands.
+**You are here:** **Track 5 (run dashboard) is complete, awaiting a browser
+pass.** The Metrics tab is a real dashboard — stat cards over a work-centre
+table ranked by utilization, with window controls — and the Throughput tab
+draws three series: cumulative money, trailing rate, and WIP.
 
 **Next up:** Track 6 (operating expense). Track 6 is what makes the score able
-to go down and so what makes an agent's objective non-degenerate; Track 5 (the
-metrics dashboard) is what lets a human see whether a run is behaving, and 4.4
-put a one-row placeholder there that Track 5 replaces.
+to go down and so what makes an agent's objective non-degenerate.
 
 **One refactor unit first** (decided 2026-09-03): split the read side of
 `runService.ts` — `getRun`, `getRunMetrics`, `getRunFloor`, `getRunTicks` —
@@ -601,10 +598,48 @@ conventions (CLAUDE.md "Styling" holds them).
       and the picker lists only orders not yet released into the selected run
 - [x] `docs/style-convention` — CLAUDE.md styling convention + this entry
 
-## Track 5 onward — re-plan when reached
+## Track 5 — Run dashboard (`feat/run-dashboard`)
 
-- [ ] Track 5 `feat/run-dashboard` — metrics UI. Fold in the deferred
-      throughput-chart work: the cumulative flatline bug, then rate + WIP series.
+Re-planned on reach (2026-09-03). The entry said "the cumulative flatline bug,
+then rate + WIP series" — the flatline half was already closed by 4.2
+(`openingCents` landed before the jump controls, since one press reaches the
+5000-row cap), so what remained was the series and the dashboard itself.
+**Decided: frontend-only.** Everything comes from the three endpoints the page
+already calls — `/metrics` (window aggregate), `/ticks` (per-tick money + WIP,
+already fetched every beat), `/floor` (names, frozen capacities) — so there is
+no per-centre *time series*, deferred until something needs it, and the
+`runService` read-side split stays where this file put it: before Track 6.
+
+- [x] 5.1 `throughputRate` — trailing rate in cents per simulated minute over
+      a 60-tick window, the proper successor to the deleted `smoothThroughput`.
+      Pure, tested, beside `cumulativeThroughput`.
+      **Decided:** points earlier than the window into the series divide by
+      the ticks actually covered, not the full window — past the `/ticks` cap
+      the series is a suffix of the run, and the data before it isn't zero,
+      it's absent; a full-window divisor draws a fake ramp at the left edge of
+      every fast-forwarded chart. Unlike the cumulative curve a rate needs no
+      opening balance: every point is local to its own window.
+- [x] 5.2 Rate + WIP charts beside the cumulative curve. `TickSeriesChart`
+      replaces `ThroughputChart` — one recharts wrapper, three instances of
+      data plus formatters — and WIP is a step line, since parts don't move
+      fractionally.
+- [x] 5.3 `RunDashboard` replaces `RunMetricsStrip` in the Metrics tab: stat
+      cards (window throughput, finished, cycle time, WIP) over a work-centre
+      table with utilization bars.
+      **Decided:** ranked by utilization descending — the constraint on top is
+      the point, and ranking is safe because the pane redraws only when a
+      window is asked for; stable name order stays a *floor* rule, where rows
+      redraw every tick. The bar shifts to the `saturated` token at 90%.
+      **Decided:** window controls (whole run, last 1000/5000, custom from–to)
+      are the only new `/metrics` trigger — it stays off the clock's beat, the
+      label still comes from the response, and a jump still re-windows onto
+      its own ticks.
+- [x] 5.4 Doc sweep: CLAUDE.md (dashboard paragraph, three-series chart
+      pipeline, `throughputRate`'s left-edge rule), README (dashboard
+      delivered, chart bullet), this file.
+
+## Track 6 onward — re-plan when reached
+
 - [ ] Track 6 `feat/operating-expense` — cost accruing against simulated time,
       carrying cost, P&L. **This is what makes the agent's objective
       non-degenerate.**
