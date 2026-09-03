@@ -229,7 +229,16 @@ every real jump clears; the gate exists so a jump that returns immediately
 doesn't flash a modal. The bar is determinate only above one chunk, since a
 one-chunk jump has nothing to report until it is already done. A jump **stops
 the clock first** and waits out any beat in flight: both contend for the same
-lock, and letting them collide would raise a 409 out of ordinary use.
+lock, and letting them collide would raise the very 409 the unlock action is
+there to cure.
+
+That action is the other half: a tab closed or a server restarted mid-jump
+leaves `status = 'advancing'` with no process behind it, and every advance is a
+409 thereafter. `reportAdvance` gives that 409 a **"Clear stale lock"** button
+on the toast (`ToastAction`, which is why `showToast` takes a third argument
+and an action toast lives 12 s rather than 3.5 s). It is worded as an assertion
+the user is making, not a retry: if the run really is advancing elsewhere,
+clearing the lock lets two writers rewrite the same WIP rows.
 
 `RunMetricsStrip` is what a jump lands on — one row from `GET /:id/metrics`,
 **not** a dashboard, and Track 5 replaces it. It shows the whole run when a run

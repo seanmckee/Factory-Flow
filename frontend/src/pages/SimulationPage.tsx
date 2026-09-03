@@ -18,6 +18,7 @@ import {
   getRunTicks,
   listRuns,
   releaseWorkOrder,
+  unlockRun,
   type Run,
   type RunFloor,
   type RunMetrics,
@@ -98,6 +99,37 @@ function SimulationPage() {
       showToast(error instanceof ApiError ? error.message : fallback, "error");
     },
     [showToast],
+  );
+
+  /**
+   * A failed advance is the one error here the user can act on. Advancing
+   * takes the run's `advancing` lock, and a tab closed or a server restarted
+   * mid-jump leaves that lock set with no process behind it — after which
+   * every advance is a 409 for good, and curl is the only cure. So the 409
+   * carries an action.
+   *
+   * Labelled as clearing a *stale* lock rather than as a retry, because that
+   * is the assertion the user is making: if the run really is advancing
+   * somewhere else, clearing it lets two writers rewrite the same WIP rows.
+   */
+  const reportAdvance = useCallback(
+    (error: unknown, id: number) => {
+      if (error instanceof ApiError && error.status === 409) {
+        return showToast(error.message, "error", {
+          label: "Clear stale lock",
+          onClick: async () => {
+            try {
+              await unlockRun(id);
+              showToast("Cleared the lock — the run is idle again");
+            } catch (unlockError) {
+              report(unlockError, "Failed to clear the lock");
+            }
+          },
+        });
+      }
+      report(error, "Failed to advance the run");
+    },
+    [report, showToast],
   );
 
   /** Everything the page draws, in one place, so a tick refreshes it together. */
@@ -218,14 +250,14 @@ function SimulationPage() {
         await refresh(runId);
       } catch (error) {
         setIsRunning(false);
-        report(error, "Failed to advance the run");
+        reportAdvance(error, runId);
       } finally {
         advancing.current = false;
       }
     }, TICK_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, runId, refresh, report]);
+  }, [isRunning, runId, refresh, reportAdvance]);
 
   /**
    * A beat in flight holds the run's lock, and a jump landing on top of it
@@ -292,7 +324,7 @@ function SimulationPage() {
           if (untilIdle && done >= ceiling) hitCeiling = true;
         }
       } catch (error) {
-        report(error, "Failed to advance the run");
+        reportAdvance(error, runId);
       } finally {
         window.clearTimeout(gate);
         setShowOverlay(false);
@@ -318,7 +350,17 @@ function SimulationPage() {
         );
       }
     },
-    [runId, run, jump, awaitIdleClock, refresh, loadMetrics, report, showToast],
+    [
+      runId,
+      run,
+      jump,
+      awaitIdleClock,
+      refresh,
+      loadMetrics,
+      report,
+      reportAdvance,
+      showToast,
+    ],
   );
 
   const onCreateRun = async () => {

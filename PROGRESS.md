@@ -546,6 +546,17 @@ wants determinism, not a background loop racing it.
       Exercised over HTTP: a jump's window (`?fromTick=601&toTick=1100`) came
       back `tickCount: 500`, mean WIP 3.12, peak 25, busiest centre 19.3% with
       a worst queue of 11.
+- [x] 4.5 "Clear stale lock" on the 409. A tab closed or a server restarted
+      mid-jump leaves `status = 'advancing'` with no process behind it, and
+      every advance is a 409 for good after that, with curl the only cure.
+      `ToastAction` is new — `showToast` takes a third argument and an action
+      toast lives 12 s rather than 3.5 s.
+      **Decided:** worded as clearing a *stale* lock, not as a retry. It is an
+      assertion the user is making; if the run really is advancing elsewhere,
+      clearing it lets two writers rewrite the same WIP rows.
+      **Decided:** on the toast, not as a badge in the run picker — the picker
+      reads `status` from a list fetched on mount, so it would show a stale
+      lock more often than a real one.
 
 ## Track 5 onward — re-plan when reached
 

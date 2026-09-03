@@ -150,6 +150,13 @@ export const getRunMetrics = (
 export const releaseWorkOrder = (runId: number, workOrderId: number) =>
   postJson<ReleaseResult>(`/api/runs/${runId}/releases`, { workOrderId });
 
+/**
+ * Clears a lock a dead process left behind. Not a reset — re-creating a run
+ * with the same seed reproduces it exactly, so there is nothing to rewind.
+ */
+export const unlockRun = (runId: number) =>
+  postJson<Run>(`/api/runs/${runId}/unlock`, {});
+
 export const advanceRun = (runId: number, ticks: number) =>
   postJson<AdvanceResult>(`/api/runs/${runId}/advance`, { ticks });
 
