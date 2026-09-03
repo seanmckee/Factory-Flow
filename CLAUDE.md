@@ -48,6 +48,7 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   the routes validate, map an `HttpError` onto its status and serialise. Routes
   are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
   frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
+  `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
@@ -84,6 +85,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   work-centre deletion. `run_finished_parts` freezes its money columns at
   finish time for the same reason — otherwise deleting a sales order rewrites
   what a finished run earned. `npm run seed` deletes `simulation_runs` first.
+- `/floor` and `/metrics` deliberately answer different questions. `/floor` is
+  a **snapshot** — what is at each center and how far along — built by the pure
+  `deriveFloorView`, and it is what the simulation page's cards draw.
+  `/metrics` is a **rate over a window**, and must come from the tick's own
+  emitted observations. A machine can read `slotsInUse: 0` on the floor having
+  been busy for the whole of that tick, because the part it held finished the
+  step and moved on; that is exactly the undercount that makes a post-tick
+  snapshot the wrong source for utilization. `WorkCenterFloorView` therefore
+  has no `utilization` field at all — an instantaneous `slotsInUse / capacity`
+  reads only 0, ½ or 1, and naming it utilization invites the confusion.
 
 ### Simulation engine (`backend/src/simulation/`)
 

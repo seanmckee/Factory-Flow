@@ -14,11 +14,16 @@ window, unlock, delete — with the schema applied to Neon. **An agent can drive
 the simulation now.** What is left in the track is 3.4, deleting the frontend's
 engine copy, and 3.5's doc sweep.
 
-**Next up:** Track 6 — operating expense. Recommended over 3.4/3.5/Track 5,
-because money still only goes up: with no cost accruing against simulated time
-and none for holding WIP, "release everything immediately" is the optimal
-policy and an agent would find it in two moves. Track 6 is what makes the
-objective non-degenerate. 3.4 and 3.5 block nothing an agent needs.
+**Next up:** 3.4 — the frontend switchover and the deletion of its engine
+copy, one commit, so two engines never coexist untested. Decided to work the
+ledger in order (2026-09-03) rather than jumping to Track 6: the UI currently
+runs its own in-browser simulation sharing no state with a real run, and the
+frontend engine copy has none of Tracks 2, 3.2b or the shortened-route fix, so
+every further unit widens the gap. Note Track 4 is largely already delivered —
+`advance {ticks}` did 3000 ticks in ~2s — leaving only a UI speed control,
+which needs 3.4 first. The one ordering cost, noted deliberately: Track 5's
+dashboard lands before Track 6 adds cost and profit, so it will need extending
+once.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -394,6 +399,29 @@ Where a run becomes a server-side object an agent can address.
       404s throughout. **Two concurrent advances: one 200, one 409. A release
       during an advance: 409** — the silent data loss the shared lock exists to
       prevent. Server log clean.
+- [x] 3.4a Floor and tick-series reads, split out of 3.4 because the switchover
+      needs two things the API didn't expose: the per-machine progress the
+      cards draw, and the per-tick money series the chart plots.
+      `deriveFloorView` is the frontend's `deriveWorkCenterView` ported the way
+      the engine was — pure, with tests — and it **fixes the latent crash on
+      the way**: the frontend indexed `steps[stepIndex]` unguarded, so a part
+      stranded past a shortened route crashed the page; here it is simply on no
+      machine, matching the rule the tick applies.
+      **Decided:** `WorkCenterFloorView` has no `utilization`. An instantaneous
+      `slotsInUse / capacity` reads only 0, half or 1, and naming it
+      utilization invites it being read as the answer `aggregateMetrics` gives
+      over a window. Confirmed live: a center showed `slotsInUse: 0` having
+      held a part for the whole of that tick, the part having finished its step
+      and moved on — the exact undercount 2.1 rejected a snapshot for.
+      **Decided:** work center *names* come from the live table, the one thing
+      a run keeps no copy of. Renaming a center is cosmetic, and a run showing
+      the current name is right; capacity and steps still come from the run.
+      **Decided:** `/ticks` is capped at 5000 rows rather than paged, keeping
+      the *newest* in the window — more points than a screen has pixels, and a
+      chart following a live run wants the end of the series.
+      Exercised over HTTP: floor at tick 0 and mid-run (`Drill Press 2/2
+      slots=[67, 50]`, 16 parts queued at Raw Material), the series whole and
+      windowed, and 404s.
 - [ ] 3.4 Frontend switchover **and** deletion of the frontend engine, one
       commit, so two engines never coexist untested. `cumulativeThroughput.ts`
       stays — it's a chart transform, not physics.

@@ -1,4 +1,4 @@
-import { and, count, eq, gte, inArray, lte, sum } from "drizzle-orm";
+import { and, count, desc, eq, gte, inArray, lte, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   allocations,
@@ -21,6 +21,10 @@ import {
   PROCESS_TIME_DEVIATION,
   sampleProcessTime,
 } from "../simulation/sampleProcessTime.js";
+import {
+  deriveFloorView,
+  type WorkCenterFloorView,
+} from "../simulation/floorView.js";
 import {
   aggregateCycleTime,
   aggregateMetrics,
@@ -709,4 +713,102 @@ export async function deleteRun(runId: number): Promise<void> {
     .where(eq(simulationRuns.id, runId))
     .returning({ id: simulationRuns.id });
   if (!deleted) throw new HttpError(404, `Run ${runId} not found`);
+}
+
+export type RunFloor = {
+  tickNum: number;
+  wipCount: number;
+  workCenters: (WorkCenterFloorView & { name: string; capacity: number })[];
+};
+
+/**
+ * The shop floor as it stands, for the simulation page's cards. Capacity and
+ * the step a part is on both come from the run's own frozen config, so the
+ * picture is of the factory this run is actually running, not of the factory
+ * as it has since been edited. Names come from `work_centers`, which is the
+ * one thing a run has no copy of — renaming a center is cosmetic and a run
+ * showing its current name is right.
+ */
+export async function getRunFloor(runId: number): Promise<RunFloor> {
+  const [run] = await db
+    .select()
+    .from(simulationRuns)
+    .where(eq(simulationRuns.id, runId));
+  if (!run) throw new HttpError(404, `Run ${runId} not found`);
+
+  const state = await loadRunState(run);
+
+  const names = new Map(
+    (await db
+      .select({ id: workCenters.id, name: workCenters.name })
+      .from(workCenters)).map((center) => [center.id, center.name]),
+  );
+
+  const view = deriveFloorView(
+    state.wipParts,
+    state.routingByWorkOrder,
+    state.workCenters,
+  );
+
+  return {
+    tickNum: run.tickNum,
+    wipCount: state.wipParts.length,
+    workCenters: view.map((center) => ({
+      ...center,
+      name: names.get(center.workCenterId) ?? `Work center ${center.workCenterId}`,
+      capacity: state.workCenters.get(center.workCenterId)?.capacity ?? 0,
+    })),
+  };
+}
+
+export type TickSeriesRow = {
+  tickNum: number;
+  throughputCents: number;
+  wipCount: number;
+};
+
+/**
+ * The raw per-tick series, for charting. Capped rather than paged: a chart
+ * reads a window, and `MAX_TICK_SERIES_ROWS` of them is already more points
+ * than a screen has pixels. Returns the most recent rows in the window when it
+ * overflows, since a chart following a live run wants the end of the series.
+ */
+export const MAX_TICK_SERIES_ROWS = 5000;
+
+export async function getRunTicks(
+  runId: number,
+  fromTick?: number,
+  toTick?: number,
+): Promise<TickSeriesRow[]> {
+  const [run] = await db
+    .select({ id: simulationRuns.id, tickNum: simulationRuns.tickNum })
+    .from(simulationRuns)
+    .where(eq(simulationRuns.id, runId));
+  if (!run) throw new HttpError(404, `Run ${runId} not found`);
+
+  const from = fromTick ?? 1;
+  const to = toTick ?? run.tickNum;
+  if (to < from) {
+    throw new HttpError(400, `toTick ${to} is before fromTick ${from}`);
+  }
+
+  const rows = await db
+    .select({
+      tickNum: runTicks.tickNum,
+      throughputCents: runTicks.throughputCents,
+      wipCount: runTicks.wipCount,
+    })
+    .from(runTicks)
+    .where(
+      and(
+        eq(runTicks.runId, runId),
+        gte(runTicks.tickNum, from),
+        lte(runTicks.tickNum, to),
+      ),
+    )
+    .orderBy(desc(runTicks.tickNum))
+    .limit(MAX_TICK_SERIES_ROWS);
+
+  // read newest-first to cap at the end of the window, handed back in order
+  return rows.reverse();
 }

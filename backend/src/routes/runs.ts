@@ -5,7 +5,9 @@ import {
   createRun,
   deleteRun,
   getRun,
+  getRunFloor,
   getRunMetrics,
+  getRunTicks,
   listRuns,
   releaseWorkOrder,
   unlockRun,
@@ -89,6 +91,37 @@ router.get("/:id/metrics", async (req, res) => {
     );
   } catch (error) {
     fail(res, error, "Error getting run metrics");
+  }
+});
+
+/**
+ * The shop floor as it stands: what is at each center and how far along.
+ * A snapshot, unlike `/metrics`, which is a rate over a window — the two
+ * deliberately answer different questions.
+ */
+router.get("/:id/floor", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    res.json(await getRunFloor(params.id));
+  } catch (error) {
+    fail(res, error, "Error getting run floor");
+  }
+});
+
+/** The raw per-tick series, for charting. Capped, newest kept. */
+router.get("/:id/ticks", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    const query = parseOr400(metricsWindowSchema, req.query, res);
+    if (!query) return;
+
+    res.json(await getRunTicks(params.id, query.fromTick, query.toTick));
+  } catch (error) {
+    fail(res, error, "Error getting run ticks");
   }
 });
 
