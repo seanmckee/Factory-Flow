@@ -8,22 +8,31 @@ that completes it.
 
 ---
 
-**You are here:** **Track 3 is complete.** The engine, runs, and API live in
-the backend; the frontend drives a real run and its engine copy is deleted;
-the docs no longer claim the simulation is ephemeral. Verified in a browser
-end to end.
+**You are here:** **Track 4 is complete.** A run can be jumped forward from
+the page — presets or until the floor is empty — and a jump lands on a
+labelled window of metrics rather than on a bigger number. Awaiting a browser
+pass.
 
-**Next up:** Track 5 (the metrics dashboard) or Track 6 (operating expense).
-Track 6 is what makes the score able to go down and so what makes an agent's
-objective non-degenerate; Track 5 is what lets a human see whether a run is
-behaving. Track 4 is largely already delivered — what remains of it is a speed
-control, which belongs with Track 5's UI work.
+**Next up:** Track 6 (operating expense). Track 6 is what makes the score able
+to go down and so what makes an agent's objective non-degenerate; Track 5 (the
+metrics dashboard) is what lets a human see whether a run is behaving, and 4.4
+put a one-row placeholder there that Track 5 replaces.
+
+**One refactor unit first** (decided 2026-09-03): split the read side of
+`runService.ts` — `getRun`, `getRunMetrics`, `getRunFloor`, `getRunTicks` —
+out of the 842-line module before Track 6 starts. It is half the file, it has
+nothing to do with advancing, and Track 6's P&L reads and Track 7's comparison
+reads both belong on that side of the line however the rest is eventually
+carved. Deeper carving, and the `SimulationPage` hooks (`useRunClock`,
+`useRunJump`), wait until after Track 7 — boundaries invented ahead of the code
+that uses them are the ones you end up fighting.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
 money only goes up today and "release everything" wins by default. Skippable
 until after the agent: 3.4, 3.5, Track 5, and most of Track 4 (fast-forward
-falls out of 3.2's load-once/write-once design). Track 7 forking is *not*
+falls out of 3.2's load-once/write-once design — Track 4 turned out to be a UI
+track, since the API half shipped with 3.2/3.3). Track 7 forking is *not*
 load-bearing either — two runs from the same seed and config with different
 policies is a valid comparison, **which is true only because of 3.2b**; before
 it, independently created runs drew different noise.
@@ -470,10 +479,105 @@ Where a run becomes a server-side object an agent can address.
       needs less than the README assumed — a seeded run can be copied rather
       than replayed from a log.
 
-## Track 4 onward — re-plan when reached
+## Track 4 — Fast-forward (`feat/run-fast-forward`)
 
-- [ ] Track 4 `feat/run-fast-forward` — `advance {ticks: N}`, speed control.
-      Running 5000 ticks instantly is what makes the agent viable.
+The API half shipped with 3.2/3.3: `advance {ticks: N}` has run 5000 ticks in
+one call since then, so nothing an agent needs was outstanding. What was left
+was the human half — a way to jump a run forward and something worth reading at
+the far end.
+
+**Decided up front:** no speed multiplier, and no unattended clock. A run is
+fast-forwarded to see where it goes, not watched going faster, and a "100×"
+button lies the moment the multiplier outruns ~500 ticks a second. Phase 2's
+unattended clock and calendar stay unbuilt: they would put the first stateful
+thing in the Express process, and an agent drives `advance` explicitly and
+wants determinism, not a background loop racing it.
+
+- [x] 4.1 `AdvanceResult.wipCount` — what a jump running until idle terminates
+      on. Free: the surviving WIP is `state.wipParts.length` after the last
+      batch, not a query.
+      **Decided:** terminate on the advance's own answer, not on a follow-up
+      `GET /:id` — a read chasing each chunk could already be a batch stale,
+      and with it the jump loop makes no other request at all.
+- [x] 4.2 `openingCents` + a seeded `cumulativeThroughput`, with tests, and the
+      page wired to them. `/ticks` keeps the newest 5000 rows, so past tick
+      5000 the chart's series is a *suffix* of the run and a curve accumulated
+      from zero re-based and contradicted the money in the line directly above
+      it. Landed **before** 4.3, since one press of a jump button reaches tick
+      5000.
+      **Decided:** seed it client-side as `run.throughputCents − Σ(window)`
+      rather than adding a cumulative column or endpoint. It is exact, not an
+      approximation: a tick's throughput is the sum of its parts' credits and
+      the run's total is the sum of the same frozen per-part columns, so the
+      two agree by construction. Floored at zero, because the summary and the
+      series are two requests and an advance between them leaves the window
+      holding money the total has not counted.
+      The whole track's test surface, and the only pure code in it.
+      Confirmed live: a run at tick 7100 had earned $930 while the 5000 rows
+      `/ticks` returned (2101–7100) held $0 of it — the old curve drew a flat
+      line at zero under a summary reading $930.
+- [x] 4.3 Jump controls, `SimulatingOverlay`, clock interlock. `100 / 500 /
+      1000` and Run until idle, chunked at 500 to match `TICKS_PER_BATCH`,
+      ceiling of 100000 ticks on until-idle.
+      **Decided:** Stop halts dispatching and never aborts in flight. The
+      server commits that batch either way, so aborting would save a second
+      and leave the page claiming a tick the run had passed; halting instead
+      makes every stopped jump a real resumable state, which is exactly what
+      3.2's load-once/write-once design bought.
+      **Decided:** the overlay shows **progress only** — no metrics. It is up
+      for a second or two, and a figure that appears and vanishes cannot be
+      checked. Stop is the only live control in it: an until-idle jump can run
+      to its ceiling, and a reload would strand the run's lock instead of
+      ending it.
+      **Decided:** a 200 ms gate before it appears. Every preset clears it, so
+      it behaves as "always" for real work; it exists so an until-idle jump on
+      an empty floor doesn't flash a modal for a frame. The bar is determinate
+      only above one chunk — a one-chunk jump would snap 0→100%.
+      **Decided:** a jump stops the clock and waits out any beat in flight,
+      rather than letting the two collide. They contend for the same server
+      lock, and colliding would raise a 409 out of ordinary use — making 4.5's
+      unlock button read as a workaround for our own bug.
+      Verified over HTTP: an overlapping advance *and* an overlapping release
+      both 409 with `Run 17 is already advancing`, which is why the overlay
+      blocks releasing too.
+- [x] 4.4 `RunMetricsStrip` — one row from `GET /:id/metrics`, the whole run on
+      open and the jump's own ticks after a jump. Explicitly a placeholder for
+      Track 5, not a dashboard.
+      **Decided:** never fetched on the clock's beat. `/metrics` reads and
+      aggregates every tick row, per-centre row and finished part in the
+      window, which at 50000 ticks is a per-centre row per centre per tick.
+      **Decided:** the window label comes from the *response*, so a strip left
+      over from an earlier window says what it covers instead of misleading.
+      Track 2's case is the reason: one centre read 10% utilization over a
+      whole run and 52% over the ticks it was working.
+      Names come off `/floor` — `/metrics` carries ids, and names are the one
+      thing a run keeps no copy of.
+      Exercised over HTTP: a jump's window (`?fromTick=601&toTick=1100`) came
+      back `tickCount: 500`, mean WIP 3.12, peak 25, busiest centre 19.3% with
+      a worst queue of 11.
+- [x] 4.5 "Clear stale lock" on the 409. A tab closed or a server restarted
+      mid-jump leaves `status = 'advancing'` with no process behind it, and
+      every advance is a 409 for good after that, with curl the only cure.
+      `ToastAction` is new — `showToast` takes a third argument and an action
+      toast lives 12 s rather than 3.5 s.
+      **Decided:** worded as clearing a *stale* lock, not as a retry. It is an
+      assertion the user is making; if the run really is advancing elsewhere,
+      clearing it lets two writers rewrite the same WIP rows.
+      **Decided:** on the toast, not as a badge in the run picker — the picker
+      reads `status` from a list fetched on mount, so it would show a stale
+      lock more often than a real one.
+- [x] 4.6 Doc sweep, folded into the units above rather than left to the end.
+      Also corrected **two 3.4 leftovers** in `CLAUDE.md` found on the way: the
+      chart pipeline still described `smoothThroughput` and a 120-tick cap, and
+      the React-state notes still described the `*Ref` mirrors and the lazy
+      `GET /api/routings/:id` that minted WIP parts with `crypto.randomUUID()`
+      — all deleted with the frontend engine.
+      The README's Phase 2 is rewritten: the speed control is recorded as
+      **deliberately not built**, run-to-completion as delivered by Run until
+      idle, and the unattended clock and calendar as still open.
+
+## Track 5 onward — re-plan when reached
+
 - [ ] Track 5 `feat/run-dashboard` — metrics UI. Fold in the deferred
       throughput-chart work: the cumulative flatline bug, then rate + WIP series.
 - [ ] Track 6 `feat/operating-expense` — cost accruing against simulated time,

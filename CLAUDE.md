@@ -53,7 +53,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
   at roughly 500 ticks a second; a caller that wants more calls again, since a
-  run is resumable by construction. `unlock` is **not** a reset — it clears a
+  run is resumable by construction. Its result carries the surviving
+  `wipCount`, so a caller advancing until the floor is empty stops on the
+  advance's own answer rather than chasing each call with a `GET /:id` that
+  could already be a batch stale — it is `state.wipParts.length` after the
+  last batch, not a query. `unlock` is **not** a reset — it clears a
   lock a dead process left, and re-creating a run with the same seed reproduces
   it exactly, so rewinding one is not a feature. `work_orders.status` still has
   no writer and should not gain one here: a release is per-run
@@ -200,6 +204,53 @@ Advancing holds a server-side lock, so an overlapping call is a 409; an
 display clock. Stopping is client-side only: the run keeps its state and
 resumes where it left off.
 
+**Fast-forward is the point of the page, not a faster clock.** There is
+deliberately no speed multiplier: the question a run answers is where a set of
+releases ends up, not what it looks like going faster, and a "100×" button
+lies the moment the multiplier outruns the server's ~500 ticks a second. So
+the 1× clock is unchanged and the jumps sit beside it — `JUMP_TICKS`
+(`100 / 500 / 1000`) and **Run until idle**, which advances until the floor is
+empty or `IDLE_TICK_CEILING` (100000) stops it, so a floor that can never
+empty doesn't advance until the tab closes.
+
+A jump chunks at `CHUNK_TICKS` (500), matching the server's `TICKS_PER_BATCH`,
+so a chunk is exactly one transaction and **Stop always lands on a committed
+tick boundary** — it stops dispatching and never aborts in flight, because the
+server commits that batch regardless and an aborted request would only leave
+the page claiming a tick the run has passed. Until-idle terminates on
+`AdvanceResult.wipCount`, not on a follow-up `GET`, so the loop makes no other
+request; there is nothing per chunk to refresh, since the overlay shows
+progress only. Floor, chart and strip refresh once when the jump lands.
+
+`SimulatingOverlay` covers the page while it runs, and Stop is the only live
+control in it — an until-idle jump can run to its ceiling and a reload would
+strand the run's lock rather than end it. It appears on a 200 ms gate, which
+every real jump clears; the gate exists so a jump that returns immediately
+doesn't flash a modal. The bar is determinate only above one chunk, since a
+one-chunk jump has nothing to report until it is already done. A jump **stops
+the clock first** and waits out any beat in flight: both contend for the same
+lock, and letting them collide would raise the very 409 the unlock action is
+there to cure.
+
+That action is the other half: a tab closed or a server restarted mid-jump
+leaves `status = 'advancing'` with no process behind it, and every advance is a
+409 thereafter. `reportAdvance` gives that 409 a **"Clear stale lock"** button
+on the toast (`ToastAction`, which is why `showToast` takes a third argument
+and an action toast lives 12 s rather than 3.5 s). It is worded as an assertion
+the user is making, not a retry: if the run really is advancing elsewhere,
+clearing the lock lets two writers rewrite the same WIP rows.
+
+`RunMetricsStrip` is what a jump lands on — one row from `GET /:id/metrics`,
+**not** a dashboard, and Track 5 replaces it. It shows the whole run when a run
+is opened and re-windows onto the jump's own ticks (`startTick + 1 …
+startTick + done`) right after a jump, and it is **never** fetched on the
+clock's beat: `/metrics` reads and aggregates every tick row, per-centre row
+and finished part in the window. The window label comes from the *response*,
+so a strip left over from an earlier window states what it covers rather than
+misleading — the ledger's own case is a centre reading 10% utilization over a
+run and 52% over the ticks it worked. Work-centre *names* come off `/floor`,
+since `/metrics` carries ids and a run keeps no copy of the names.
+
 Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
 through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
 capacity read-only — editing the live work center would change nothing about a
@@ -210,13 +261,33 @@ run already created — and no longer shows a "% utilized", which was
 
 Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The chart pipeline in `SimulationPage` is: per-tick `calculateThroughput` → history capped to the last 120 ticks → `smoothThroughput(history, 60)` (trailing 60-tick mean, dividing by the full window so the ramp-up is intentionally damped) → `cumulativeThroughput` → `ThroughputChart` (recharts).
+The chart pipeline in `SimulationPage` is the run's stored per-tick money,
+accumulated: `GET /:id/ticks` → `openingCents(history, run.throughputCents)`
+→ `cumulativeThroughput(history, opening)` → `ThroughputChart` (recharts).
+The **opening balance is not optional**. `/ticks` keeps only the newest 5000
+rows, so past tick 5000 the series is a *suffix* of the run and a curve
+accumulated from zero re-bases and contradicts the money in the line above it
+— one fast-forward press reaches that. It is exact rather than approximate
+because a tick's `throughputCents` is the sum of its parts' credits and the
+run's total is the sum of the same frozen per-part columns, so what the run
+earned before the window is the total minus the window's own sum, and no API
+change is needed. It floors at zero: the summary and the series are two
+requests, and an advance landing between them leaves the window holding money
+the total has not counted yet.
 
 ### React state notes
 
-Fetched data (`routings`, `workOrders`, `parts`, `salesOrders`) is mirrored into refs via `useEffect` because the tick interval's effect depends only on `isRunning`; the interval callback reads `*Ref.current` to avoid restarting the simulation clock whenever data loads. Add new tick-time inputs the same way.
+The page holds two refs, both about who owns the run's lock: `advancing` is
+true while any advance is in flight, so the display clock's beat skips rather
+than queues and a jump waits a beat out instead of racing it into a 409, and
+`stopJump` is what Stop sets — read at the top of the chunk loop, so stopping
+lands on a committed boundary.
 
-Routings are fetched lazily: `releaseOrder` GETs `/api/routings/:id` for the selected work order, caches it in the `routings` map, and instantiates `order.quantity` WIP parts at step 0 with `crypto.randomUUID()` ids.
+(The refs that used to mirror `routings`, `workOrders`, `parts` and
+`salesOrders` for the tick callback, and the lazy `GET /api/routings/:id` that
+instantiated WIP parts with `crypto.randomUUID()`, went with the frontend
+engine in 3.4. Releasing is `POST /:id/releases` now and the server pins the
+steps.)
 
 ### Shared UI primitives
 

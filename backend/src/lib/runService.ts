@@ -263,6 +263,14 @@ export type AdvanceResult = {
   tickNum: number;
   ticksAdvanced: number;
   throughputCents: number;
+  /**
+   * Parts still on the floor when the advance stopped. Reported so a caller
+   * advancing until the run goes idle can terminate on the advance itself
+   * rather than following every call with a `GET /:id`, whose answer could
+   * already be a batch stale. It costs nothing: the surviving WIP is what the
+   * last batch handed back.
+   */
+  wipCount: number;
 };
 
 /**
@@ -366,7 +374,12 @@ export async function advanceRun(
       remaining -= size;
     }
 
-    return { tickNum: state.tickNum, ticksAdvanced: ticks, throughputCents };
+    return {
+      tickNum: state.tickNum,
+      ticksAdvanced: ticks,
+      throughputCents,
+      wipCount: state.wipParts.length,
+    };
   });
 }
 

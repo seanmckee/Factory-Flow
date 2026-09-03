@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import WorkCenterCard from "../components/WorkCenterCard";
+import SimulatingOverlay from "../components/SimulatingOverlay";
+import RunMetricsStrip from "../components/RunMetricsStrip";
 import ThroughputChart from "../components/ThroughputChart";
-import { cumulativeThroughput } from "../simulation/cumulativeThroughput";
+import {
+  cumulativeThroughput,
+  openingCents,
+} from "../simulation/cumulativeThroughput";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -9,11 +14,14 @@ import {
   deleteRun,
   getRun,
   getRunFloor,
+  getRunMetrics,
   getRunTicks,
   listRuns,
   releaseWorkOrder,
+  unlockRun,
   type Run,
   type RunFloor,
+  type RunMetrics,
   type RunSummary,
   type TickSample,
 } from "../api/runs";
@@ -23,6 +31,39 @@ import { inputClass } from "../components/ui/Form";
 
 /** One tick is one simulated second, so ticking once a second runs real-time. */
 const TICK_INTERVAL_MS = 1000;
+
+/**
+ * A jump advances in chunks of one server transaction (`TICKS_PER_BATCH`), so
+ * stopping one always lands on a committed tick boundary — a partly-advanced
+ * run is not a state that exists.
+ */
+const CHUNK_TICKS = 500;
+
+/** The preset jumps. Anything longer is what running until idle is for. */
+const JUMP_TICKS = [100, 500, 1000];
+
+/**
+ * Where running until idle gives up. A floor that never empties — a routing
+ * nothing can finish, demand that outruns the constraint — would otherwise
+ * advance until the tab was closed.
+ */
+const IDLE_TICK_CEILING = 100_000;
+
+/**
+ * How long a jump has to be running before the overlay appears. Every preset
+ * clears this, so it behaves as "always" for real work; it exists so a jump
+ * that returns immediately doesn't flash a modal for a frame.
+ */
+const OVERLAY_DELAY_MS = 200;
+
+/** A jump in flight: what it is doing and how far it has got. */
+type JumpProgress = {
+  label: string;
+  ticksDone: number;
+  /** null while running until idle — the end is unknown until WIP hits zero. */
+  ticksTotal: number | null;
+  tickNum: number | null;
+};
 
 /**
  * Drives a server-side run. The engine lives in the backend — this page picks
@@ -39,6 +80,7 @@ function SimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
+  const [metrics, setMetrics] = useState<RunMetrics | null>(null);
 
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -47,11 +89,47 @@ function SimulationPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
+  const [jump, setJump] = useState<JumpProgress | null>(null);
+  const [showOverlay, setShowOverlay] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const stopJump = useRef(false);
+
   const report = useCallback(
     (error: unknown, fallback: string) => {
       showToast(error instanceof ApiError ? error.message : fallback, "error");
     },
     [showToast],
+  );
+
+  /**
+   * A failed advance is the one error here the user can act on. Advancing
+   * takes the run's `advancing` lock, and a tab closed or a server restarted
+   * mid-jump leaves that lock set with no process behind it — after which
+   * every advance is a 409 for good, and curl is the only cure. So the 409
+   * carries an action.
+   *
+   * Labelled as clearing a *stale* lock rather than as a retry, because that
+   * is the assertion the user is making: if the run really is advancing
+   * somewhere else, clearing it lets two writers rewrite the same WIP rows.
+   */
+  const reportAdvance = useCallback(
+    (error: unknown, id: number) => {
+      if (error instanceof ApiError && error.status === 409) {
+        return showToast(error.message, "error", {
+          label: "Clear stale lock",
+          onClick: async () => {
+            try {
+              await unlockRun(id);
+              showToast("Cleared the lock — the run is idle again");
+            } catch (unlockError) {
+              report(unlockError, "Failed to clear the lock");
+            }
+          },
+        });
+      }
+      report(error, "Failed to advance the run");
+    },
+    [report, showToast],
   );
 
   /** Everything the page draws, in one place, so a tick refreshes it together. */
@@ -75,6 +153,23 @@ function SimulationPage() {
       );
     },
     [],
+  );
+
+  /**
+   * The strip's window: the whole run when one is opened, the jump's own ticks
+   * after a jump. Deliberately *not* on the clock's beat — `/metrics` reads
+   * and aggregates every observation in the window, which is a per-center row
+   * per center per tick, and no eye reads a strip that redraws every second.
+   */
+  const loadMetrics = useCallback(
+    async (id: number, fromTick?: number, toTick?: number) => {
+      try {
+        setMetrics(await getRunMetrics(id, fromTick, toTick));
+      } catch (error) {
+        report(error, "Failed to load run metrics");
+      }
+    },
+    [report],
   );
 
   // remounts on navigation, so work orders created in the order entry module
@@ -116,6 +211,7 @@ function SimulationPage() {
     setRun(null);
     setFloor(null);
     setSeries([]);
+    setMetrics(null);
   }, []);
 
   useEffect(() => {
@@ -126,13 +222,15 @@ function SimulationPage() {
         await refresh(id);
       } catch (error) {
         if (!cancelled) report(error, "Failed to load run");
+        return;
       }
+      if (!cancelled) await loadMetrics(id);
     }
     load(runId);
     return () => {
       cancelled = true;
     };
-  }, [runId, refresh, report]);
+  }, [runId, refresh, report, loadMetrics]);
 
   /**
    * Advancing is synchronous on the server and holds a lock, so a second call
@@ -152,14 +250,118 @@ function SimulationPage() {
         await refresh(runId);
       } catch (error) {
         setIsRunning(false);
-        report(error, "Failed to advance the run");
+        reportAdvance(error, runId);
       } finally {
         advancing.current = false;
       }
     }, TICK_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [isRunning, runId, refresh, report]);
+  }, [isRunning, runId, refresh, reportAdvance]);
+
+  /**
+   * A beat in flight holds the run's lock, and a jump landing on top of it
+   * would be the 409 the unlock affordance exists for — raised by normal use
+   * rather than by a dead process. A beat is one tick, so waiting it out is a
+   * fraction of a second; the bound is there so a hung request can't hang the
+   * button too.
+   */
+  const awaitIdleClock = useCallback(async () => {
+    for (let attempt = 0; advancing.current && attempt < 40; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return !advancing.current;
+  }, []);
+
+  /**
+   * Fast-forwards the run: a fixed number of ticks, or until the floor is
+   * empty. Chunked at `CHUNK_TICKS` so Stop always lands on a committed
+   * boundary, and terminated on the advance's own `wipCount` rather than on a
+   * follow-up read that could be a chunk stale.
+   *
+   * This is the point of the page now — not watching the factory run faster,
+   * but jumping ahead to see where a set of releases ends up. The 1x clock is
+   * still there for watching, and a jump stops it first: the two contend for
+   * the same server lock and the jump is the one that matters.
+   */
+  const runJump = useCallback(
+    async (target: number | "idle") => {
+      if (runId === null) return showToast("Create or select a run first", "error");
+      if (jump) return;
+
+      const untilIdle = target === "idle";
+      if (untilIdle && (run?.wipCount ?? 0) === 0) {
+        return showToast("Nothing on the floor — release a work order first", "error");
+      }
+
+      setIsRunning(false);
+      if (!(await awaitIdleClock())) {
+        return showToast("The run is still advancing — try again", "error");
+      }
+
+      const label = untilIdle
+        ? "Running until the floor is empty"
+        : `Advancing ${target.toLocaleString()} ticks`;
+      const ticksTotal = untilIdle ? null : target;
+
+      const startTick = run?.tickNum ?? 0;
+      advancing.current = true;
+      stopJump.current = false;
+      setStopping(false);
+      setJump({ label, ticksDone: 0, ticksTotal, tickNum: null });
+      const gate = window.setTimeout(() => setShowOverlay(true), OVERLAY_DELAY_MS);
+
+      const ceiling = ticksTotal ?? IDLE_TICK_CEILING;
+      let done = 0;
+      let hitCeiling = false;
+      try {
+        while (done < ceiling && !stopJump.current) {
+          const size = Math.min(CHUNK_TICKS, ceiling - done);
+          const result = await advanceRun(runId, size);
+          done += result.ticksAdvanced;
+          setJump({ label, ticksDone: done, ticksTotal, tickNum: result.tickNum });
+          if (untilIdle && result.wipCount === 0) break;
+          if (untilIdle && done >= ceiling) hitCeiling = true;
+        }
+      } catch (error) {
+        reportAdvance(error, runId);
+      } finally {
+        window.clearTimeout(gate);
+        setShowOverlay(false);
+        setJump(null);
+        setStopping(false);
+        advancing.current = false;
+      }
+
+      try {
+        await refresh(runId);
+      } catch (error) {
+        report(error, "Failed to load run");
+      }
+
+      // the strip re-windows onto exactly what the jump covered, which is the
+      // question a jump asks: what happened over *those* ticks
+      if (done > 0) await loadMetrics(runId, startTick + 1, startTick + done);
+
+      if (hitCeiling) {
+        showToast(
+          `Stopped at ${IDLE_TICK_CEILING.toLocaleString()} ticks with work still on the floor`,
+          "error",
+        );
+      }
+    },
+    [
+      runId,
+      run,
+      jump,
+      awaitIdleClock,
+      refresh,
+      loadMetrics,
+      report,
+      reportAdvance,
+      showToast,
+    ],
+  );
 
   const onCreateRun = async () => {
     const name = newRunName.trim();
@@ -204,10 +406,23 @@ function SimulationPage() {
     }
   };
 
+  // `/ticks` keeps only the newest 5000 rows, so past tick 5000 this series is
+  // a suffix of the run: the curve carries on from what the run had already
+  // earned rather than re-basing at zero and contradicting the money above it.
+  const history = series.map((sample) => ({
+    tick: sample.tickNum,
+    cents: sample.throughputCents,
+  }));
   const cumulative = cumulativeThroughput(
-    series.map((sample) => ({ tick: sample.tickNum, cents: sample.throughputCents })),
+    history,
+    openingCents(history, run?.throughputCents ?? 0),
   );
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
+  // `/metrics` carries work center ids and no names — a run keeps no copy of
+  // them, so the floor's live names are where the strip gets them
+  const centerNames = new Map(
+    (floor?.workCenters ?? []).map((center) => [center.workCenterId, center.name]),
+  );
 
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
@@ -221,6 +436,7 @@ function SimulationPage() {
             onChange={(e) =>
               selectRun(e.target.value ? Number(e.target.value) : null)
             }
+            disabled={jump !== null}
             className={inputClass}
           >
             <option value="">No run selected</option>
@@ -242,15 +458,16 @@ function SimulationPage() {
           />
         </label>
         <button
-          className="bg-slate-700 text-white p-2 rounded-lg"
+          className="bg-slate-700 text-white p-2 rounded-lg disabled:opacity-40"
           onClick={onCreateRun}
+          disabled={jump !== null}
         >
           Create Run
         </button>
         <button
           className="bg-red-600 text-white p-2 rounded-lg disabled:opacity-40"
           onClick={onDeleteRun}
-          disabled={runId === null}
+          disabled={runId === null || jump !== null}
         >
           Delete Run
         </button>
@@ -297,11 +514,15 @@ function SimulationPage() {
         })}
       </div>
 
+      {metrics && (
+        <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
+      )}
+
       <div className="flex gap-4">
         <button
           className="bg-blue-500 text-white p-2 rounded-lg disabled:opacity-40"
           onClick={() => setIsRunning((prev) => !prev)}
-          disabled={runId === null}
+          disabled={runId === null || jump !== null}
         >
           {isRunning ? "Stop Simulation" : "Start Simulation"}
         </button>
@@ -309,9 +530,32 @@ function SimulationPage() {
         <button
           className="bg-green-500 text-white p-2 rounded-lg disabled:opacity-40"
           onClick={onRelease}
-          disabled={runId === null}
+          disabled={runId === null || jump !== null}
         >
           Release Order
+        </button>
+      </div>
+
+      {/* Fast-forward. The clock above is for watching; these are for seeing
+          where a run ends up, which is what the presets and until-idle answer. */}
+      <div className="flex flex-wrap gap-2 items-center justify-center">
+        <span className="text-sm text-slate-500">Fast-forward</span>
+        {JUMP_TICKS.map((ticks) => (
+          <button
+            key={ticks}
+            className="bg-slate-700 text-white px-3 py-2 rounded-lg text-sm tabular-nums disabled:opacity-40"
+            onClick={() => runJump(ticks)}
+            disabled={runId === null || jump !== null}
+          >
+            +{ticks.toLocaleString()}
+          </button>
+        ))}
+        <button
+          className="bg-indigo-600 text-white px-3 py-2 rounded-lg text-sm disabled:opacity-40"
+          onClick={() => runJump("idle")}
+          disabled={runId === null || jump !== null}
+        >
+          Run until idle
         </button>
       </div>
 
@@ -341,6 +585,23 @@ function SimulationPage() {
         Machine counts are frozen when a run is created. Change them in Factory
         Setup and they apply to the next run.
       </p>
+
+      {jump && showOverlay && (
+        <SimulatingOverlay
+          label={jump.label}
+          ticksDone={jump.ticksDone}
+          ticksTotal={jump.ticksTotal}
+          tickNum={jump.tickNum}
+          // a jump inside one chunk has nothing to report until it is done, so
+          // it pulses rather than snapping a bar from 0 to 100
+          determinate={jump.ticksTotal !== null && jump.ticksTotal > CHUNK_TICKS}
+          stopping={stopping}
+          onStop={() => {
+            stopJump.current = true;
+            setStopping(true);
+          }}
+        />
+      )}
     </div>
   );
 }
