@@ -8,19 +8,36 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-type ThroughputSample = {
+export type TickPoint = {
   tick: number;
-  cents: number;
+  value: number;
 };
 
 /**
+ * One line over the run's tick series — the cumulative curve, the rate and the
+ * WIP chart are all this component with different data and formatters, so the
+ * recharts boilerplate lives once.
+ *
  * Colours come from the theme's CSS variables rather than literals, so the
  * chart follows the token layer like everything else.
  */
-export default function ThroughputChart({
+export default function TickSeriesChart({
   data,
+  yLabel,
+  tooltipLabel,
+  formatValue,
+  formatAxis,
+  stroke = "var(--chart-1)",
+  type = "monotone",
 }: {
-  data: ThroughputSample[];
+  data: TickPoint[];
+  yLabel: string;
+  tooltipLabel: string;
+  formatValue: (value: number) => string;
+  formatAxis: (value: number) => string;
+  stroke?: string;
+  /** `stepAfter` for integer series like WIP — parts don't move fractionally. */
+  type?: "monotone" | "stepAfter";
 }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -44,9 +61,9 @@ export default function ThroughputChart({
           width={64}
           stroke="var(--muted-foreground)"
           tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
-          tickFormatter={(cents: number) => (cents / 100).toFixed(0)}
+          tickFormatter={formatAxis}
           label={{
-            value: "Cumulative Throughput ($)",
+            value: yLabel,
             angle: -90,
             position: "insideLeft",
             style: { textAnchor: "middle" },
@@ -54,7 +71,7 @@ export default function ThroughputChart({
           }}
         />
         <Tooltip
-          formatter={(cents) => [`$${(Number(cents) / 100).toFixed(2)}`, "Throughput"]}
+          formatter={(value) => [formatValue(Number(value)), tooltipLabel]}
           labelFormatter={(tick) => `Tick ${Number(tick).toLocaleString()}`}
           contentStyle={{
             backgroundColor: "var(--popover)",
@@ -64,9 +81,9 @@ export default function ThroughputChart({
           }}
         />
         <Line
-          type="monotone"
-          dataKey="cents"
-          stroke="var(--chart-1)"
+          type={type}
+          dataKey="value"
+          stroke={stroke}
           strokeWidth={2}
           dot={false}
           isAnimationActive={false}

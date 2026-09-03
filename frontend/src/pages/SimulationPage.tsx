@@ -1,13 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FastForward, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
 import SimulatingOverlay from "../components/SimulatingOverlay";
 import RunMetricsStrip from "../components/RunMetricsStrip";
-import ThroughputChart from "../components/ThroughputChart";
+import TickSeriesChart from "../components/TickSeriesChart";
 import {
   cumulativeThroughput,
   openingCents,
 } from "../simulation/cumulativeThroughput";
+import { throughputRate } from "../simulation/throughputRate";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -452,16 +453,32 @@ function SimulationPage() {
   };
 
   // `/ticks` keeps only the newest 5000 rows, so past tick 5000 this series is
-  // a suffix of the run: the curve carries on from what the run had already
-  // earned rather than re-basing at zero and contradicting the money above it.
-  const history = series.map((sample) => ({
-    tick: sample.tickNum,
-    cents: sample.throughputCents,
-  }));
-  const cumulative = cumulativeThroughput(
-    history,
-    openingCents(history, run?.throughputCents ?? 0),
-  );
+  // a suffix of the run: the cumulative curve carries on from what the run had
+  // already earned rather than re-basing at zero and contradicting the money
+  // above it. The rate and WIP series are local by construction, so the suffix
+  // needs no such correction for them.
+  const runTotalCents = run?.throughputCents ?? 0;
+  const charts = useMemo(() => {
+    const history = series.map((sample) => ({
+      tick: sample.tickNum,
+      cents: sample.throughputCents,
+    }));
+    const toPoint = ({ tick, cents }: { tick: number; cents: number }) => ({
+      tick,
+      value: cents,
+    });
+    return {
+      cumulative: cumulativeThroughput(
+        history,
+        openingCents(history, runTotalCents),
+      ).map(toPoint),
+      rate: throughputRate(history).map(toPoint),
+      wip: series.map((sample) => ({
+        tick: sample.tickNum,
+        value: sample.wipCount,
+      })),
+    };
+  }, [series, runTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
@@ -679,9 +696,42 @@ function SimulationPage() {
             </div>
           </TabsContent>
 
-          <TabsContent value="throughput" className="min-h-0 flex-1">
-            <div className="h-full rounded-lg border bg-card p-4">
-              <ThroughputChart data={cumulative} />
+          {/* Cumulative money on top, then the two local series: the rate is
+              where a stall or a burst is a shape rather than a change of
+              slope, and WIP is the book's other axis. The region scrolls on a
+              short viewport; the page doesn't. */}
+          <TabsContent value="throughput" className="min-h-0 flex-1 overflow-auto">
+            <div className="grid h-full min-h-[36rem] grid-cols-2 grid-rows-[3fr_2fr] gap-3">
+              <div className="col-span-2 min-h-0 rounded-lg border bg-card p-4">
+                <TickSeriesChart
+                  data={charts.cumulative}
+                  yLabel="Cumulative Throughput ($)"
+                  tooltipLabel="Throughput"
+                  formatValue={(cents) => `$${(cents / 100).toFixed(2)}`}
+                  formatAxis={(cents) => (cents / 100).toFixed(0)}
+                />
+              </div>
+              <div className="min-h-0 rounded-lg border bg-card p-4">
+                <TickSeriesChart
+                  data={charts.rate}
+                  yLabel="Rate ($/min)"
+                  tooltipLabel="Rate"
+                  formatValue={(cents) => `$${(cents / 100).toFixed(2)}/min`}
+                  formatAxis={(cents) => (cents / 100).toFixed(0)}
+                  stroke="var(--chart-2)"
+                />
+              </div>
+              <div className="min-h-0 rounded-lg border bg-card p-4">
+                <TickSeriesChart
+                  data={charts.wip}
+                  yLabel="WIP (parts)"
+                  tooltipLabel="WIP"
+                  formatValue={(parts) => `${parts.toLocaleString()} parts`}
+                  formatAxis={(parts) => String(parts)}
+                  stroke="var(--chart-3)"
+                  type="stepAfter"
+                />
+              </div>
             </div>
           </TabsContent>
 
