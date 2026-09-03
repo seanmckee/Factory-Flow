@@ -96,6 +96,26 @@ parts and charts the total, and two code paths would eventually disagree about
 what a run earned. `salesOrderId` and `unitPriceCents` are null together and
 only for an uncovered unit, whose material cost is still recorded.
 
+Advancing a run is split across the pure/impure line. `simulateBatch`
+(`simulation/simulateBatch.ts`) takes a `RunState`, ticks it N times in memory
+and returns a `RunBatch` — the surviving WIP, the finished records with their
+frozen money, a `TickRecord` per tick, and the advanced `priorCounts` — while
+`lib/runService.ts` only loads the state, calls it, and writes the batch. All
+the logic that decides anything is therefore under test with no database;
+`runService` holds no arithmetic. `priorCounts` advances *within* a batch, so a
+unit finishing at tick 5 is priced against the allocation after the one that
+covered a unit finishing at tick 3, and carrying it out means a long advance
+runs as several batches without re-reading it.
+
+`runService` writes per batch, never per tick — `TICKS_PER_BATCH` is 500, each
+batch one transaction, so a crash costs at most one batch and a 5000-tick
+advance reads once and writes ten times. Inserts are split at
+`ROWS_PER_INSERT`, because Postgres caps bind parameters near 65535 and 500
+ticks of a twenty-centre factory is ten thousand per-centre rows. Both
+advancing and releasing take the run's `advancing` lock via `withRunLock`: an
+advance replaces the WIP rows wholesale, so a release landing mid-batch would
+be deleted by the write that follows it.
+
 `simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
 `wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
 the map, idle ones included**. `busy` counts machines, not parts. This is

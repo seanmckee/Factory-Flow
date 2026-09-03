@@ -115,7 +115,13 @@ export const allocations = pgTable(
 export const simulationRuns = pgTable("simulation_runs", {
   id: serial("id").primaryKey(),
   name: varchar("name", { length: 255 }).notNull(),
-  /** `idle` | `advancing` | `failed` — the advance lock. No writer yet. */
+  /**
+   * `idle` | `advancing` — the lock `runService` takes for both advancing and
+   * releasing, since advancing rewrites the WIP rows a release would have just
+   * added. No `failed`: work either commits or rolls back, so a run is
+   * consistent either way. A process that dies mid-batch does leave the run
+   * held, and only a reset releases it.
+   */
   status: varchar("status", { length: 20 }).notNull().default("idle"),
   tickNum: integer("tick_num").notNull().default(0),
   /** the whole of the run's randomness; the draw needs no cursor */

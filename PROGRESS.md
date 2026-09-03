@@ -15,13 +15,12 @@ established the invariant that **a run reads its own config and never the live
 factory tables again**. The tables exist but nothing writes them; the frontend
 still runs its own copy of the engine until 3.4 deletes it.
 
-**Next up:** 3.2 — the run service. Load a run once, advance N ticks in memory,
-write once per batch in one transaction; chunk long advances at ~500 ticks so a
-crash loses at most one chunk. Takes the `advancing` lock with a conditional
-update, releases it in a finally, and 3.3's reset route unsticks a lock left by
-a dead process. It reads run-owned config only — `run_work_centers` and
-`run_work_order_steps` — and copies the former at creation, the latter at
-release.
+**Next up:** 3.3 — routes. create / list / get / release / advance / delete,
+plus the **reset** that releases a lock left by a dead process, since 3.2 made
+that the only way out. This is the point at which the service gets executed for
+the first time: `simulateBatch` has 20 tests, `runService` has none by design
+(the suite is pure-functions-only, no DB), so 3.3 is also its first real
+exercise. The migration is still unapplied to Neon.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -293,9 +292,42 @@ Where a run becomes a server-side object an agent can address.
       `materialCostCents` — the money was spent, and Track 6 prices carrying
       cost off it. `FinishedPartCredit` lives in `calculateThroughput.ts` beside
       its producer, as `TickMetrics` does in `simulationTick.ts`.
-- [ ] 3.2 Run service. **Never persist per tick** — load once, advance N ticks in
-      memory, write once per batch, one transaction. Neon over a WebSocket pool
-      makes every write a round trip; per-tick writes make Track 4 impossible.
+- [x] 3.2 Run service. **Split across the pure/impure line**, which the ledger
+      hadn't anticipated: `simulateBatch` in `src/simulation/` is a pure
+      function from `RunState` + tick count to a `RunBatch` (surviving WIP,
+      finished records with frozen money, a `TickRecord` per tick, advanced
+      `priorCounts`), and `src/lib/runService.ts` only loads, calls it and
+      writes. **Decided** because the suite is pure-functions-only: putting the
+      loop in the service would have left every decision it makes — money
+      attribution, count carry-over, row shaping — permanently untestable.
+      `runService` now holds no arithmetic at all.
+      **Decided:** `priorCounts` advances within a batch and is carried out of
+      it, so a unit finishing at tick 5 is priced against the allocation after
+      the one covering a unit that finished at tick 3, and a long advance runs
+      as several batches without re-reading the counts. A test asserts a run
+      advanced in one batch of 30 and in three of 10 produces identical
+      finished parts and tick rows — which is what makes chunking safe and what
+      a fork will replay.
+      **Decided:** 500 ticks per batch, one transaction each, so a crash costs
+      at most one batch; inserts split at 1000 rows, because Postgres caps bind
+      parameters near 65535 and 500 ticks of a twenty-centre factory is ten
+      thousand per-centre rows.
+      **Decided:** releasing takes the same lock as advancing. An advance
+      replaces the run's WIP rows wholesale, so a release landing mid-batch
+      would be silently deleted by the write that follows it. The lock is a
+      conditional `UPDATE ... WHERE status = 'idle'`, deliberately outside the
+      caller's transaction — a lock nobody can observe until commit is not a
+      lock — which is exactly why a dead process leaves a run held and 3.3 owes
+      it a reset.
+      **Decided:** no `failed` status. Work commits or rolls back, so a run is
+      consistent either way and returns to `idle`; a state nothing ever writes
+      is worse than not having it.
+      **Decided:** `priorCounts` loads as a `GROUP BY` count, not by reading
+      the finished history back — the whole point of 1.0's refactor. The one
+      place this deviates from the JS-aggregation convention, and deliberately.
+      **Not exercised yet:** `runService` has never run. 20 tests cover
+      `simulateBatch`; the service is typechecked only, and 3.3 is its first
+      execution.
 - [ ] 3.3 Routes — create / list / get / release / advance / delete.
       **Open decision:** what "reset" means, and `work_orders.status` has never
       had a writer.
