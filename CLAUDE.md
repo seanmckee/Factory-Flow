@@ -53,7 +53,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
   at roughly 500 ticks a second; a caller that wants more calls again, since a
-  run is resumable by construction. `unlock` is **not** a reset — it clears a
+  run is resumable by construction. Its result carries the surviving
+  `wipCount`, so a caller advancing until the floor is empty stops on the
+  advance's own answer rather than chasing each call with a `GET /:id` that
+  could already be a batch stale — it is `state.wipParts.length` after the
+  last batch, not a query. `unlock` is **not** a reset — it clears a
   lock a dead process left, and re-creating a run with the same seed reproduces
   it exactly, so rewinding one is not a feature. `work_orders.status` still has
   no writer and should not gain one here: a release is per-run

@@ -470,10 +470,29 @@ Where a run becomes a server-side object an agent can address.
       needs less than the README assumed — a seeded run can be copied rather
       than replayed from a log.
 
-## Track 4 onward — re-plan when reached
+## Track 4 — Fast-forward (`feat/run-fast-forward`)
 
-- [ ] Track 4 `feat/run-fast-forward` — `advance {ticks: N}`, speed control.
-      Running 5000 ticks instantly is what makes the agent viable.
+The API half shipped with 3.2/3.3: `advance {ticks: N}` has run 5000 ticks in
+one call since then, so nothing an agent needs was outstanding. What was left
+was the human half — a way to jump a run forward and something worth reading at
+the far end.
+
+**Decided up front:** no speed multiplier, and no unattended clock. A run is
+fast-forwarded to see where it goes, not watched going faster, and a "100×"
+button lies the moment the multiplier outruns ~500 ticks a second. Phase 2's
+unattended clock and calendar stay unbuilt: they would put the first stateful
+thing in the Express process, and an agent drives `advance` explicitly and
+wants determinism, not a background loop racing it.
+
+- [x] 4.1 `AdvanceResult.wipCount` — what a jump running until idle terminates
+      on. Free: the surviving WIP is `state.wipParts.length` after the last
+      batch, not a query.
+      **Decided:** terminate on the advance's own answer, not on a follow-up
+      `GET /:id` — a read chasing each chunk could already be a batch stale,
+      and with it the jump loop makes no other request at all.
+
+## Track 5 onward — re-plan when reached
+
 - [ ] Track 5 `feat/run-dashboard` — metrics UI. Fold in the deferred
       throughput-chart work: the cumulative flatline bug, then rate + WIP series.
 - [ ] Track 6 `feat/operating-expense` — cost accruing against simulated time,

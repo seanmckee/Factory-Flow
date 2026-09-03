@@ -61,6 +61,8 @@ export type AdvanceResult = {
   tickNum: number;
   ticksAdvanced: number;
   throughputCents: number;
+  /** WIP still on the floor — what a jump running until idle stops on. */
+  wipCount: number;
 };
 
 export type ReleaseResult = {
