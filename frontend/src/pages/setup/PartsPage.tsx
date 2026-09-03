@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { Plus } from "lucide-react";
 import {
   deleteConflict,
   deleteJson,
@@ -8,13 +9,27 @@ import {
 import { useSetupData } from "../../setup/SetupDataContext";
 import { useToast } from "../../toast/ToastContext";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
+import PageHeader from "../../components/PageHeader";
+import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FormCard,
-  SubmitButton,
-  inputClass,
-} from "../../components/ui/Form";
-import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import InlineInput from "../../components/ui/InlineInput";
 import { dollarsToCents } from "../../orders/salesOrderMath";
@@ -39,6 +54,7 @@ export default function PartsPage() {
   const { parts, routings, loading, error, refetchParts } = useSetupData();
   const { showToast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
   const [partNumber, setPartNumber] = useState("");
   const [name, setName] = useState("");
   const [materialCost, setMaterialCost] = useState("");
@@ -80,6 +96,7 @@ export default function PartsPage() {
       setPartNumber("");
       setName("");
       setMaterialCost("");
+      setCreateOpen(false);
     } catch (submitError) {
       showToast(
         submitError instanceof Error
@@ -216,75 +233,87 @@ export default function PartsPage() {
   // stable identity so ConfirmDialog's Escape listener doesn't re-register
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold">Parts</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        What the factory makes. Material cost is subtracted from the sale price
-        to give throughput, so it is the only variable cost in the model.
-      </p>
+    <div className="flex h-full min-h-0 max-w-5xl flex-col">
+      <PageHeader
+        title="Parts"
+        description="What the factory makes. Material cost is subtracted from the sale price to give throughput."
+      >
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="size-4" /> New Part
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>New part</DialogTitle>
+                <DialogDescription>
+                  A part with no routing can't be built — no work order can be
+                  created for it until one exists.
+                </DialogDescription>
+              </DialogHeader>
 
-      <FormCard onSubmit={submit}>
-        <Field label="Part number">
-          <input
-            type="text"
-            value={partNumber}
-            onChange={(event) => setPartNumber(event.target.value)}
-            placeholder="300-001"
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Part number">
+                <Input
+                  type="text"
+                  value={partNumber}
+                  onChange={(event) => setPartNumber(event.target.value)}
+                  placeholder="300-001"
+                />
+              </Field>
 
-        <Field label="Name">
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Bushing"
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Name">
+                <Input
+                  type="text"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Bushing"
+                />
+              </Field>
 
-        <Field label="Material cost (USD)">
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={materialCost}
-            onChange={(event) => setMaterialCost(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Material cost (USD)">
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={materialCost}
+                  onChange={(event) => setMaterialCost(event.target.value)}
+                />
+              </Field>
 
-        <SubmitButton busy={submitting} busyLabel="Creating…">
-          Create Part
-        </SubmitButton>
-      </FormCard>
+              <DialogFooter>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Part"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
-      <p className="mt-6 text-sm text-slate-500">
-        A part with no routing can't be built — no work order can be created for
-        it until one exists.
-      </p>
-
-      <div className="mt-2">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <Table>
-          <THead>
-            <Th>Part number</Th>
-            <Th>Name</Th>
-            <Th numeric>Material cost</Th>
-            <Th numeric>Routings</Th>
-            <Th />
-          </THead>
-          <tbody>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead>Part number</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead className="text-right">Material cost</TableHead>
+              <TableHead className="text-right">Routings</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {parts.map((part) => {
               const editing = draft?.id === part.id ? draft : null;
               const count = routingCount.get(part.id) ?? 0;
               return (
-                <Tr key={part.id}>
-                  <Td>
+                <TableRow key={part.id}>
+                  <TableCell>
                     <InlineInput
                       type="text"
                       aria-label={`Part number for ${part.name}`}
@@ -303,8 +332,8 @@ export default function PartsPage() {
                       onBlur={() => commitEdit(part)}
                       className="w-full"
                     />
-                  </Td>
-                  <Td>
+                  </TableCell>
+                  <TableCell>
                     <InlineInput
                       type="text"
                       aria-label={`Name for ${part.partNumber}`}
@@ -320,8 +349,8 @@ export default function PartsPage() {
                       onBlur={() => commitEdit(part)}
                       className="w-full"
                     />
-                  </Td>
-                  <Td className="text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     <InlineInput
                       type="number"
                       numeric
@@ -347,24 +376,25 @@ export default function PartsPage() {
                       onBlur={() => commitEdit(part)}
                       className="w-24"
                     />
-                  </Td>
-                  <Td
-                    numeric
-                    className={count === 0 ? "text-red-600" : "text-slate-500"}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${
+                      count === 0 ? "text-destructive" : "text-muted-foreground"
+                    }`}
                   >
                     {count}
-                  </Td>
-                  <Td className="text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     <DeleteButton
                       label={part.partNumber}
                       busy={busyId === part.id}
                       onClick={() => runDelete(part, false)}
                     />
-                  </Td>
-                </Tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
+          </TableBody>
         </Table>
       </div>
 
@@ -383,14 +413,12 @@ export default function PartsPage() {
           body={
             <>
               <p>These routings are deleted with it:</p>
-              <ul className="mt-1 list-disc pl-5">
+              <ul>
                 {pendingDelete.routings.map((routing) => (
                   <li key={routing}>{routing}</li>
                 ))}
               </ul>
-              <p className="mt-2">
-                Every step inside them goes too. This can't be undone.
-              </p>
+              <p>Every step inside them goes too. This can't be undone.</p>
             </>
           }
         />

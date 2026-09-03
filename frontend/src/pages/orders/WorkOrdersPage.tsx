@@ -1,17 +1,38 @@
 import { useCallback, useState } from "react";
+import { Plus } from "lucide-react";
 import { deleteConflict, deleteJson, postJson } from "../../api/client";
 import { useOrdersData } from "../../orders/OrdersDataContext";
 import { useToast } from "../../toast/ToastContext";
-import CollapsibleSection from "../../components/orders/CollapsibleSection";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
 import DemandPanel from "../../components/orders/DemandPanel";
+import PageHeader from "../../components/PageHeader";
+import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FormCard,
-  SubmitButton,
-  inputClass,
-} from "../../components/ui/Form";
-import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import { formatCents, isOpen, remainingQty } from "../../orders/salesOrderMath";
 import { summarizeDemand } from "../../orders/demand";
@@ -22,6 +43,9 @@ type PendingDelete = {
   orderNumber: string;
   allocations: { orderNumber: string; quantity: number }[];
 };
+
+/** Radix Select can't carry an empty-string item, so "auto" stands in for it. */
+const AUTO_ALLOCATE = "auto";
 
 export default function WorkOrdersPage() {
   const {
@@ -36,6 +60,7 @@ export default function WorkOrdersPage() {
   } = useOrdersData();
   const { showToast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
   const [partId, setPartId] = useState("");
   const [routingId, setRoutingId] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -68,9 +93,9 @@ export default function WorkOrdersPage() {
   };
 
   /**
-   * "Build" on a demand row fills the form in. The routing is only preselected
-   * when the part has exactly one - picking for the user when there's a genuine
-   * choice would hide that the choice exists.
+   * "Build" on a demand row fills the form in and opens it. The routing is
+   * only preselected when the part has exactly one - picking for the user when
+   * there's a genuine choice would hide that the choice exists.
    */
   const buildForPart = (targetPartId: number, suggestedQuantity: number) => {
     const candidates = routings.filter(
@@ -82,6 +107,7 @@ export default function WorkOrdersPage() {
     // leave allocation on auto: it fills the same open orders oldest-first
     setSalesOrderId("");
     setAllocationQuantity("");
+    setCreateOpen(true);
   };
 
   const changeSalesOrder = (value: string) => {
@@ -138,6 +164,7 @@ export default function WorkOrdersPage() {
       setQuantity("");
       setSalesOrderId("");
       setAllocationQuantity("");
+      setCreateOpen(false);
     } catch (submitError) {
       showToast(
         submitError instanceof Error
@@ -196,171 +223,221 @@ export default function WorkOrdersPage() {
   // stable identity so ConfirmDialog's Escape listener doesn't re-register
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold">Work Orders</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        Work orders produce parts. Unallocated quantity becomes inventory.
-      </p>
+    <div className="flex h-full min-h-0 max-w-6xl flex-col">
+      <PageHeader
+        title="Work Orders"
+        description="Work orders produce parts. Unallocated quantity becomes inventory."
+      >
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="size-4" /> New Work Order
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>New work order</DialogTitle>
+                <DialogDescription>
+                  Releases into a run come later — this only creates the order.
+                </DialogDescription>
+              </DialogHeader>
 
-      <DemandPanel
-        summaries={demandSummaries}
-        partById={partById}
-        produciblePartIds={produciblePartIds}
-        selectedPartId={selectedPartId}
-        onPickPart={buildForPart}
-      />
+              <Field label="Part">
+                <Select
+                  value={partId}
+                  onValueChange={(value) => changePart(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a part" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {parts.map((part) => (
+                      <SelectItem key={part.id} value={String(part.id)}>
+                        {part.partNumber} · {part.name} · material{" "}
+                        {formatCents(part.materialCostCents)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
 
-      <FormCard onSubmit={submit}>
-        <Field label="Part">
-          <select
-            value={partId}
-            onChange={(event) => changePart(event.target.value)}
-            className={inputClass}
-          >
-            <option value="">Select a part</option>
-            {parts.map((part) => (
-              <option key={part.id} value={part.id}>
-                {part.partNumber} · {part.name} · material{" "}
-                {formatCents(part.materialCostCents)}
-              </option>
-            ))}
-          </select>
-        </Field>
+              <Field label="Routing">
+                <Select
+                  value={routingId}
+                  onValueChange={(value) => setRoutingId(value)}
+                  disabled={!partId || partRoutings.length === 0}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a routing" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {partRoutings.map((routing) => (
+                      <SelectItem key={routing.id} value={String(routing.id)}>
+                        {routing.name} (rev {routing.revision})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {partId && partRoutings.length === 0 && (
+                  <span className="text-xs text-destructive">
+                    This part has no routing, so it can't be produced yet.
+                  </span>
+                )}
+              </Field>
 
-        <Field label="Routing">
-          <select
-            value={routingId}
-            onChange={(event) => setRoutingId(event.target.value)}
-            disabled={!partId || partRoutings.length === 0}
-            className={`${inputClass} disabled:bg-slate-100`}
-          >
-            <option value="">Select a routing</option>
-            {partRoutings.map((routing) => (
-              <option key={routing.id} value={routing.id}>
-                {routing.name} (rev {routing.revision})
-              </option>
-            ))}
-          </select>
-          {partId && partRoutings.length === 0 && (
-            <span className="text-red-600">
-              This part has no routing, so it can't be produced yet.
-            </span>
-          )}
-        </Field>
+              <Field label="Quantity">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={quantity}
+                  onChange={(event) => setQuantity(event.target.value)}
+                />
+              </Field>
 
-        <Field label="Quantity">
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Allocate to sales order">
+                <Select
+                  value={salesOrderId || AUTO_ALLOCATE}
+                  onValueChange={(value) =>
+                    changeSalesOrder(value === AUTO_ALLOCATE ? "" : value)
+                  }
+                  disabled={!partId}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={AUTO_ALLOCATE}>
+                      Auto-allocate to open demand
+                    </SelectItem>
+                    {openSalesOrders.map((salesOrder) => (
+                      <SelectItem
+                        key={salesOrder.id}
+                        value={String(salesOrder.id)}
+                      >
+                        {salesOrder.orderNumber} · {salesOrder.quantity} ordered
+                        · {remainingQty(salesOrder)} remaining
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {partId && openSalesOrders.length === 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    No open demand for this part — the whole order becomes
+                    inventory.
+                  </span>
+                )}
+              </Field>
 
-        <Field label="Allocate to sales order">
-          <select
-            value={salesOrderId}
-            onChange={(event) => changeSalesOrder(event.target.value)}
-            disabled={!partId}
-            className={`${inputClass} disabled:bg-slate-100`}
-          >
-            <option value="">Auto-allocate to open demand</option>
-            {openSalesOrders.map((salesOrder) => (
-              <option key={salesOrder.id} value={salesOrder.id}>
-                {salesOrder.orderNumber} · {salesOrder.quantity} ordered ·{" "}
-                {remainingQty(salesOrder)} remaining
-              </option>
-            ))}
-          </select>
-          {partId && openSalesOrders.length === 0 && (
-            <span className="text-slate-500">
-              No open demand for this part — the whole order becomes inventory.
-            </span>
-          )}
-        </Field>
+              {salesOrderId && (
+                <Field label="Allocation quantity">
+                  <Input
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={allocationQuantity}
+                    onChange={(event) =>
+                      setAllocationQuantity(event.target.value)
+                    }
+                  />
+                </Field>
+              )}
 
-        {salesOrderId && (
-          <Field label="Allocation quantity">
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={allocationQuantity}
-              onChange={(event) => setAllocationQuantity(event.target.value)}
-              className={inputClass}
-            />
-          </Field>
-        )}
+              <DialogFooter>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Work Order"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
-        <SubmitButton busy={submitting} busyLabel="Creating…">
-          Create Work Order
-        </SubmitButton>
-      </FormCard>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
+        <DemandPanel
+          summaries={demandSummaries}
+          partById={partById}
+          produciblePartIds={produciblePartIds}
+          selectedPartId={selectedPartId}
+          onPickPart={buildForPart}
+        />
 
-      <CollapsibleSection title="work orders" count={workOrders.length}>
-        <Table>
-          <THead>
-            <Th>Order</Th>
-            <Th>Part</Th>
-            <Th>Routing</Th>
-            <Th numeric>Quantity</Th>
-            <Th>Status</Th>
-            <Th>Allocated to</Th>
-            <Th />
-          </THead>
-          <tbody>
-            {workOrders.map((workOrder) => {
-              const routing = routingById.get(workOrder.routingId);
-              const part = partById.get(workOrder.partId);
-              const allocated = workOrder.allocations.reduce(
-                (total, allocation) => total + allocation.quantity,
-                0,
-              );
-              const inventory = workOrder.quantity - allocated;
-              return (
-                <Tr key={workOrder.id}>
-                  <Td className="font-medium">{workOrder.orderNumber}</Td>
-                  <Td>{part ? `${part.partNumber} · ${part.name}` : "—"}</Td>
-                  <Td>{routing?.name ?? "—"}</Td>
-                  <Td numeric>{workOrder.quantity}</Td>
-                  <Td>{workOrder.status}</Td>
-                  <Td>
-                    {workOrder.allocations.length === 0 ? (
-                      <span className="text-slate-400">unallocated</span>
-                    ) : (
-                      workOrder.allocations
-                        .map(
-                          (allocation) =>
-                            `${allocation.salesOrderNumber} (${allocation.quantity})`,
-                        )
-                        .join(", ")
-                    )}
-                    {inventory > 0 && workOrder.allocations.length > 0 && (
-                      <span className="text-slate-400">
-                        {" "}
-                        · {inventory} inventory
-                      </span>
-                    )}
-                  </Td>
-                  <Td className="text-right">
-                    <DeleteButton
-                      label={workOrder.orderNumber}
-                      busy={deletingId === workOrder.id}
-                      onClick={() => runDelete(workOrder, false)}
-                    />
-                  </Td>
-                </Tr>
-              );
-            })}
-          </tbody>
-        </Table>
-      </CollapsibleSection>
+        <div className="rounded-lg border bg-card">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Order</TableHead>
+                <TableHead>Part</TableHead>
+                <TableHead>Routing</TableHead>
+                <TableHead className="text-right">Quantity</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Allocated to</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {workOrders.map((workOrder) => {
+                const routing = routingById.get(workOrder.routingId);
+                const part = partById.get(workOrder.partId);
+                const allocated = workOrder.allocations.reduce(
+                  (total, allocation) => total + allocation.quantity,
+                  0,
+                );
+                const inventory = workOrder.quantity - allocated;
+                return (
+                  <TableRow key={workOrder.id}>
+                    <TableCell className="font-medium">
+                      {workOrder.orderNumber}
+                    </TableCell>
+                    <TableCell>
+                      {part ? `${part.partNumber} · ${part.name}` : "—"}
+                    </TableCell>
+                    <TableCell>{routing?.name ?? "—"}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {workOrder.quantity}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {workOrder.status}
+                    </TableCell>
+                    <TableCell>
+                      {workOrder.allocations.length === 0 ? (
+                        <span className="text-muted-foreground/60">
+                          unallocated
+                        </span>
+                      ) : (
+                        workOrder.allocations
+                          .map(
+                            (allocation) =>
+                              `${allocation.salesOrderNumber} (${allocation.quantity})`,
+                          )
+                          .join(", ")
+                      )}
+                      {inventory > 0 && workOrder.allocations.length > 0 && (
+                        <span className="text-muted-foreground/60">
+                          {" "}
+                          · {inventory} inventory
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <DeleteButton
+                        label={workOrder.orderNumber}
+                        busy={deletingId === workOrder.id}
+                        onClick={() => runDelete(workOrder, false)}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
 
       {pendingDelete && (
         <ConfirmDialog
@@ -383,14 +460,14 @@ export default function WorkOrdersPage() {
                 )}{" "}
                 units are allocated to:
               </p>
-              <ul className="mt-1 list-disc pl-5">
+              <ul>
                 {pendingDelete.allocations.map((link) => (
                   <li key={link.orderNumber}>
                     {link.orderNumber} ({link.quantity})
                   </li>
                 ))}
               </ul>
-              <p className="mt-2">
+              <p>
                 Those allocations are removed and that demand becomes unfilled
                 again.
               </p>

@@ -1,16 +1,37 @@
 import { useCallback, useState } from "react";
+import { Plus } from "lucide-react";
 import { deleteConflict, deleteJson, postJson } from "../../api/client";
 import { useOrdersData } from "../../orders/OrdersDataContext";
 import { useToast } from "../../toast/ToastContext";
-import CollapsibleSection from "../../components/orders/CollapsibleSection";
 import ConfirmDialog from "../../components/orders/ConfirmDialog";
+import PageHeader from "../../components/PageHeader";
+import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FormCard,
-  SubmitButton,
-  inputClass,
-} from "../../components/ui/Form";
-import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import {
   allocatedQty,
@@ -39,6 +60,7 @@ export default function SalesOrdersPage() {
   } = useOrdersData();
   const { showToast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
   const [partId, setPartId] = useState("");
   const [quantity, setQuantity] = useState("");
   const [unitPrice, setUnitPrice] = useState("");
@@ -86,6 +108,7 @@ export default function SalesOrdersPage() {
       setPartId("");
       setQuantity("");
       setUnitPrice("");
+      setCreateOpen(false);
     } catch (submitError) {
       showToast(
         submitError instanceof Error
@@ -144,121 +167,145 @@ export default function SalesOrdersPage() {
   // stable identity so ConfirmDialog's Escape listener doesn't re-register
   const cancelDelete = useCallback(() => setPendingDelete(null), []);
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold">Sales Orders</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        Sales orders record customer demand. They don't create work orders.
-      </p>
+    <div className="flex h-full min-h-0 max-w-6xl flex-col">
+      <PageHeader
+        title="Sales Orders"
+        description="Customer demand. Sales orders don't create work orders — they are what finished units get credited against."
+      >
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="size-4" /> New Sales Order
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>New sales order</DialogTitle>
+                <DialogDescription>
+                  Demand at a price. Throughput is earned when allocated units
+                  finish.
+                </DialogDescription>
+              </DialogHeader>
 
-      <FormCard onSubmit={submit}>
-        <Field label="Part">
-          <select
-            value={partId}
-            onChange={(event) => setPartId(event.target.value)}
-            className={inputClass}
-          >
-            <option value="">Select a part</option>
-            {parts.map((part) => (
-              <option key={part.id} value={part.id}>
-                {part.partNumber} · {part.name} · material{" "}
-                {formatCents(part.materialCostCents)}
-              </option>
-            ))}
-          </select>
-        </Field>
+              <Field label="Part">
+                <Select
+                  value={partId}
+                  onValueChange={(value) => setPartId(value)}
+                >
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Select a part" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {parts.map((part) => (
+                      <SelectItem key={part.id} value={String(part.id)}>
+                        {part.partNumber} · {part.name} · material{" "}
+                        {formatCents(part.materialCostCents)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
 
-        <Field label="Quantity">
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Quantity">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={quantity}
+                  onChange={(event) => setQuantity(event.target.value)}
+                />
+              </Field>
 
-        <Field label="Unit price (USD)">
-          <input
-            type="number"
-            min="0.01"
-            step="0.01"
-            value={unitPrice}
-            onChange={(event) => setUnitPrice(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Unit price (USD)">
+                <Input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={unitPrice}
+                  onChange={(event) => setUnitPrice(event.target.value)}
+                />
+              </Field>
 
-        {/* Shown as soon as a part is picked - the most useful moment is
-            "part chosen, price blank", when you need to know what to beat. */}
-        {selectedPart && (
-          <div
-            className={`rounded-lg border p-4 text-sm ${
-              perUnitCents !== null && perUnitCents <= 0
-                ? "border-red-300 bg-red-50 text-red-700"
-                : "border-slate-200 bg-slate-50 text-slate-600"
-            }`}
-          >
-            <p className="font-medium">Throughput</p>
-            <dl className="mt-2 flex flex-col gap-1">
-              <div className="flex justify-between gap-4">
-                <dt>Unit price</dt>
-                <dd className="tabular-nums">
-                  {priceCents === null ? "—" : formatCents(priceCents)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt>Material cost</dt>
-                <dd className="tabular-nums">
-                  −{formatCents(selectedPart.materialCostCents)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4 border-t border-slate-200 pt-1 font-medium">
-                <dt>Per unit</dt>
-                <dd className="tabular-nums">
-                  {perUnitCents === null ? "—" : formatSignedCents(perUnitCents)}
-                </dd>
-              </div>
-              <div className="flex justify-between gap-4">
-                <dt>Order total{hasQuantity ? ` (${parsedQuantity})` : ""}</dt>
-                <dd className="tabular-nums">
-                  {orderTotalCents === null
-                    ? "—"
-                    : formatSignedCents(orderTotalCents)}
-                </dd>
-              </div>
-            </dl>
-            {perUnitCents !== null && perUnitCents <= 0 && (
-              <p className="mt-2">
-                At or below material cost — each unit earns $0 or less. You can
-                still create this order.
-              </p>
-            )}
-          </div>
-        )}
+              {/* Shown as soon as a part is picked - the most useful moment is
+                  "part chosen, price blank", when you need to know what to beat. */}
+              {selectedPart && (
+                <div
+                  className={`rounded-lg border p-4 text-sm ${
+                    perUnitCents !== null && perUnitCents <= 0
+                      ? "border-destructive/50 bg-destructive/10 text-destructive"
+                      : "bg-muted/50 text-muted-foreground"
+                  }`}
+                >
+                  <p className="font-medium">Throughput</p>
+                  <dl className="mt-2 flex flex-col gap-1">
+                    <div className="flex justify-between gap-4">
+                      <dt>Unit price</dt>
+                      <dd className="tabular-nums">
+                        {priceCents === null ? "—" : formatCents(priceCents)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <dt>Material cost</dt>
+                      <dd className="tabular-nums">
+                        −{formatCents(selectedPart.materialCostCents)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4 border-t pt-1 font-medium">
+                      <dt>Per unit</dt>
+                      <dd className="tabular-nums">
+                        {perUnitCents === null
+                          ? "—"
+                          : formatSignedCents(perUnitCents)}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-4">
+                      <dt>Order total{hasQuantity ? ` (${parsedQuantity})` : ""}</dt>
+                      <dd className="tabular-nums">
+                        {orderTotalCents === null
+                          ? "—"
+                          : formatSignedCents(orderTotalCents)}
+                      </dd>
+                    </div>
+                  </dl>
+                  {perUnitCents !== null && perUnitCents <= 0 && (
+                    <p className="mt-2">
+                      At or below material cost — each unit earns $0 or less.
+                      You can still create this order.
+                    </p>
+                  )}
+                </div>
+              )}
 
-        <SubmitButton busy={submitting} busyLabel="Creating…">
-          Create Sales Order
-        </SubmitButton>
-      </FormCard>
+              <DialogFooter>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Sales Order"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
-      <CollapsibleSection title="sales orders" count={salesOrders.length}>
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <Table>
-          <THead>
-            <Th>Order</Th>
-            <Th>Part</Th>
-            <Th numeric>Ordered</Th>
-            <Th numeric>Allocated</Th>
-            <Th numeric>Remaining</Th>
-            <Th numeric>Unit price</Th>
-            <Th numeric>Throughput/unit</Th>
-            <Th />
-          </THead>
-          <tbody>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead>Order</TableHead>
+              <TableHead>Part</TableHead>
+              <TableHead className="text-right">Ordered</TableHead>
+              <TableHead className="text-right">Allocated</TableHead>
+              <TableHead className="text-right">Remaining</TableHead>
+              <TableHead className="text-right">Unit price</TableHead>
+              <TableHead className="text-right">Throughput/unit</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {salesOrders.map((salesOrder) => {
               const part = partById.get(salesOrder.partId);
               const remaining = remainingQty(salesOrder);
@@ -270,41 +317,49 @@ export default function SalesOrdersPage() {
                   )
                 : null;
               return (
-                <Tr key={salesOrder.id}>
-                  <Td className="font-medium">{salesOrder.orderNumber}</Td>
-                  <Td>{part ? `${part.partNumber} · ${part.name}` : "—"}</Td>
-                  <Td numeric>{salesOrder.quantity}</Td>
-                  <Td numeric>{allocatedQty(salesOrder)}</Td>
-                  <Td
-                    numeric
-                    className={
-                      remaining > 0 ? "text-slate-900" : "text-slate-400"
-                    }
+                <TableRow key={salesOrder.id}>
+                  <TableCell className="font-medium">
+                    {salesOrder.orderNumber}
+                  </TableCell>
+                  <TableCell>
+                    {part ? `${part.partNumber} · ${part.name}` : "—"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {salesOrder.quantity}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {allocatedQty(salesOrder)}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${
+                      remaining > 0 ? "" : "text-muted-foreground/60"
+                    }`}
                   >
                     {remaining}
-                  </Td>
-                  <Td numeric>{formatCents(salesOrder.unitPriceCents)}</Td>
-                  <Td
-                    numeric
-                    className={
-                      perUnit !== null && perUnit <= 0 ? "text-red-600" : ""
-                    }
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatCents(salesOrder.unitPriceCents)}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${
+                      perUnit !== null && perUnit <= 0 ? "text-destructive" : ""
+                    }`}
                   >
                     {perUnit === null ? "—" : formatSignedCents(perUnit)}
-                  </Td>
-                  <Td className="text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     <DeleteButton
                       label={salesOrder.orderNumber}
                       busy={deletingId === salesOrder.id}
                       onClick={() => runDelete(salesOrder, false)}
                     />
-                  </Td>
-                </Tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
+          </TableBody>
         </Table>
-      </CollapsibleSection>
+      </div>
 
       {pendingDelete && (
         <ConfirmDialog
@@ -327,16 +382,14 @@ export default function SalesOrdersPage() {
                 )}{" "}
                 units are allocated from:
               </p>
-              <ul className="mt-1 list-disc pl-5">
+              <ul>
                 {pendingDelete.allocations.map((link) => (
                   <li key={link.orderNumber}>
                     {link.orderNumber} ({link.quantity})
                   </li>
                 ))}
               </ul>
-              <p className="mt-2">
-                Those allocations are removed and the units become inventory.
-              </p>
+              <p>Those allocations are removed and the units become inventory.</p>
             </>
           }
         />
