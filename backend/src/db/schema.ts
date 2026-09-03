@@ -146,17 +146,27 @@ export const runWipParts = pgTable(
     runId: integer("run_id")
       .references(() => simulationRuns.id, { onDelete: "cascade" })
       .notNull(),
-    /** the engine's `WipPart.id`, and a draw key */
+    /** the engine's `WipPart.id` — row identity, not a draw key */
     partUuid: uuid("part_uuid").notNull(),
     workOrderId: integer("work_order_id")
       .references(() => workOrders.id, { onDelete: "restrict" })
       .notNull(),
+    /**
+     * 0-based position within its work order's quantity, and half the part's
+     * draw key — so it has to survive a reload for the run to replay. The
+     * unique constraint below is what makes the key name one part: a work
+     * order is released into a run at most once.
+     */
+    unitIndex: integer("unit_index").notNull(),
     releasedAtTick: integer("released_at_tick").notNull(),
     stepIndex: integer("step_index").notNull(),
     progressSeconds: integer("progress_seconds").notNull().default(0),
     actualProcessTimeSeconds: integer("actual_process_time_seconds").notNull(),
   },
-  (table) => [unique().on(table.runId, table.partUuid)],
+  (table) => [
+    unique().on(table.runId, table.partUuid),
+    unique().on(table.runId, table.workOrderId, table.unitIndex),
+  ],
 );
 
 /**

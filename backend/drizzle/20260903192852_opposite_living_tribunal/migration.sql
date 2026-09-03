@@ -1,0 +1,2 @@
+ALTER TABLE "run_wip_parts" ADD COLUMN "unit_index" integer NOT NULL;--> statement-breakpoint
+ALTER TABLE "run_wip_parts" ADD CONSTRAINT "run_wip_parts_run_id_work_order_id_unit_index_unique" UNIQUE("run_id","work_order_id","unit_index");

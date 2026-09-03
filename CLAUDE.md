@@ -80,9 +80,17 @@ under `environment: node`. The frontend keeps a copy until it switches over.
 Two rules the port established, and both matter to how failures surface:
 
 - Randomness is **not** drawn at call time. `sampleProcessTime` is a pure
-  function of `(seed, partId, stepIndex)`, so a run persists a single `rng_seed`
-  and nothing else — a replay or a fork reproduces every draw with no cursor to
-  restore. Don't reintroduce `Math.random()`.
+  function of `(seed, workOrderId, unitIndex, stepIndex)`, so a run persists a
+  single `rng_seed` and nothing else — a replay, a re-creation or a fork
+  reproduces every draw with no cursor to restore. Don't reintroduce
+  `Math.random()`, and **don't put the part's uuid or the run id in the draw
+  key**: uuids are minted fresh at every release, so keying on one (as the
+  engine did until 2026-09-03) means two runs created with the same seed draw
+  different noise and comparing them measures the dice rather than the
+  decision. `UNIQUE(run_id, work_order_id, unit_index)` is what makes the key
+  name exactly one part. Two parts of one work order differ only by
+  `unitIndex`, so a test giving both index 0 will see them move in lockstep —
+  a release numbers them 0..quantity-1.
 - A referenced-but-absent record **throws** (a work order's pinned steps, a step's work
   center, a finished part's work order, an allocation's sales order). A silent
   zero reads to a fork comparison as a policy that lost money rather than as a

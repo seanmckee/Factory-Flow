@@ -175,7 +175,12 @@ export function simulateTick(
     part.actualProcessTimeSeconds = sampleProcessTime(
       nextStep.processTimeSeconds,
       PROCESS_TIME_DEVIATION,
-      { seed: rngSeed, partId: part.id, stepIndex: nextIndex },
+      {
+        seed: rngSeed,
+        workOrderId: part.workOrderId,
+        unitIndex: part.unitIndex,
+        stepIndex: nextIndex,
+      },
     );
   }
 

@@ -214,22 +214,23 @@ export async function releaseWorkOrder(
         })),
       );
 
-      const newParts = Array.from({ length: workOrder.quantity }, () => {
-        const partUuid = crypto.randomUUID();
-        return {
+      const newParts = Array.from(
+        { length: workOrder.quantity },
+        (_, unitIndex) => ({
           runId,
-          partUuid,
+          partUuid: crypto.randomUUID(),
           workOrderId,
+          unitIndex,
           releasedAtTick: run.tickNum,
           stepIndex: 0,
           progressSeconds: 0,
           actualProcessTimeSeconds: sampleProcessTime(
             firstStep.processTimeSeconds,
             PROCESS_TIME_DEVIATION,
-            { seed: run.rngSeed, partId: partUuid, stepIndex: 0 },
+            { seed: run.rngSeed, workOrderId, unitIndex, stepIndex: 0 },
           ),
-        };
-      });
+        }),
+      );
 
       for (const slice of chunked(newParts)) {
         await tx.insert(runWipParts).values(slice);
@@ -282,6 +283,7 @@ export async function advanceRun(
               runId,
               partUuid: part.id,
               workOrderId: part.workOrderId,
+              unitIndex: part.unitIndex,
               releasedAtTick: part.releasedAtTick,
               stepIndex: part.stepIndex,
               progressSeconds: part.progressSeconds,
@@ -446,6 +448,7 @@ async function loadRunState(run: RunRow): Promise<RunState> {
   const wipParts: WipPart[] = storedParts.map((part) => ({
     id: part.partUuid,
     workOrderId: part.workOrderId,
+    unitIndex: part.unitIndex,
     releasedAtTick: part.releasedAtTick,
     stepIndex: part.stepIndex,
     progressSeconds: part.progressSeconds,

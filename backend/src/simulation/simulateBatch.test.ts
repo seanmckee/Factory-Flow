@@ -17,6 +17,7 @@ const workCenters = new Map<number, WorkCenter>([
 const part = (id: string, overrides: Partial<WipPart> = {}): WipPart => ({
   id,
   workOrderId: 10,
+  unitIndex: 0,
   releasedAtTick: 0,
   stepIndex: 0,
   progressSeconds: 0,
@@ -195,6 +196,68 @@ describe("simulateBatch", () => {
     expect(chunks.at(-1)?.tickNum).toBe(once.tickNum);
     expect(chunks.flatMap((b) => b.finishedParts)).toEqual(once.finishedParts);
     expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+  });
+
+  it("is the same run again from the same seed, whatever the part ids are", () => {
+    // the property the seed exists for. Part uuids are minted fresh at every
+    // release, so while they were the draw key a re-created run drew different
+    // noise and comparing two runs measured the dice, not the decision.
+    const batchWith = (ids: [string, string]) =>
+      simulateBatch(
+        state({
+          wipParts: [
+            part(ids[0], { unitIndex: 0 }),
+            part(ids[1], { unitIndex: 1 }),
+          ],
+        }),
+        30,
+      );
+
+    const first = batchWith(["a1", "a2"]);
+    const second = batchWith(["totally-different", "ids-entirely"]);
+
+    expect(second.ticks).toEqual(first.ticks);
+    expect(second.finishedParts.map((p) => p.completedAtTick)).toEqual(
+      first.finishedParts.map((p) => p.completedAtTick),
+    );
+    expect(second.finishedParts.map((p) => p.throughputCents)).toEqual(
+      first.finishedParts.map((p) => p.throughputCents),
+    );
+  });
+
+  it("gives two units of one work order their own draws", () => {
+    // same seed, same route, different unit index: the parts must not move in
+    // lockstep, or the variance that is the point of the model is gone. Needs
+    // two steps, because the only draw after release is at a transition.
+    const batch = simulateBatch(
+      state({
+        wipParts: [
+          part("p1", { unitIndex: 0 }),
+          part("p2", { unitIndex: 1 }),
+        ],
+        routingByWorkOrder: new Map([
+          [
+            10,
+            {
+              steps: [
+                { workCenterId: 10, processTimeSeconds: 5 },
+                { workCenterId: 20, processTimeSeconds: 1000 },
+              ],
+            },
+          ],
+        ]),
+        // capacity 2 so neither queues behind the other
+        workCenters: new Map([
+          [10, { id: 10, capacity: 2 }],
+          [20, { id: 20, capacity: 2 }],
+        ]),
+      }),
+      10,
+    );
+
+    const drawn = batch.wipParts.map((p) => p.actualProcessTimeSeconds);
+    expect(drawn).toHaveLength(2);
+    expect(drawn[0]).not.toBe(drawn[1]);
   });
 
   it("does nothing for a batch of zero ticks", () => {

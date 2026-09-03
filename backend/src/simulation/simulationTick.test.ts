@@ -25,6 +25,7 @@ const testWorkCenters = makeWorkCenters(1);
 const makeWipPart = (id: string, overrides: Partial<WipPart> = {}): WipPart => ({
   id,
   workOrderId: 1,
+  unitIndex: 0,
   releasedAtTick: 0,
   stepIndex: 0,
   progressSeconds: 0,
@@ -146,10 +147,12 @@ describe("simulateTick", () => {
         },
       ],
     ]);
+    // distinct unit indices, as a release assigns them: the unit index is what
+    // separates two parts' luck now that the draw key holds no uuid
     const result = simulateTick(
       [
-        makeWipPart("part-1", { progressSeconds: 4 }),
-        makeWipPart("part-2", { progressSeconds: 4 }),
+        makeWipPart("part-1", { unitIndex: 0, progressSeconds: 4 }),
+        makeWipPart("part-2", { unitIndex: 1, progressSeconds: 4 }),
       ],
       routings,
       1,

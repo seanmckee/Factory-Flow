@@ -11,9 +11,19 @@
 
 /** A part on the shop floor, mid-route. Persisted as `run_wip_parts`. */
 export type WipPart = {
-  /** uuid, unique within a run */
+  /**
+   * uuid, unique within a run. Row identity only — it is deliberately not an
+   * input to any draw, since a fresh uuid per release would mean the seed did
+   * not determine the run.
+   */
   id: string;
   workOrderId: number;
+  /**
+   * 0-based position within its work order's quantity, and half of this part's
+   * draw key. Stored, because it has to survive a reload for the run to stay
+   * reproducible.
+   */
+  unitIndex: number;
   /**
    * The tick this part was released onto the floor, carried for the whole of
    * its life so that cycle time is `completedAtTick - releasedAtTick`.

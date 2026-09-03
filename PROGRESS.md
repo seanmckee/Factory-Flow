@@ -8,12 +8,12 @@ that completes it.
 
 ---
 
-**You are here:** Tracks 1 and 2 done — the backend owns the engine and the
-tick reports what each work center did while it ran. Track 3 in progress: 3.1
-and 3.1b landed the schema and migration for run persistence, eight tables, and
-established the invariant that **a run reads its own config and never the live
-factory tables again**. The tables exist but nothing writes them; the frontend
-still runs its own copy of the engine until 3.4 deletes it.
+**You are here:** Tracks 1 and 2 done. Track 3 in progress: the schema exists
+and is **applied to Neon**, and the run service works end to end — verified
+against the dev database at 600 ticks in 1.3s, money matching its allocations
+and splitting across two sales orders at different prices. 3.2b then fixed the
+seed, which had never actually determined a run. Nothing is behind HTTP yet and
+the frontend still runs its own engine copy until 3.4 deletes it.
 
 **Next up:** 3.3 — routes. create / list / get / release / advance / delete,
 plus the **reset** that releases a lock left by a dead process, since 3.2 made
@@ -28,7 +28,8 @@ money only goes up today and "release everything" wins by default. Skippable
 until after the agent: 3.4, 3.5, Track 5, and most of Track 4 (fast-forward
 falls out of 3.2's load-once/write-once design). Track 7 forking is *not*
 load-bearing either — two runs from the same seed and config with different
-policies is already a valid comparison, since the RNG is a pure hash.
+policies is a valid comparison, **which is true only because of 3.2b**; before
+it, independently created runs drew different noise.
 
 ---
 
@@ -328,6 +329,36 @@ Where a run becomes a server-side object an agent can address.
       **Not exercised yet:** `runService` has never run. 20 tests cover
       `simulateBatch`; the service is typechecked only, and 3.3 is its first
       execution.
+- [x] 3.2b Fix the draw key, found by smoke-testing 3.2 against the dev
+      database (2026-09-03). Two runs created with the same seed and the same
+      release produced different completion ticks: the draw key was
+      `(seed, partUuid, stepIndex)` and part uuids are minted fresh at every
+      release, so **the seed never determined a run**. 1.2's claim that "a run
+      stores only `rng_seed` and a fork replays exactly" was true only for a
+      fork, which copies parts and so keeps their uuids — a re-creation drifted,
+      and comparing two independently created runs measured the dice rather
+      than the decision, which is the exact failure seeding was introduced to
+      prevent.
+      **Decided:** the key becomes `(seed, workOrderId, unitIndex, stepIndex)`.
+      `WipPart` gains `unitIndex`, stored as `run_wip_parts.unit_index`, and
+      the uuid stays as row identity only. `UNIQUE(run_id, work_order_id,
+      unit_index)` makes the key name exactly one part; the double-release
+      guard is what makes that hold. The run id is deliberately **not** in the
+      key — two runs agreeing on their noise is the point.
+      **Not fixed the same way:** deriving a deterministic uuid instead. It
+      hides the key in an opaque string and still needs the unit index to
+      compute, so it is the same column with worse ergonomics.
+      Verified against the database: two runs, same seed, entirely different
+      uuids, identical completions (19,23,26,30,35) and identical money.
+      **A test that gave false confidence:** `reproduces a run's draws from the
+      seed alone` passed the *same* uuid on both replays, so it could never
+      have caught this. The property now lives where it failed — `simulateBatch`
+      asserts two states with different part ids produce identical batches.
+      **Watch for:** two parts of one work order now differ only by
+      `unitIndex`, so a fixture giving both index 0 makes them move in
+      lockstep. That is what broke `draws independently per part` in
+      `simulationTick.test.ts`, whose parts are now numbered as a release
+      numbers them.
 - [ ] 3.3 Routes — create / list / get / release / advance / delete.
       **Open decision:** what "reset" means, and `work_orders.status` has never
       had a writer.

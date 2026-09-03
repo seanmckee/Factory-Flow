@@ -8,7 +8,8 @@ import {
 
 const key = (overrides: Partial<DrawKey> = {}): DrawKey => ({
   seed: 42,
-  partId: "11111111-1111-4111-8111-111111111111",
+  workOrderId: 10,
+  unitIndex: 0,
   stepIndex: 0,
   ...overrides,
 });
@@ -22,7 +23,8 @@ describe("unitDraw", () => {
     const base = unitDraw(key());
     expect(unitDraw(key({ seed: 43 }))).not.toBe(base);
     expect(unitDraw(key({ stepIndex: 1 }))).not.toBe(base);
-    expect(unitDraw(key({ partId: "other" }))).not.toBe(base);
+    expect(unitDraw(key({ workOrderId: 11 }))).not.toBe(base);
+    expect(unitDraw(key({ unitIndex: 1 }))).not.toBe(base);
   });
 
   it("stays in [0, 1)", () => {
@@ -80,5 +82,23 @@ describe("sampleProcessTime", () => {
 
     expect(replay(7)).toEqual(replay(7));
     expect(replay(7)).not.toEqual(replay(8));
+  });
+
+  it("draws the same for two units at the same position of the same order", () => {
+    // the key holds nothing minted at release, which is what the uuid version
+    // of this key got wrong: a re-created run drew fresh noise and a comparison
+    // against it measured the dice instead of the decision
+    const unit = (workOrderId: number, unitIndex: number) =>
+      [0, 1, 2].map((stepIndex) =>
+        sampleProcessTime(
+          60,
+          PROCESS_TIME_DEVIATION,
+          key({ workOrderId, unitIndex, stepIndex }),
+        ),
+      );
+
+    expect(unit(10, 3)).toEqual(unit(10, 3));
+    expect(unit(10, 3)).not.toEqual(unit(10, 4));
+    expect(unit(10, 3)).not.toEqual(unit(11, 3));
   });
 });
