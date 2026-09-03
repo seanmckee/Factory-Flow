@@ -40,15 +40,19 @@ Rather than optimizing individual machines, Factory Flow aims to simulate an ent
 
 **Simulation (`/`)**
 
-- Pure-function tick engine, unit-tested with vitest. It now lives in `backend/src/simulation/`; the page still drives an unchanged copy in `frontend/src/simulation/` until runs move server-side.
-- One tick = one simulated second, driven by a 1s interval on the page.
+- Pure-function tick engine, unit-tested with vitest, in `backend/src/simulation/`. There is exactly one copy of it: the frontend's was deleted when the page switched to driving a server-side run.
+- One tick = one simulated second. A run is advanced by `POST /api/runs/:id/advance {ticks}` — the page calls it once a second to watch in real time, and a caller wanting 5000 ticks asks for them and gets them in about ten seconds.
 - A work center runs up to its `capacity` in parallel (1 by default); parts already in service claim their centre first, idle parts take what's left. Queueing is implicit — unclaimed parts simply don't advance.
 - Process times are sampled per step as uniform ±30% around the routing's nominal time. The statistical variation is the model, not noise.
-- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Finished parts carry the tick they were released on, so cycle time measures queueing as well as processing, with a median and a 95th percentile alongside the mean. Engine-side so far; nothing displays it yet.
+- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Finished parts carry the tick they were released on, so cycle time measures queueing as well as processing, with a median and a 95th percentile alongside the mean. Stored per tick and readable over `GET /api/runs/:id/metrics?fromTick&toTick`; there is no dashboard for it yet. The window matters: one bottleneck read 10% utilization over a whole run and 52% over the ticks it was actually working.
 - **Throughput is measured in cents, not parts**: a finished unit earns `unit price − material cost` only if an allocation covers it. Finish order decides which sales order (and which price) a unit is credited to.
-- Live throughput chart: per-tick throughput → last 120 ticks → 60-tick trailing mean → cumulative.
+- Live throughput chart: the run's stored per-tick throughput, accumulated. The old trailing-mean smoothing is gone with the frontend engine.
 
-**Known limitation that shapes the roadmap:** the simulation is entirely ephemeral. Nothing about a run survives a page refresh — no state, no history, no results. Everything below starts from fixing that.
+**The limitation that shaped this roadmap is closed.** A run is a server-side object with an id: its parts, its per-tick observations, its finished units and the money each earned all persist, so a page refresh resumes the run where it was and results outlive the tab. Advancing writes once per batch of 500 ticks inside one transaction, so **a crash loses at most one batch** and never leaves a run half-written.
+
+A run also freezes the factory it was created with — each released work order pins the routing steps it will follow, and capacities are copied per run — so editing a routing or a machine count changes only runs created afterwards, and never re-plans a part already in motion. Randomness is a pure function of `(seed, work order, unit, step)`, so a run is reproducible from its seed alone: two runs created with the same seed and the same releases are identical, which is what lets two policies be compared on the decision rather than on the dice.
+
+**Still ephemeral:** which orders exist and what they pay is read live, not frozen per run. Completed history is safe — the money each finished unit earned is frozen as it is credited — but editing the order book mid-run changes what later units are worth.
 
 ---
 
@@ -56,29 +60,31 @@ Rather than optimizing individual machines, Factory Flow aims to simulate an ent
 
 The theme: go from _"a simulation that runs"_ to _"a system of record for simulated factories that you can experiment against and reason about."_
 
-### Phase 1 — Persistent factory state
+### Phase 1 — Persistent factory state — **delivered**
 
-The simulation should stop living only in React state.
+The simulation stopped living only in React state.
 
 - Persist WIP, work centre occupancy, queues, and part progress to the database.
 - A **simulation run** is a first-class record: created, named, resumable, deletable.
 - Reopening the app resumes a run where it left off instead of restarting from zero.
 - Multiple runs coexist against the same master data.
 
-### Phase 2 — Real time, not just ticks
+### Phase 2 — Real time, not just ticks — *partly delivered*
+
+The server owns advancing, so the physics no longer depend on a browser being open: a run is advanced in batches by request, and asking for 5000 ticks takes about ten seconds. What is missing is that **nothing advances a run unattended** — no clock, no speed control, and no calendar.
 
 - Move from "one tick = one interval callback" to a clock the run owns: simulated time advances against wall-clock time.
 - Speed control (pause, 1×, 10×, 100×, run-to-completion) without changing the physics.
 - A run continues advancing correctly whether or not anyone is watching it — the tick loop shouldn't be a UI concern.
 - A calendar on top of the clock: shifts, working days, and idle hours. Needed for Phase 4, because cost accrues against time whether or not anything is being produced.
 
-### Phase 3 — Event history and snapshots
+### Phase 3 — Event history and snapshots — *partly delivered*
 
-The record of _what happened_, which everything downstream reads from.
+The record of _what happened_, which everything downstream reads from. The time series exists — a row per tick with WIP, throughput and per-work-centre occupancy and queue depth, aggregating to utilization and cycle time over any window. The **event log does not**, and it is the half Phase 7 explains and Phase 8 predicts on.
 
 - **Production event history**: an append-only log of every meaningful event — job released, step started, step finished, part blocked/queued, work centre idled, order completed, order shipped, downtime started, money spent or earned.
 - **Factory snapshots**: periodic state captures with time-series metrics attached — WIP by work centre, queue lengths, utilisation, throughput (cents), operating expense to date, cash position, cycle time, on-time performance.
-- Snapshots are the checkpoints Phase 5 forks from; the event log is what Phase 7 explains and Phase 8 predicts on.
+- Snapshots are the checkpoints Phase 5 forks from; the event log is what Phase 7 explains and Phase 8 predicts on. Note that forking needs less than was assumed here: a run is reproducible from its seed, so a fork can copy a few rows rather than replay a log.
 
 ### Phase 4 — Operating expense and the P&L
 
@@ -169,7 +175,7 @@ Independent of the phases above, the domain model needs:
 - Multiple production lines.
 - Machine downtime and operator availability.
 - Due dates on orders (a prerequisite for both lateness prediction and late penalties).
-- Explicit queues, so queue dynamics can be measured rather than inferred.
+- Explicit queues. Queue *depth* is now measured per tick, per work centre, so the aggregate dynamics are no longer inferred — but queueing is still implicit in the engine (an unclaimed part simply doesn't advance), so there is nothing to reorder, prioritise, or measure a wait time from.
 - Shift calendars, wage rates, and per-work-centre cost rates as master data.
 
 ---
@@ -178,10 +184,14 @@ Independent of the phases above, the domain model needs:
 
 Decisions not yet made, recorded so they get made deliberately:
 
-- Where the tick loop lives once runs are persistent — client, server, or a worker.
-- Whether forking copies state or replays the event log from a checkpoint.
-- Snapshot granularity: every tick, every N ticks, or on state change.
-- Whether master data is versioned per run, or runs pin a revision of it.
+- Whether forking copies state or replays from a checkpoint. Leaning copy: a run's state is a handful of rows, and the seeded RNG means a copy replays identically without an event log to keep.
+- Whether a run should be able to edit its *own* factory config. It has the tables for it — capacities and pinned steps are per-run — but nothing writes them, so changing what the next release will pin still means editing the shared routing.
+
+Answered since, kept here because the answers shaped everything after them:
+
+- **Where the tick loop lives** — the server, in batches. It loads a run once, advances N ticks in memory and writes once per 500; the browser's 1s interval is a display clock that asks for one tick, not the loop itself. Per-tick writes would have made a Neon round trip out of every simulated second.
+- **Snapshot granularity** — per tick for observations (`run_ticks` plus a row per work centre), because WIP is mutable state and nothing else can say what it was at tick 300. WIP itself is replaced wholesale per batch, no snapshots.
+- **Master data versioned per run, or runs pin a revision** — runs pin, and pin per *work order* at release rather than per run, so a routing edit reaches only later releases while parts already in motion keep the steps they started with.
 - Whether cost rates are master data or per-run configuration — a fork that buys a machine changes the factory's cost structure, so at minimum the delta has to belong to the run and not to the shared master data.
 - Whether capital spend is amortised or charged as a lump at the moment of purchase. Lump is simpler and makes payback period obvious; amortised makes the daily P&L less lumpy.
 

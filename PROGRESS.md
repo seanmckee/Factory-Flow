@@ -8,17 +8,16 @@ that completes it.
 
 ---
 
-**You are here:** Track 3 is done. The engine, the runs and the API all live in
-the backend, and the frontend drives a real run — **its engine copy is
-deleted**, so there is one simulator again. Verified in a browser: create a run,
-release, watch it tick, switch runs and resume. Only 3.5's doc sweep is left in
-the track.
+**You are here:** **Track 3 is complete.** The engine, runs, and API live in
+the backend; the frontend drives a real run and its engine copy is deleted;
+the docs no longer claim the simulation is ephemeral. Verified in a browser
+end to end.
 
-**Next up:** 3.5 — the doc sweep. `CLAUDE.md` is already updated as each unit
-landed, so what is left is the README's "entirely ephemeral" limitation, its
-still-to-build list, and writing down that a crash loses at most one batch of
-ticks. Then Track 5's dashboard, or Track 6 if the score mattering more than
-the charts wins.
+**Next up:** Track 5 (the metrics dashboard) or Track 6 (operating expense).
+Track 6 is what makes the score able to go down and so what makes an agent's
+objective non-degenerate; Track 5 is what lets a human see whether a run is
+behaving. Track 4 is largely already delivered — what remains of it is a speed
+control, which belongs with Track 5's UI work.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -446,18 +445,30 @@ Where a run becomes a server-side object an agent can address.
       now. **Every curl test had run against runs that had already advanced**,
       so nothing headless would have caught it; the lesson is that "create then
       read" is its own case.
-- [ ] 3.5 Update `CLAUDE.md` and the README's "entirely ephemeral" limitation.
-      Document that a crash loses at most one batch of ticks.
-
-**Decided, Track 3** (2026-09-03): routings **are** snapshotted into the run at
-release time, as `run_routing_steps` in 3.1. `PUT /api/routings/:id/steps`
-replaces a routing's steps wholesale, and the docs' claim that an in-flight run
-"keeps the routing it was released with" was only ever a frontend caching
-accident — a backend engine reading `routing_steps` each tick would re-plan live
-parts mid-route, and shortening a list would strand parts past its end (see the
-latent bug below). The snapshot makes the documented guarantee real, and is what
-Track 7 needs for a fork to mean "same state, new branch". 3.2 owns the
-copy-on-release.
+- [x] 3.5 Doc sweep. `CLAUDE.md` was kept current unit by unit, so this is the
+      README: the "entirely ephemeral" limitation is **closed** and replaced by
+      what persistence actually bought (a run resumes, a crash loses at most one
+      batch of 500 ticks, a run freezes the factory it started with, a run is
+      reproducible from its seed) — plus what is **still** ephemeral, which is
+      the order book: prices are read live, so completed history is safe but
+      editing demand mid-run changes what later units are worth.
+      Also corrected: the frontend engine copy (deleted), the trailing-mean
+      chart pipeline (gone), and "nothing displays it yet" for metrics (now
+      readable over the API, no dashboard until Track 5). Phases 1-3 marked
+      delivered or partly delivered, with what is missing named — Phase 2 has
+      no unattended clock and no speed control; Phase 3 has the time series but
+      no event log.
+      **Three of the README's open questions moved to answered**, kept on the
+      page because the answers shaped what came after: where the tick loop
+      lives (the server, in batches; the browser interval is a display clock),
+      snapshot granularity (per tick for observations, WIP replaced wholesale
+      per batch), and master data versioning (runs pin, per *work order* at
+      release). "Explicit queues" was narrowed rather than deleted: queue depth
+      is measured now, but queueing is still implicit in the engine, so there
+      is nothing to reorder or prioritise. Two questions were added: whether a
+      run should be able to edit its own config, and it is noted that forking
+      needs less than the README assumed — a seeded run can be copied rather
+      than replayed from a log.
 
 ## Track 4 onward — re-plan when reached
 
