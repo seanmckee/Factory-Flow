@@ -1,22 +1,21 @@
 import { Factory } from "lucide-react";
-import type { WorkCenterView } from "../types/WorkCenter";
+import type { FloorWorkCenter } from "../api/runs";
 
-type WorkCenterCardProps = {
-  id: number;
-  name: string;
-  capacity: number;
-  workCenterData: WorkCenterView;
-  onCapacityChange: (id: number, capacity: number) => void;
-};
-
-function WorkCenterCard({
-  id,
-  name,
-  capacity,
-  workCenterData,
-  onCapacityChange,
-}: WorkCenterCardProps) {
-  const { partsAtStation, slots, slotsInUse, utilization } = workCenterData;
+/**
+ * One work center on the floor of the run being watched.
+ *
+ * Capacity is read-only here. A run freezes the capacities it was created
+ * with, so editing the live work center would change nothing about the run on
+ * screen — the number shown is the run's own. Change it in Factory Setup and
+ * it applies to the next run created.
+ *
+ * There is no "% utilized" any more either. It used to show
+ * `slotsInUse / capacity`, which for one machine can only read 0% or 100% and
+ * flickers between them every few ticks; utilization is a rate over a window
+ * and lives on the run's metrics, not on a snapshot of one instant.
+ */
+function WorkCenterCard({ center }: { center: FloorWorkCenter }) {
+  const { name, capacity, partsAtStation, slots, slotsInUse } = center;
   const isRunning = slotsInUse > 0;
   const waiting = Math.max(0, partsAtStation - slotsInUse);
 
@@ -47,24 +46,13 @@ function WorkCenterCard({
           {isRunning ? "Running" : "Starved"}
         </span>
         <span className="text-slate-500 tabular-nums">
-          {Math.round(utilization * 100)}% utilized
+          {slotsInUse}/{capacity} machines
         </span>
       </div>
 
       <div className="text-sm text-slate-500 tabular-nums">
         {partsAtStation} at station · {waiting} waiting
       </div>
-
-      <label className="flex gap-2 items-center text-sm text-slate-600">
-        Machines
-        <input
-          type="number"
-          min={1}
-          value={capacity}
-          onChange={(e) => onCapacityChange(id, Number(e.target.value))}
-          className="w-16 border border-slate-300 rounded-lg p-1 bg-white tabular-nums"
-        />
-      </label>
     </div>
   );
 }

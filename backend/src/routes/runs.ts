@@ -184,8 +184,9 @@ router.delete("/:id", async (req, res) => {
     const params = parseOr400(idParamSchema, req.params, res);
     if (!params) return;
 
-    await deleteRun(params.id);
-    res.status(204).send();
+    // 200 with the row, as every other delete in the API does — the client's
+    // `deleteJson` parses a body
+    res.json(await deleteRun(params.id));
   } catch (error) {
     fail(res, error, "Error deleting run");
   }

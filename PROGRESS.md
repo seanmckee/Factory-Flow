@@ -8,22 +8,17 @@ that completes it.
 
 ---
 
-**You are here:** Track 3 is done bar the frontend. The run API is live and
-exercised over HTTP — create, release, advance, read metrics over a tick
-window, unlock, delete — with the schema applied to Neon. **An agent can drive
-the simulation now.** What is left in the track is 3.4, deleting the frontend's
-engine copy, and 3.5's doc sweep.
+**You are here:** Track 3 is done. The engine, the runs and the API all live in
+the backend, and the frontend drives a real run — **its engine copy is
+deleted**, so there is one simulator again. Verified in a browser: create a run,
+release, watch it tick, switch runs and resume. Only 3.5's doc sweep is left in
+the track.
 
-**Next up:** 3.4 — the frontend switchover and the deletion of its engine
-copy, one commit, so two engines never coexist untested. Decided to work the
-ledger in order (2026-09-03) rather than jumping to Track 6: the UI currently
-runs its own in-browser simulation sharing no state with a real run, and the
-frontend engine copy has none of Tracks 2, 3.2b or the shortened-route fix, so
-every further unit widens the gap. Note Track 4 is largely already delivered —
-`advance {ticks}` did 3000 ticks in ~2s — leaving only a UI speed control,
-which needs 3.4 first. The one ordering cost, noted deliberately: Track 5's
-dashboard lands before Track 6 adds cost and profit, so it will need extending
-once.
+**Next up:** 3.5 — the doc sweep. `CLAUDE.md` is already updated as each unit
+landed, so what is left is the README's "entirely ephemeral" limitation, its
+still-to-build list, and writing down that a crash loses at most one batch of
+ticks. Then Track 5's dashboard, or Track 6 if the score mattering more than
+the charts wins.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -422,9 +417,35 @@ Where a run becomes a server-side object an agent can address.
       Exercised over HTTP: floor at tick 0 and mid-run (`Drill Press 2/2
       slots=[67, 50]`, 16 parts queued at Raw Material), the series whole and
       windowed, and 404s.
-- [ ] 3.4 Frontend switchover **and** deletion of the frontend engine, one
-      commit, so two engines never coexist untested. `cumulativeThroughput.ts`
-      stays — it's a chart transform, not physics.
+- [x] 3.4 Frontend switchover **and** deletion of the frontend engine, one
+      commit, so two engines never coexist untested. `simulationTick.ts`,
+      `calculateThroughput.ts`, `sampleProcessTime.ts`, `smoothThroughput.ts`
+      (already dead) and both their test files are gone, along with
+      `types/WipPart.ts` and `WorkCenterView`. `cumulativeThroughput.ts` stays
+      — a chart transform, not physics.
+      The page now picks or creates a run, releases into it and advances it a
+      tick a second over HTTP, holding no simulation state: a reload resumes
+      the same run, and stopping is client-side only, so switching runs parks
+      one and resumes another exactly where it stopped.
+      **Decided:** an `advancing` ref skips a beat rather than queueing when a
+      request is still in flight. The server lock makes an overlapping advance
+      a 409, and the interval is a display clock, not a queue.
+      **Decided:** capacity on the cards is read-only, and the "% utilized"
+      figure is gone. A run's capacity is frozen, so editing the live work
+      center would have changed nothing on screen — a knob that does nothing is
+      worse than no knob — and `slotsInUse / capacity` on one machine can only
+      read 0% or 100%, which is not what utilization means.
+      **Decided:** `DELETE /api/runs/:id` returns `200 { id, name }`, not 204,
+      matching every other delete in the API, because the client's `deleteJson`
+      parses a body. A correction to 3.3.
+      **Bug found by driving it in a browser, fixed here:** every call on a
+      *fresh* run 400'd with "toTick 0 is before fromTick 1". Ticks number from
+      1, so a run at tick 0 spans nothing, and both aggregates already answer
+      an empty window with zeroes and nulls — the guard was wrong, not the
+      request. Only a window the caller explicitly asks for backwards is a 400
+      now. **Every curl test had run against runs that had already advanced**,
+      so nothing headless would have caught it; the lesson is that "create then
+      read" is its own case.
 - [ ] 3.5 Update `CLAUDE.md` and the README's "entirely ephemeral" limitation.
       Document that a crash loses at most one batch of ticks.
 
@@ -452,11 +473,12 @@ copy-on-release.
 - [ ] Track 8 `feat/agent` — tool layer: create, advance, fork, read metrics,
       compare.
 
-## Known latent bug
+## Fixed latent bug
 
-Shortening a routing's step list strands in-flight parts with
-`stepIndex >= steps.length`. The frontend's `simulationTick.ts` indexes
-`steps[stepIndex]` at four sites with no guard and has `strict` off, so this is
-a live crash reachable through the routing editor. The backend port handles it
-(1.2: the stranded part finishes at the current tick), but the frontend engine
-keeps the bug until 3.4 deletes it.
+Shortening a routing's step list stranded in-flight parts with
+`stepIndex >= steps.length`, and the frontend's `simulationTick.ts` indexed
+`steps[stepIndex]` at four sites with no guard, with `strict` off — a live
+crash reachable through the routing editor. Closed for good in 3.4: the backend
+engine finishes such a part at the current tick (1.2), `deriveFloorView` puts it
+on no machine (3.4a), the routing edit no longer reaches a released part at all
+(3.1b), and the frontend engine that carried the bug is deleted (3.4).

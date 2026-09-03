@@ -183,15 +183,28 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 
 `src/data/*.ts` are stale unused fixtures that no longer match the current types. Don't use them as a reference.
 
-### Simulation engine (`src/simulation/`)
+### Driving a run (`src/pages/SimulationPage.tsx`)
 
-All engine logic is pure functions, unit-tested with vitest under a `node` environment (no jsdom, no component tests). `SimulationPage` is the only stateful driver: a `setInterval(…, 1000)` calls `simulateTick` once per real second, so **one tick = one simulated second**.
+**The frontend has no engine.** It was deleted when the page switched over;
+`src/simulation/` holds only `cumulativeThroughput.ts`, a chart transform. Don't
+reintroduce simulation logic here — the backend owns it, and two copies drifted
+badly the one time they coexisted.
 
-`simulateTick(wipParts, routings, tickNum)` invariants:
+The page drives a server-side run: it picks or creates one, releases work
+orders into it, and a `setInterval(…, 1000)` calls
+`POST /api/runs/:id/advance {ticks: 1}`, so **one tick = one simulated second**
+as before. It holds no simulation state — WIP, money and the tick number are
+the run's, so a reload resumes the same run and two tabs cannot disagree.
+Advancing holds a server-side lock, so an overlapping call is a 409; an
+`advancing` ref skips a beat rather than queueing one, the interval being a
+display clock. Stopping is client-side only: the run keeps its state and
+resumes where it left off.
 
-- A work center runs up to `capacity` parts at once — the column defaults to 1 and is editable from the simulation page, so don't treat 1 as an invariant. Claiming happens in two passes: parts already in service (`progressSeconds > 0`) claim their work center first, then idle parts take whatever machines remain free. Unclaimed parts simply don't advance that tick — queueing is implicit, there is no queue data structure.
-- A part completing its last step is pushed to `finishedParts` with `completedAtTick` and marked `stepIndex = -1`, which the final `filter` uses to drop it from WIP.
-- On each step transition a fresh `actualProcessTimeSeconds` is drawn from `sampleProcessTime(nominal, 0.3)` — uniform ±30% around the routing's nominal time, floored at 1. This statistical variation is the point of the model, not noise to be removed.
+Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
+through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
+capacity read-only — editing the live work center would change nothing about a
+run already created — and no longer shows a "% utilized", which was
+`slotsInUse / capacity` and could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 

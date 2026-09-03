@@ -490,6 +490,28 @@ async function loadRunState(run: RunRow): Promise<RunState> {
   };
 }
 
+/**
+ * Resolves an optional tick window against how far a run has got. Ticks are
+ * numbered from 1, so a run that has never advanced spans nothing — and that
+ * is not an error: `aggregateMetrics` and `aggregateCycleTime` both answer an
+ * empty window with zeroes and nulls, and a run is created before it is
+ * advanced, so the page reads one at tick 0 every time.
+ *
+ * Only a window the caller *asked* for backwards is a 400. Defaulting `to` to
+ * tick 0 on a fresh run is the API's own doing and must not be blamed on the
+ * request.
+ */
+function tickWindow(
+  fromTick: number | undefined,
+  toTick: number | undefined,
+  tickNum: number,
+): { from: number; to: number } {
+  if (fromTick !== undefined && toTick !== undefined && toTick < fromTick) {
+    throw new HttpError(400, `toTick ${toTick} is before fromTick ${fromTick}`);
+  }
+  return { from: fromTick ?? 1, to: toTick ?? tickNum };
+}
+
 export type RunSummary = RunRow & {
   wipCount: number;
   finishedCount: number;
@@ -576,11 +598,7 @@ export async function getRunMetrics(
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const from = fromTick ?? 1;
-  const to = toTick ?? run.tickNum;
-  if (to < from) {
-    throw new HttpError(400, `toTick ${to} is before fromTick ${from}`);
-  }
+  const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
 
   const tickRows = await db
     .select()
@@ -693,7 +711,7 @@ export async function unlockRun(runId: number): Promise<RunRow> {
  * the `parent_run_id` RESTRICT surfaces as a 409 with our own message rather
  * than a constraint error.
  */
-export async function deleteRun(runId: number): Promise<void> {
+export async function deleteRun(runId: number): Promise<{ id: number; name: string }> {
   const forks = await db
     .select({ id: simulationRuns.id })
     .from(simulationRuns)
@@ -711,8 +729,9 @@ export async function deleteRun(runId: number): Promise<void> {
   const [deleted] = await db
     .delete(simulationRuns)
     .where(eq(simulationRuns.id, runId))
-    .returning({ id: simulationRuns.id });
+    .returning({ id: simulationRuns.id, name: simulationRuns.name });
   if (!deleted) throw new HttpError(404, `Run ${runId} not found`);
+  return deleted;
 }
 
 export type RunFloor = {
@@ -786,11 +805,7 @@ export async function getRunTicks(
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const from = fromTick ?? 1;
-  const to = toTick ?? run.tickNum;
-  if (to < from) {
-    throw new HttpError(400, `toTick ${to} is before fromTick ${from}`);
-  }
+  const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
 
   const rows = await db
     .select({
