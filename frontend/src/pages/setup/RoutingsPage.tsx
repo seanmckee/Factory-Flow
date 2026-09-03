@@ -1,14 +1,36 @@
 import { Fragment, useState } from "react";
+import { Plus } from "lucide-react";
 import { deleteJson, getJson, patchJson, postJson, putJson } from "../../api/client";
 import { useSetupData } from "../../setup/SetupDataContext";
 import { useToast } from "../../toast/ToastContext";
+import PageHeader from "../../components/PageHeader";
+import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FormCard,
-  SubmitButton,
-  inputClass,
-} from "../../components/ui/Form";
-import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import InlineInput from "../../components/ui/InlineInput";
 import StepEditor from "../../components/setup/StepEditor";
@@ -28,6 +50,7 @@ export default function RoutingsPage() {
     useSetupData();
   const { showToast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
   const [partId, setPartId] = useState("");
   const [name, setName] = useState("");
   const [revision, setRevision] = useState("A");
@@ -72,6 +95,7 @@ export default function RoutingsPage() {
       setName("");
       setRevision("A");
       setNewSteps([emptyStep()]);
+      setCreateOpen(false);
     } catch (submitError) {
       showToast(
         submitError instanceof Error
@@ -208,82 +232,105 @@ export default function RoutingsPage() {
     }
   };
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold">Routings</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        The ordered operations a part goes through. Step order is the route
-        through the factory, and the slowest step is what constrains it.
-      </p>
+    <div className="flex h-full min-h-0 max-w-6xl flex-col">
+      <PageHeader
+        title="Routings"
+        description="The ordered operations a part goes through. The slowest step is what constrains the route."
+      >
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button disabled={workCenters.length === 0}>
+              <Plus className="size-4" /> New Routing
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>New routing</DialogTitle>
+                <DialogDescription>
+                  Step order is the route through the factory. The server
+                  numbers steps from the order below.
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <Field label="Part">
+                  <Select
+                    value={partId}
+                    onValueChange={(value) => setPartId(value)}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a part" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {parts.map((part) => (
+                        <SelectItem key={part.id} value={String(part.id)}>
+                          {part.partNumber} · {part.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+
+                <Field label="Name">
+                  <Input
+                    type="text"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="Standard Rail Process"
+                  />
+                </Field>
+
+                <Field label="Revision">
+                  <Input
+                    type="text"
+                    value={revision}
+                    onChange={(event) => setRevision(event.target.value)}
+                  />
+                </Field>
+              </div>
+
+              <Field label="Steps">
+                <StepEditor
+                  steps={newSteps}
+                  workCenters={workCenters}
+                  disabled={submitting}
+                  onChange={setNewSteps}
+                />
+              </Field>
+
+              <DialogFooter>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Routing"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
       {workCenters.length === 0 && (
-        <p className="mt-4 text-sm text-red-600">
+        <p className="pb-4 text-sm text-destructive">
           There are no work centers yet — create one before building a routing.
         </p>
       )}
 
-      <FormCard onSubmit={submit}>
-        <Field label="Part">
-          <select
-            value={partId}
-            onChange={(event) => setPartId(event.target.value)}
-            className={inputClass}
-          >
-            <option value="">Select a part</option>
-            {parts.map((part) => (
-              <option key={part.id} value={part.id}>
-                {part.partNumber} · {part.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <Field label="Name">
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Standard Rail Process"
-            className={inputClass}
-          />
-        </Field>
-
-        <Field label="Revision">
-          <input
-            type="text"
-            value={revision}
-            onChange={(event) => setRevision(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
-
-        <Field label="Steps">
-          <StepEditor
-            steps={newSteps}
-            workCenters={workCenters}
-            disabled={submitting}
-            onChange={setNewSteps}
-          />
-        </Field>
-
-        <SubmitButton busy={submitting} busyLabel="Creating…">
-          Create Routing
-        </SubmitButton>
-      </FormCard>
-
-      <div className="mt-6">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <Table>
-          <THead>
-            <Th>Part</Th>
-            <Th>Name</Th>
-            <Th>Revision</Th>
-            <Th numeric>Steps</Th>
-            <Th />
-          </THead>
-          <tbody>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead>Part</TableHead>
+              <TableHead>Name</TableHead>
+              <TableHead>Revision</TableHead>
+              <TableHead className="text-right">Steps</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {routings.map((routing) => {
               const editing = draft?.id === routing.id ? draft : null;
               const part = partById.get(routing.partId);
@@ -292,9 +339,11 @@ export default function RoutingsPage() {
                 // Fragment, not an array: the expanded editor is a second row
                 // and React wants one key for the pair
                 <Fragment key={routing.id}>
-                  <Tr>
-                    <Td>{part ? `${part.partNumber} · ${part.name}` : "—"}</Td>
-                    <Td>
+                  <TableRow>
+                    <TableCell>
+                      {part ? `${part.partNumber} · ${part.name}` : "—"}
+                    </TableCell>
+                    <TableCell>
                       <InlineInput
                         type="text"
                         aria-label={`Rename ${routing.name}`}
@@ -313,8 +362,8 @@ export default function RoutingsPage() {
                         onBlur={() => commitEdit(routing)}
                         className="w-full"
                       />
-                    </Td>
-                    <Td>
+                    </TableCell>
+                    <TableCell>
                       <InlineInput
                         type="text"
                         aria-label={`Revision for ${routing.name}`}
@@ -333,42 +382,42 @@ export default function RoutingsPage() {
                         onBlur={() => commitEdit(routing)}
                         className="w-20"
                       />
-                    </Td>
-                    <Td
-                      numeric
-                      className={
+                    </TableCell>
+                    <TableCell
+                      className={`text-right tabular-nums ${
                         routing.stepCount === 0
-                          ? "text-red-600"
-                          : "text-slate-500"
-                      }
+                          ? "text-destructive"
+                          : "text-muted-foreground"
+                      }`}
                     >
                       {routing.stepCount}
-                    </Td>
-                    <Td className="text-right">
+                    </TableCell>
+                    <TableCell className="text-right">
                       <div className="flex justify-end gap-1">
-                        <button
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="sm"
                           aria-expanded={open}
                           disabled={busyId === routing.id}
                           onClick={() => toggleSteps(routing)}
-                          className="rounded px-2 py-1 text-blue-600 hover:bg-blue-50 disabled:opacity-50"
                         >
                           {open ? "Close" : "Edit steps"}
-                        </button>
+                        </Button>
                         <DeleteButton
                           label={routing.name}
                           busy={busyId === routing.id}
                           onClick={() => runDelete(routing)}
                         />
                       </div>
-                    </Td>
-                  </Tr>
+                    </TableCell>
+                  </TableRow>
 
                   {open && (
-                    <Tr>
-                      <Td className="bg-slate-50" colSpan={5}>
+                    <TableRow className="hover:bg-transparent">
+                      <TableCell className="bg-muted/30 p-4" colSpan={5}>
                         {loadingSteps ? (
-                          <p className="text-slate-500">Loading steps…</p>
+                          <p className="text-muted-foreground">Loading steps…</p>
                         ) : (
                           <div className="flex flex-col gap-3">
                             <StepEditor
@@ -377,23 +426,24 @@ export default function RoutingsPage() {
                               disabled={busyId === routing.id}
                               onChange={setEditSteps}
                             />
-                            <button
+                            <Button
                               type="button"
+                              size="sm"
                               disabled={busyId === routing.id}
                               onClick={() => saveSteps(routing)}
-                              className="self-start bg-blue-500 text-white p-2 rounded-lg disabled:opacity-50"
+                              className="self-start"
                             >
                               {busyId === routing.id ? "Saving…" : "Save steps"}
-                            </button>
+                            </Button>
                           </div>
                         )}
-                      </Td>
-                    </Tr>
+                      </TableCell>
+                    </TableRow>
                   )}
                 </Fragment>
               );
             })}
-          </tbody>
+          </TableBody>
         </Table>
       </div>
     </div>

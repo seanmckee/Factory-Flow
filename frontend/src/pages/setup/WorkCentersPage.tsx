@@ -1,14 +1,29 @@
 import { useState } from "react";
+import { Plus } from "lucide-react";
 import { deleteJson, patchJson, postJson } from "../../api/client";
 import { useSetupData } from "../../setup/SetupDataContext";
 import { useToast } from "../../toast/ToastContext";
+import PageHeader from "../../components/PageHeader";
+import { Button } from "@/components/ui/button";
 import {
-  Field,
-  FormCard,
-  SubmitButton,
-  inputClass,
-} from "../../components/ui/Form";
-import { Table, THead, Th, Tr, Td } from "../../components/ui/Table";
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import InlineInput from "../../components/ui/InlineInput";
 import type { WorkCenter } from "../../types/WorkCenter";
@@ -20,6 +35,7 @@ export default function WorkCentersPage() {
   const { workCenters, loading, error, refetchWorkCenters } = useSetupData();
   const { showToast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("1");
   const [submitting, setSubmitting] = useState(false);
@@ -48,6 +64,7 @@ export default function WorkCentersPage() {
       showToast(`Created ${created.name}`);
       setName("");
       setCapacity("1");
+      setCreateOpen(false);
     } catch (submitError) {
       showToast(
         submitError instanceof Error
@@ -149,62 +166,75 @@ export default function WorkCentersPage() {
     }
   };
 
-  if (loading) return <p className="text-slate-500">Loading…</p>;
-  if (error) return <p className="text-red-600">{error}</p>;
+  if (loading) return <p className="text-muted-foreground">Loading…</p>;
+  if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="max-w-5xl">
-      <h1 className="text-2xl font-bold">Work Centers</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        Machines parts queue for. A center with more machines can process that
-        many parts at once — the lever for elevating a bottleneck.
-      </p>
+    <div className="flex h-full min-h-0 max-w-5xl flex-col">
+      <PageHeader
+        title="Work Centers"
+        description="Machines parts queue for. More machines at a center is the lever for elevating a bottleneck."
+      >
+        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="size-4" /> New Work Center
+            </Button>
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <form onSubmit={submit} className="flex flex-col gap-4">
+              <DialogHeader>
+                <DialogTitle>New work center</DialogTitle>
+                <DialogDescription>
+                  Nothing routes to it until a routing step uses it, so it stays
+                  idle on the simulator until then.
+                </DialogDescription>
+              </DialogHeader>
 
-      <FormCard onSubmit={submit}>
-        <Field label="Name">
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Heat Treat"
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Name">
+                <Input
+                  type="text"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  placeholder="Heat Treat"
+                />
+              </Field>
 
-        <Field label="Machines">
-          <input
-            type="number"
-            min={1}
-            step={1}
-            value={capacity}
-            onChange={(event) => setCapacity(event.target.value)}
-            className={inputClass}
-          />
-        </Field>
+              <Field label="Machines">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={capacity}
+                  onChange={(event) => setCapacity(event.target.value)}
+                />
+              </Field>
 
-        <SubmitButton busy={submitting} busyLabel="Creating…">
-          Create Work Center
-        </SubmitButton>
-      </FormCard>
+              <DialogFooter>
+                <Button type="submit" disabled={submitting}>
+                  {submitting ? "Creating…" : "Create Work Center"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </PageHeader>
 
-      <p className="mt-6 text-sm text-slate-500">
-        Nothing routes to a new work center until a routing step uses it, so it
-        stays idle on the simulator until then.
-      </p>
-
-      <div className="mt-2">
+      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
         <Table>
-          <THead>
-            <Th>Name</Th>
-            <Th numeric>Machines</Th>
-            <Th />
-          </THead>
-          <tbody>
+          <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead className="text-right">Machines</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {workCenters.map((workCenter) => {
               const editing = draft?.id === workCenter.id ? draft : null;
               return (
-                <Tr key={workCenter.id}>
-                  <Td>
+                <TableRow key={workCenter.id}>
+                  <TableCell>
                     <InlineInput
                       type="text"
                       aria-label={`Rename ${workCenter.name}`}
@@ -219,8 +249,8 @@ export default function WorkCentersPage() {
                       onBlur={() => commitEdit(workCenter)}
                       className="w-full"
                     />
-                  </Td>
-                  <Td className="text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     <InlineInput
                       type="number"
                       numeric
@@ -241,18 +271,18 @@ export default function WorkCentersPage() {
                       onBlur={() => commitEdit(workCenter)}
                       className="w-20"
                     />
-                  </Td>
-                  <Td className="text-right">
+                  </TableCell>
+                  <TableCell className="text-right">
                     <DeleteButton
                       label={workCenter.name}
                       busy={busyId === workCenter.id}
                       onClick={() => runDelete(workCenter)}
                     />
-                  </Td>
-                </Tr>
+                  </TableCell>
+                </TableRow>
               );
             })}
-          </tbody>
+          </TableBody>
         </Table>
       </div>
     </div>

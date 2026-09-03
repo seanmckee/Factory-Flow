@@ -1,13 +1,48 @@
 import { NavLink } from "react-router-dom";
+import type { LucideIcon } from "lucide-react";
+import {
+  ClipboardList,
+  Factory,
+  Gauge,
+  Package,
+  Route,
+  ShoppingCart,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 
-const linkClass = ({ isActive }: { isActive: boolean }) =>
-  isActive
-    ? "block px-3 py-2 rounded-md font-medium bg-slate-200 text-slate-900"
-    : "block px-3 py-2 rounded-md font-medium text-slate-600 hover:bg-slate-100";
+function Item({
+  to,
+  end,
+  icon: Icon,
+  children,
+}: {
+  to: string;
+  end?: boolean;
+  icon: LucideIcon;
+  children: string;
+}) {
+  return (
+    <NavLink
+      to={to}
+      end={end}
+      className={({ isActive }) =>
+        cn(
+          "flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground",
+        )
+      }
+    >
+      <Icon className="size-4 shrink-0" />
+      {children}
+    </NavLink>
+  );
+}
 
 function SectionLabel({ children }: { children: string }) {
   return (
-    <p className="px-3 pt-4 pb-1 text-xs uppercase tracking-wide text-slate-400">
+    <p className="px-3 pb-1 pt-5 text-xs font-medium uppercase tracking-wider text-muted-foreground/70">
       {children}
     </p>
   );
@@ -15,31 +50,36 @@ function SectionLabel({ children }: { children: string }) {
 
 function Navbar() {
   return (
-    <nav className="w-56 shrink-0 border-r border-slate-300 bg-white px-3 py-4">
-      <span className="block px-3 pb-2 font-bold">Factory Flow</span>
+    <nav className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4">
+      <div className="flex items-center gap-2 px-3 pb-4">
+        <div className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+          <Factory className="size-4" />
+        </div>
+        <span className="font-semibold tracking-tight">Factory Flow</span>
+      </div>
 
-      <NavLink to="/" end className={linkClass}>
+      <Item to="/" end icon={Gauge}>
         Simulator
-      </NavLink>
+      </Item>
 
       <SectionLabel>Orders</SectionLabel>
-      <NavLink to="/orders/sales" className={linkClass}>
+      <Item to="/orders/sales" icon={ShoppingCart}>
         Sales Orders
-      </NavLink>
-      <NavLink to="/orders/work" className={linkClass}>
+      </Item>
+      <Item to="/orders/work" icon={ClipboardList}>
         Work Orders
-      </NavLink>
+      </Item>
 
       <SectionLabel>Setup</SectionLabel>
-      <NavLink to="/setup/work-centers" className={linkClass}>
+      <Item to="/setup/work-centers" icon={Factory}>
         Work Centers
-      </NavLink>
-      <NavLink to="/setup/parts" className={linkClass}>
+      </Item>
+      <Item to="/setup/parts" icon={Package}>
         Parts
-      </NavLink>
-      <NavLink to="/setup/routings" className={linkClass}>
+      </Item>
+      <Item to="/setup/routings" icon={Route}>
         Routings
-      </NavLink>
+      </Item>
     </nav>
   );
 }

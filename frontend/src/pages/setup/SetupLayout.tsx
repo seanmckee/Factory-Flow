@@ -9,7 +9,7 @@ import SetupDataProvider from "../../setup/SetupDataProvider";
 export default function SetupLayout() {
   return (
     <SetupDataProvider>
-      <div className="p-6">
+      <div className="h-full overflow-hidden p-6">
         <Outlet />
       </div>
     </SetupDataProvider>

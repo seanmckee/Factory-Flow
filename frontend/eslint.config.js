@@ -19,4 +19,12 @@ export default defineConfig([
       globals: globals.browser,
     },
   },
+  {
+    // shadcn components export their cva variants alongside the component;
+    // that pattern trades fast-refresh purity for a single source of truth
+    files: ['src/components/ui/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])

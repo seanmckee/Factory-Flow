@@ -62,14 +62,16 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
             key={toast.id}
             role="status"
             aria-live="polite"
-            className={`flex items-center gap-3 rounded-lg px-4 py-2 text-white shadow-lg ${
-              toast.variant === "error" ? "bg-red-600" : "bg-green-600"
+            className={`flex items-center gap-3 rounded-lg border px-4 py-2.5 text-sm shadow-lg ${
+              toast.variant === "error"
+                ? "border-destructive/50 bg-destructive/15 text-destructive backdrop-blur"
+                : "border-border bg-popover text-popover-foreground backdrop-blur"
             }`}
           >
             <span>{toast.message}</span>
             {toast.action && (
               <button
-                className="shrink-0 rounded-md bg-white/20 px-2 py-1 text-sm font-medium hover:bg-white/30"
+                className="shrink-0 rounded-md border border-current/30 px-2 py-1 text-xs font-medium hover:bg-current/10"
                 onClick={() => {
                   toast.action?.onClick();
                   dismiss(toast.id);

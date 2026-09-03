@@ -228,9 +228,12 @@ strand the run's lock rather than end it. It appears on a 200 ms gate, which
 every real jump clears; the gate exists so a jump that returns immediately
 doesn't flash a modal. The bar is determinate only above one chunk, since a
 one-chunk jump has nothing to report until it is already done. A jump **stops
-the clock first** and waits out any beat in flight: both contend for the same
-lock, and letting them collide would raise the very 409 the unlock action is
-there to cure.
+the clock first** and waits out any beat in flight, and releasing does the same
+wait: all three contend for the same lock, and letting them collide would raise
+the very 409 the unlock action is there to cure. The work-order picker lists
+only orders not yet released into the selected run — (run_id, work_order_id) is
+the release table's primary key, so a second release is a 409 better made
+unselectable than toasted.
 
 That action is the other half: a tab closed or a server restarted mid-jump
 leaves `status = 'advancing'` with no process behind it, and every advance is a
@@ -251,11 +254,17 @@ misleading — the ledger's own case is a centre reading 10% utilization over a
 run and 52% over the ticks it worked. Work-centre *names* come off `/floor`,
 since `/metrics` carries ids and a run keeps no copy of the names.
 
-Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
-through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
-capacity read-only — editing the live work center would change nothing about a
-run already created — and no longer shows a "% utilized", which was
-`slotsInUse / capacity` and could only read 0% or 100% for a single machine.
+The page is two persistent control bars (run picking/creation, then
+transport: clock, release, fast-forward) over three tabs — **Floor**,
+**Throughput**, **Metrics** — so every control stays on screen and Track 5's
+dashboard has a pane (`Metrics`) waiting for it. The floor is
+`WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
+order — the floor redraws every tick, so the queue signal is the badge and the
+Waiting column, never the row order; the chart tab reads `GET /:id/ticks` fed
+through `cumulativeThroughput`. The table shows the run's **frozen** capacity
+read-only — editing the live work center would change nothing about a run
+already created — and no "% utilized", which was `slotsInUse / capacity` and
+could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 
@@ -291,14 +300,22 @@ steps.)
 
 ### Shared UI primitives
 
-`src/components/ui/` holds the presentational pieces every list page builds
-from: `Table`/`THead`/`Th`/`Tr`/`Td`, `FormCard`/`Field`/`SubmitButton`/`inputClass`,
-`DeleteButton` and `InlineInput`. Deliberately not data-driven — every table has
-conditional cell colouring, computed values and a bespoke last column, so the
-JSX structure stays at the call site and only the classes are shared. `Td`
-separates `numeric` (right-aligned and tabular) from a plain
-`className="text-right"` for cells holding a control; `Table` takes
-`framed={false}` when it already sits inside a bordered card.
+`src/components/ui/` (lowercase files) is shadcn/ui — generated components,
+owned by the repo and editable (`table.tsx` already dropped its nested x-scroll
+wrapper so sticky headers work; `components.json` configures
+`npx shadcn add <component>` for new ones). Tables stay deliberately not
+data-driven — every table has conditional cell colouring, computed values and a
+bespoke last column, so the JSX structure lives at the call site built from
+`Table`/`TableHeader`/`TableRow`/`TableCell`.
+
+The uppercase files are ours: `Field.tsx` (a Label wrapping its control — no
+htmlFor/id pairing anywhere, nesting does the association), `DeleteButton` and
+`InlineInput` (reads as table text until hovered/focused — the setup tables are
+their own edit surface). `ConfirmDialog` wraps the shadcn Dialog behind the old
+prop shape. **The toast is deliberately not sonner**: `ToastProvider` carries
+the `ToastAction` third argument and the 12s-vs-3.5s lifetime that the "Clear
+stale lock" button depends on, and stays hand-rolled until migrating it is its
+own task.
 
 Ordered-list editing lives in `src/setup/routingSteps.ts` — `moveStep`,
 `removeStep`, `parseSteps`, `toDrafts` — pure functions unit-tested like the
@@ -306,7 +323,30 @@ simulation engine, with `StepEditor` as the shared UI over them.
 
 ## Styling
 
-Tailwind v4 via the `@tailwindcss/vite` plugin — configured through `src/index.css`, with no `tailwind.config.js`.
+Tailwind v4 via the `@tailwindcss/vite` plugin — configured through
+`src/index.css`, with no `tailwind.config.js`. The `@/` path alias maps to
+`src/` (vite + both tsconfigs — `paths` without `baseUrl`, which TS6 deprecated).
+
+**Style convention (established with the dark redesign):**
+
+- **Tokens only, never palette literals.** All colour comes from the semantic
+  tokens in `src/index.css` (`bg-background`, `text-muted-foreground`,
+  `border`, `text-destructive`, …) — never `slate-*`/`blue-500` in a component.
+  Retuning the look is an edit to `index.css` and nowhere else. Three
+  factory-specific tokens carry machine state: `running` (green), `starved`
+  (amber), `saturated` (red) — the only three states `/floor` can honestly
+  distinguish, since a free machine always takes a waiting part.
+- **Dark-only.** `class="dark"` is hard-set on `<html>` in `index.html`; the
+  light block in `index.css` stays so flipping it back is one line, but no UI
+  offers a toggle.
+- **A page owns the viewport; regions scroll, pages don't.** The app shell is
+  `h-dvh overflow-hidden`; every page is `flex h-full flex-col` with a
+  `PageHeader` on top and a `min-h-0 flex-1 overflow-auto` region below
+  (tables get `sticky top-0 bg-card` headers). Nothing actionable may sit
+  below the fold.
+- **Creation is a dialog.** List pages put their create form in a shadcn
+  `Dialog` behind a "New …" button in the header, not in a card above the
+  table.
 
 ## Working agreement
 
