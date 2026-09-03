@@ -88,6 +88,14 @@ Two rules the port established, and both matter to how failures surface:
   zero reads to a fork comparison as a policy that lost money rather than as a
   bug. An *uncovered* unit is different — it legitimately earns nothing.
 
+`calculateThroughput` is the **sum** of `creditFinishedParts`, which credits
+each finished unit to the allocation covering it and returns
+`FinishedPartCredit` per part — the shape `run_finished_parts` freezes. The
+total and the per-part attribution must agree by construction: a run stores the
+parts and charts the total, and two code paths would eventually disagree about
+what a run earned. `salesOrderId` and `unitPriceCents` are null together and
+only for an uncovered unit, whose material cost is still recorded.
+
 `simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
 `wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
 the map, idle ones included**. `busy` counts machines, not parts. This is

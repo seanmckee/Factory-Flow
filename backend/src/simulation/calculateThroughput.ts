@@ -7,10 +7,26 @@ import type {
 } from "./types.js";
 
 /**
- * Throughput in Goldratt's sense: money made through sales, not parts produced.
- * A finished unit earns `unitPriceCents - materialCostCents` only if an
- * allocation covers it; units beyond what was sold earn nothing, which is what
- * makes releasing everything a losing move once WIP is charged for.
+ * What one finished unit earned, and the numbers that decided it. Mirrors the
+ * money columns on `run_finished_parts`, which freezes these at finish time:
+ * allocations cascade away with their sales order, so a run that recomputed its
+ * money later would report a sale that happened as inventory that never sold.
+ *
+ * `salesOrderId` and `unitPriceCents` are null together, and only for an
+ * uncovered unit — one built beyond what anybody bought. That unit earns
+ * nothing, but its material cost is real and recorded either way.
+ */
+export type FinishedPartCredit = {
+  partId: string;
+  workOrderId: number;
+  throughputCents: number;
+  salesOrderId: number | null;
+  unitPriceCents: number | null;
+  materialCostCents: number;
+};
+
+/**
+ * Credits each finished unit to the allocation that covers it, in finish order.
  *
  * `priorCounts` maps a work order to how many of its units finished before this
  * tick. Rescanning the whole finished history here cost O(finished^2) over a
@@ -27,14 +43,14 @@ import type {
  * cascades its allocations away, so that case surfaces as uncovered units and
  * never as a dangling reference.
  */
-export function calculateThroughput(
+export function creditFinishedParts(
   justFinished: FinishedPart[],
   priorCounts: Map<number, number>,
   workOrders: WorkOrder[],
   parts: Part[],
   salesOrders: SalesOrder[],
   allocations: Allocation[],
-): number {
+): FinishedPartCredit[] {
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   const partById = new Map(parts.map((part) => [part.id, part]));
   const salesOrderById = new Map(salesOrders.map((so) => [so.id, so]));
@@ -49,7 +65,7 @@ export function calculateThroughput(
     else allocationsByWorkOrder.set(allocation.workOrderId, [allocation]);
   }
 
-  let total = 0;
+  const credits: FinishedPartCredit[] = [];
   /** work order id -> units of it credited so far in this tick */
   const finishedThisTick = new Map<number, number>();
 
@@ -76,8 +92,19 @@ export function calculateThroughput(
       allocationsByWorkOrder.get(workOrder.id) ?? [],
       unitIndex,
     );
+
     // sold nothing this deep into the work order: inventory, not revenue
-    if (!covering) continue;
+    if (!covering) {
+      credits.push({
+        partId: finishedPart.id,
+        workOrderId: workOrder.id,
+        throughputCents: 0,
+        salesOrderId: null,
+        unitPriceCents: null,
+        materialCostCents: part.materialCostCents,
+      });
+      continue;
+    }
 
     const salesOrder = salesOrderById.get(covering.salesOrderId);
     if (!salesOrder) {
@@ -86,10 +113,46 @@ export function calculateThroughput(
       );
     }
 
-    total += salesOrder.unitPriceCents - part.materialCostCents;
+    credits.push({
+      partId: finishedPart.id,
+      workOrderId: workOrder.id,
+      throughputCents: salesOrder.unitPriceCents - part.materialCostCents,
+      salesOrderId: salesOrder.id,
+      unitPriceCents: salesOrder.unitPriceCents,
+      materialCostCents: part.materialCostCents,
+    });
   }
 
-  return total;
+  return credits;
+}
+
+/**
+ * Throughput in Goldratt's sense: money made through sales, not parts produced.
+ * A finished unit earns `unitPriceCents - materialCostCents` only if an
+ * allocation covers it; units beyond what was sold earn nothing, which is what
+ * makes releasing everything a losing move once WIP is charged for.
+ *
+ * The sum of `creditFinishedParts`, which does the work. The tick total and the
+ * per-part attribution have to agree by construction — a run stores the parts
+ * and charts the total, and two code paths would eventually disagree about what
+ * a run earned.
+ */
+export function calculateThroughput(
+  justFinished: FinishedPart[],
+  priorCounts: Map<number, number>,
+  workOrders: WorkOrder[],
+  parts: Part[],
+  salesOrders: SalesOrder[],
+  allocations: Allocation[],
+): number {
+  return creditFinishedParts(
+    justFinished,
+    priorCounts,
+    workOrders,
+    parts,
+    salesOrders,
+    allocations,
+  ).reduce((total, credit) => total + credit.throughputCents, 0);
 }
 
 /**

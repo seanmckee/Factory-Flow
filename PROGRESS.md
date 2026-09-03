@@ -15,12 +15,13 @@ established the invariant that **a run reads its own config and never the live
 factory tables again**. The tables exist but nothing writes them; the frontend
 still runs its own copy of the engine until 3.4 deletes it.
 
-**Next up:** 3.2a — `creditFinishedParts`. `run_finished_parts` has per-part
-money columns and `calculateThroughput` returns only a tick total, computing the
-per-part attribution internally and discarding it. Split it: the new function
-returns a credit per finished part and `calculateThroughput` becomes a sum over
-it, so the existing throughput tests stand as the contract on the sum. Then 3.2,
-the run service.
+**Next up:** 3.2 — the run service. Load a run once, advance N ticks in memory,
+write once per batch in one transaction; chunk long advances at ~500 ticks so a
+crash loses at most one chunk. Takes the `advancing` lock with a conditional
+update, releases it in a finally, and 3.3's reset route unsticks a lock left by
+a dead process. It reads run-owned config only — `run_work_centers` and
+`run_work_order_steps` — and copies the former at creation, the latter at
+release.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -277,10 +278,21 @@ Where a run becomes a server-side object an agent can address.
       exist, what they pay) is unfrozen for the same reason. The money columns
       on `run_finished_parts` already protect completed history, so neither is
       urgent; both are the same freeze-at-a-moment pattern again if needed.
-- [ ] 3.2a `creditFinishedParts` — per-part money attribution, split out of
-      `calculateThroughput`, which returns a tick total and throws the
-      attribution away. `run_finished_parts` cannot be filled without it.
-      Pure, so it lands with tests before the service.
+- [x] 3.2a `creditFinishedParts` — per-part money attribution, split out of
+      `calculateThroughput`, which returned a tick total and threw the
+      attribution away, so `run_finished_parts`' frozen money columns could not
+      be filled at all. **Decided:** `calculateThroughput` becomes the *sum* of
+      the new function rather than a parallel implementation — the chart reads
+      the total and the run stores the parts, and two code paths would
+      eventually disagree about what a run earned. All 73 existing throughput
+      tests passed unchanged, which is the contract on the sum; five new ones
+      cover the per-part shape, including two units straddling an allocation
+      boundary in one tick and so selling at different prices.
+      **Decided:** an uncovered unit gets `salesOrderId` and `unitPriceCents`
+      null together with `throughputCents: 0`, but keeps its
+      `materialCostCents` — the money was spent, and Track 6 prices carrying
+      cost off it. `FinishedPartCredit` lives in `calculateThroughput.ts` beside
+      its producer, as `TickMetrics` does in `simulationTick.ts`.
 - [ ] 3.2 Run service. **Never persist per tick** — load once, advance N ticks in
       memory, write once per batch, one transaction. Neon over a WebSocket pool
       makes every write a round trip; per-tick writes make Track 4 impossible.

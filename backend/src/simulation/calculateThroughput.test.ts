@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { calculateThroughput } from "./calculateThroughput.js";
+import {
+  calculateThroughput,
+  creditFinishedParts,
+} from "./calculateThroughput.js";
 import type { Allocation, FinishedPart } from "./types.js";
 
 const parts = [{ id: 1, materialCostCents: 1200 }];
@@ -146,5 +149,91 @@ describe("calculateThroughput", () => {
         allocations,
       ),
     ).toBe(3800);
+  });
+});
+
+describe("creditFinishedParts", () => {
+  const credit = (
+    justFinished: FinishedPart[],
+    prior = new Map<number, number>(),
+    allocs = allocations,
+  ) =>
+    creditFinishedParts(
+      justFinished,
+      prior,
+      workOrders,
+      parts,
+      salesOrders,
+      allocs,
+    );
+
+  it("records the sales order and price a covered unit was sold at", () => {
+    const part = finished(10);
+    expect(credit([part])).toEqual([
+      {
+        partId: part.id,
+        workOrderId: 10,
+        throughputCents: 3800,
+        salesOrderId: 20,
+        unitPriceCents: 5000,
+        materialCostCents: 1200,
+      },
+    ]);
+  });
+
+  it("nulls the sales order and price of an uncovered unit, keeping its cost", () => {
+    // built beyond what anybody bought: earns nothing, but the material was
+    // still spent, and Track 6's carrying cost is priced off it
+    const part = finished(10);
+    expect(credit([part], priorCounts(5))).toEqual([
+      {
+        partId: part.id,
+        workOrderId: 10,
+        throughputCents: 0,
+        salesOrderId: null,
+        unitPriceCents: null,
+        materialCostCents: 1200,
+      },
+    ]);
+  });
+
+  it("attributes units finishing in one tick to successive sales orders", () => {
+    // units 1 and 2 of the work order straddle the allocation boundary, so the
+    // two parts sold at different prices in the same tick — which is why the
+    // money is frozen per part rather than divided out of a tick total
+    const first = finished(10);
+    const second = finished(10);
+
+    const credits = credit([first, second], priorCounts(1));
+
+    expect(credits.map((c) => c.partId)).toEqual([first.id, second.id]);
+    expect(credits.map((c) => c.salesOrderId)).toEqual([20, 21]);
+    expect(credits.map((c) => c.unitPriceCents)).toEqual([5000, 5500]);
+    expect(credits.map((c) => c.throughputCents)).toEqual([3800, 4300]);
+  });
+
+  it("returns one credit per finished part, in finish order", () => {
+    const someFinished = [finished(10), finished(10), finished(10)];
+    expect(credit(someFinished).map((c) => c.partId)).toEqual(
+      someFinished.map((p) => p.id),
+    );
+  });
+
+  it("sums to the tick total the chart reads", () => {
+    const someFinished = [finished(10), finished(10)];
+    const total = credit(someFinished, priorCounts(1)).reduce(
+      (sum, c) => sum + c.throughputCents,
+      0,
+    );
+    expect(total).toBe(
+      calculateThroughput(
+        someFinished,
+        priorCounts(1),
+        workOrders,
+        parts,
+        salesOrders,
+        allocations,
+      ),
+    );
   });
 });
