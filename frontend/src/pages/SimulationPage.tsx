@@ -239,6 +239,9 @@ function SimulationPage() {
   const selectRun = useCallback((id: number | null) => {
     setIsRunning(false);
     setRunId(id);
+    // the picker filters against the *selected* run's releases, so a selection
+    // carried across runs could name an order the new run already released
+    setSelectedOrderId(null);
     setRun(null);
     setFloor(null);
     setSeries([]);
@@ -427,14 +430,24 @@ function SimulationPage() {
     if (selectedOrderId === null) {
       return showToast("Select a work order to release", "error");
     }
+    // releasing takes the same server-side lock as advancing, so wait out a
+    // beat in flight and hold the guard — otherwise Release racing the 1x
+    // clock is a spurious 409, indistinguishable from a stale lock
+    if (!(await awaitIdleClock())) {
+      return showToast("The run is still advancing — try again", "error");
+    }
+    advancing.current = true;
     try {
       const released = await releaseWorkOrder(runId, selectedOrderId);
+      setSelectedOrderId(null);
       await refresh(runId);
       showToast(
         `Released ${released.partsReleased} parts at tick ${released.releasedAtTick}`,
       );
     } catch (error) {
       report(error, "Failed to release the work order");
+    } finally {
+      advancing.current = false;
     }
   };
 
@@ -450,6 +463,13 @@ function SimulationPage() {
     openingCents(history, run?.throughputCents ?? 0),
   );
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
+  // (run_id, work_order_id) is the release table's primary key — a work order
+  // releases once per run — so an already-released order leaves the picker
+  // instead of surfacing the server's 409 as a toast
+  const releasedIds = new Set(
+    (run?.releasedOrders ?? []).map((released) => released.workOrderId),
+  );
+  const releasableOrders = workOrders.filter((wo) => !releasedIds.has(wo.id));
   // `/metrics` carries work center ids and no names — a run keeps no copy of
   // them, so the floor's live names are where the strip gets them
   const centerNames = new Map(
@@ -568,7 +588,12 @@ function SimulationPage() {
             <SelectValue placeholder="Select a work order" />
           </SelectTrigger>
           <SelectContent>
-            {workOrders.map((workOrder) => (
+            {releasableOrders.length === 0 && (
+              <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                Every work order is released into this run
+              </p>
+            )}
+            {releasableOrders.map((workOrder) => (
               <SelectItem key={workOrder.id} value={String(workOrder.id)}>
                 {workOrder.orderNumber} · {workOrder.partName} · qty{" "}
                 {workOrder.quantity}
