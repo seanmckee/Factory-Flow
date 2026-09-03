@@ -1,4 +1,5 @@
 import { Trash2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 /** The trash button in the last column of every list table. */
 export default function DeleteButton({
@@ -12,14 +13,16 @@ export default function DeleteButton({
   onClick: () => void;
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="ghost"
+      size="icon-sm"
       aria-label={`Delete ${label}`}
       disabled={busy}
       onClick={onClick}
-      className="rounded px-2 py-1 text-red-600 hover:bg-red-50 disabled:opacity-50"
+      className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
     >
-      <Trash2 size={16} />
-    </button>
+      <Trash2 className="size-4" />
+    </Button>
   );
 }

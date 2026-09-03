@@ -1,6 +1,14 @@
 import { formatCents } from "../../orders/salesOrderMath";
 import type { PartDemand } from "../../orders/demand";
-import { Table, THead, Th, Tr, Td } from "../ui/Table";
+import { Button } from "@/components/ui/button";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import type { Part } from "../../types/Part";
 
 type DemandPanelProps = {
@@ -25,8 +33,8 @@ export default function DemandPanel({
 }: DemandPanelProps) {
   if (summaries.length === 0) {
     return (
-      <div className="mt-6 rounded-lg border border-slate-300 bg-white p-6 text-sm text-slate-500">
-        <p className="font-medium text-slate-700">No open demand</p>
+      <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">No open demand</p>
         <p className="mt-1">
           Every sales order is fully allocated. Anything you build now is
           inventory.
@@ -36,47 +44,48 @@ export default function DemandPanel({
   }
 
   return (
-    <div className="mt-6 rounded-lg border border-slate-300 bg-white">
-      <div className="border-b border-slate-200 p-4">
+    <div className="rounded-lg border bg-card">
+      <div className="border-b p-4">
         <h2 className="font-medium">Open demand</h2>
-        <p className="mt-1 text-sm text-slate-500">
+        <p className="mt-1 text-sm text-muted-foreground">
           Unfilled sales order quantity, net of work order units nobody has
           claimed yet. Pick a row to build it.
         </p>
       </div>
 
-      {/* framed={false} - the surrounding card already has the border */}
-      <Table framed={false}>
-        <THead>
-          <Th>Part</Th>
-          <Th>Unfilled sales orders</Th>
-          <Th numeric>Open demand</Th>
-          <Th numeric>Uncommitted supply</Th>
-          <Th numeric>Net to make</Th>
-          <Th />
-        </THead>
-        <tbody>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Part</TableHead>
+            <TableHead>Unfilled sales orders</TableHead>
+            <TableHead className="text-right">Open demand</TableHead>
+            <TableHead className="text-right">Uncommitted supply</TableHead>
+            <TableHead className="text-right">Net to make</TableHead>
+            <TableHead />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {summaries.map((entry) => {
             const part = partById.get(entry.partId);
             const producible = produciblePartIds.has(entry.partId);
             const isSelected = entry.partId === selectedPartId;
             return (
-              <Tr
+              <TableRow
                 key={entry.partId}
-                className={isSelected ? "bg-blue-50" : ""}
+                className={isSelected ? "bg-accent/50" : ""}
               >
-                <Td>
+                <TableCell>
                   <span className="font-medium">
                     {part ? part.partNumber : "—"}
                   </span>
-                  <span className="text-slate-500"> · {part?.name}</span>
+                  <span className="text-muted-foreground"> · {part?.name}</span>
                   {!producible && (
-                    <span className="block text-xs text-red-600">
+                    <span className="block text-xs text-destructive">
                       no routing — can't be produced yet
                     </span>
                   )}
-                </Td>
-                <Td className="text-slate-600">
+                </TableCell>
+                <TableCell className="text-muted-foreground">
                   {entry.openOrders
                     .map(
                       (order) =>
@@ -85,26 +94,29 @@ export default function DemandPanel({
                         )})`,
                     )
                     .join(", ")}
-                </Td>
-                <Td numeric>{entry.openDemandUnits}</Td>
-                <Td numeric className="text-slate-500">
+                </TableCell>
+                <TableCell className="text-right tabular-nums">
+                  {entry.openDemandUnits}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-muted-foreground">
                   {entry.uncommittedSupplyUnits > 0
                     ? `−${entry.uncommittedSupplyUnits}`
                     : "—"}
-                </Td>
-                <Td
-                  numeric
-                  className={`font-medium ${
+                </TableCell>
+                <TableCell
+                  className={`text-right font-medium tabular-nums ${
                     entry.netToMakeUnits > 0
-                      ? "text-slate-900"
-                      : "text-slate-400"
+                      ? "text-foreground"
+                      : "text-muted-foreground/60"
                   }`}
                 >
                   {entry.netToMakeUnits}
-                </Td>
-                <Td className="text-right">
-                  <button
+                </TableCell>
+                <TableCell className="text-right">
+                  <Button
                     type="button"
+                    variant="outline"
+                    size="xs"
                     disabled={!producible}
                     onClick={() =>
                       onPickPart(
@@ -114,15 +126,14 @@ export default function DemandPanel({
                           : entry.openDemandUnits,
                       )
                     }
-                    className="rounded-lg px-2 py-1 text-blue-600 hover:bg-blue-50 disabled:text-slate-300 disabled:hover:bg-transparent"
                   >
                     Build
-                  </button>
-                </Td>
-              </Tr>
+                  </Button>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
+        </TableBody>
       </Table>
     </div>
   );

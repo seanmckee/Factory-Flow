@@ -1,4 +1,5 @@
 import type { InputHTMLAttributes } from "react";
+import { cn } from "@/lib/utils";
 
 /**
  * An input that reads as table text until hovered or focused. Used by the setup
@@ -10,14 +11,14 @@ export default function InlineInput({
   className,
   ...rest
 }: InputHTMLAttributes<HTMLInputElement> & { numeric?: boolean }) {
-  const base =
-    "rounded border border-transparent bg-transparent p-1 hover:border-slate-300 focus:border-slate-300 focus:bg-white disabled:opacity-50";
   return (
     <input
       {...rest}
-      className={`${base}${numeric ? " text-right tabular-nums" : ""}${
-        className ? ` ${className}` : ""
-      }`}
+      className={cn(
+        "rounded-md border border-transparent bg-transparent p-1 transition-colors hover:border-input focus:border-input focus:bg-background focus:outline-none disabled:opacity-50",
+        numeric && "text-right tabular-nums",
+        className,
+      )}
     />
   );
 }
