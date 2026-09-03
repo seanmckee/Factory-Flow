@@ -220,7 +220,7 @@ server commits that batch regardless and an aborted request would only leave
 the page claiming a tick the run has passed. Until-idle terminates on
 `AdvanceResult.wipCount`, not on a follow-up `GET`, so the loop makes no other
 request; there is nothing per chunk to refresh, since the overlay shows
-progress only. Floor and chart refresh once when the jump lands.
+progress only. Floor, chart and strip refresh once when the jump lands.
 
 `SimulatingOverlay` covers the page while it runs, and Stop is the only live
 control in it — an until-idle jump can run to its ceiling and a reload would

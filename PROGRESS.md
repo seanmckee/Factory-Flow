@@ -8,22 +8,31 @@ that completes it.
 
 ---
 
-**You are here:** **Track 3 is complete.** The engine, runs, and API live in
-the backend; the frontend drives a real run and its engine copy is deleted;
-the docs no longer claim the simulation is ephemeral. Verified in a browser
-end to end.
+**You are here:** **Track 4 is complete.** A run can be jumped forward from
+the page — presets or until the floor is empty — and a jump lands on a
+labelled window of metrics rather than on a bigger number. Awaiting a browser
+pass.
 
-**Next up:** Track 5 (the metrics dashboard) or Track 6 (operating expense).
-Track 6 is what makes the score able to go down and so what makes an agent's
-objective non-degenerate; Track 5 is what lets a human see whether a run is
-behaving. Track 4 is largely already delivered — what remains of it is a speed
-control, which belongs with Track 5's UI work.
+**Next up:** Track 6 (operating expense). Track 6 is what makes the score able
+to go down and so what makes an agent's objective non-degenerate; Track 5 (the
+metrics dashboard) is what lets a human see whether a run is behaving, and 4.4
+put a one-row placeholder there that Track 5 replaces.
+
+**One refactor unit first** (decided 2026-09-03): split the read side of
+`runService.ts` — `getRun`, `getRunMetrics`, `getRunFloor`, `getRunTicks` —
+out of the 842-line module before Track 6 starts. It is half the file, it has
+nothing to do with advancing, and Track 6's P&L reads and Track 7's comparison
+reads both belong on that side of the line however the rest is eventually
+carved. Deeper carving, and the `SimulationPage` hooks (`useRunClock`,
+`useRunJump`), wait until after Track 7 — boundaries invented ahead of the code
+that uses them are the ones you end up fighting.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
 money only goes up today and "release everything" wins by default. Skippable
 until after the agent: 3.4, 3.5, Track 5, and most of Track 4 (fast-forward
-falls out of 3.2's load-once/write-once design). Track 7 forking is *not*
+falls out of 3.2's load-once/write-once design — Track 4 turned out to be a UI
+track, since the API half shipped with 3.2/3.3). Track 7 forking is *not*
 load-bearing either — two runs from the same seed and config with different
 policies is a valid comparison, **which is true only because of 3.2b**; before
 it, independently created runs drew different noise.
@@ -557,6 +566,15 @@ wants determinism, not a background loop racing it.
       **Decided:** on the toast, not as a badge in the run picker — the picker
       reads `status` from a list fetched on mount, so it would show a stale
       lock more often than a real one.
+- [x] 4.6 Doc sweep, folded into the units above rather than left to the end.
+      Also corrected **two 3.4 leftovers** in `CLAUDE.md` found on the way: the
+      chart pipeline still described `smoothThroughput` and a 120-tick cap, and
+      the React-state notes still described the `*Ref` mirrors and the lazy
+      `GET /api/routings/:id` that minted WIP parts with `crypto.randomUUID()`
+      — all deleted with the frontend engine.
+      The README's Phase 2 is rewritten: the speed control is recorded as
+      **deliberately not built**, run-to-completion as delivered by Run until
+      idle, and the unattended clock and calendar as still open.
 
 ## Track 5 onward — re-plan when reached
 
