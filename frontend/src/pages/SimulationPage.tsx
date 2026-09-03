@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import WorkCenterCard from "../components/WorkCenterCard";
 import ThroughputChart from "../components/ThroughputChart";
-import { cumulativeThroughput } from "../simulation/cumulativeThroughput";
+import {
+  cumulativeThroughput,
+  openingCents,
+} from "../simulation/cumulativeThroughput";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -204,8 +207,16 @@ function SimulationPage() {
     }
   };
 
+  // `/ticks` keeps only the newest 5000 rows, so past tick 5000 this series is
+  // a suffix of the run: the curve carries on from what the run had already
+  // earned rather than re-basing at zero and contradicting the money above it.
+  const history = series.map((sample) => ({
+    tick: sample.tickNum,
+    cents: sample.throughputCents,
+  }));
   const cumulative = cumulativeThroughput(
-    series.map((sample) => ({ tick: sample.tickNum, cents: sample.throughputCents })),
+    history,
+    openingCents(history, run?.throughputCents ?? 0),
   );
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
 

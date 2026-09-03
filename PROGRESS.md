@@ -490,6 +490,23 @@ wants determinism, not a background loop racing it.
       **Decided:** terminate on the advance's own answer, not on a follow-up
       `GET /:id` — a read chasing each chunk could already be a batch stale,
       and with it the jump loop makes no other request at all.
+- [x] 4.2 `openingCents` + a seeded `cumulativeThroughput`, with tests, and the
+      page wired to them. `/ticks` keeps the newest 5000 rows, so past tick
+      5000 the chart's series is a *suffix* of the run and a curve accumulated
+      from zero re-based and contradicted the money in the line directly above
+      it. Landed **before** 4.3, since one press of a jump button reaches tick
+      5000.
+      **Decided:** seed it client-side as `run.throughputCents − Σ(window)`
+      rather than adding a cumulative column or endpoint. It is exact, not an
+      approximation: a tick's throughput is the sum of its parts' credits and
+      the run's total is the sum of the same frozen per-part columns, so the
+      two agree by construction. Floored at zero, because the summary and the
+      series are two requests and an advance between them leaves the window
+      holding money the total has not counted.
+      The whole track's test surface, and the only pure code in it.
+      Confirmed live: a run at tick 7100 had earned $930 while the 5000 rows
+      `/ticks` returned (2101–7100) held $0 of it — the old curve drew a flat
+      line at zero under a summary reading $930.
 
 ## Track 5 onward — re-plan when reached
 

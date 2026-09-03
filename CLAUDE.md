@@ -214,7 +214,19 @@ run already created — and no longer shows a "% utilized", which was
 
 Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The chart pipeline in `SimulationPage` is: per-tick `calculateThroughput` → history capped to the last 120 ticks → `smoothThroughput(history, 60)` (trailing 60-tick mean, dividing by the full window so the ramp-up is intentionally damped) → `cumulativeThroughput` → `ThroughputChart` (recharts).
+The chart pipeline in `SimulationPage` is the run's stored per-tick money,
+accumulated: `GET /:id/ticks` → `openingCents(history, run.throughputCents)`
+→ `cumulativeThroughput(history, opening)` → `ThroughputChart` (recharts).
+The **opening balance is not optional**. `/ticks` keeps only the newest 5000
+rows, so past tick 5000 the series is a *suffix* of the run and a curve
+accumulated from zero re-bases and contradicts the money in the line above it
+— one fast-forward press reaches that. It is exact rather than approximate
+because a tick's `throughputCents` is the sum of its parts' credits and the
+run's total is the sum of the same frozen per-part columns, so what the run
+earned before the window is the total minus the window's own sum, and no API
+change is needed. It floors at zero: the summary and the series are two
+requests, and an advance landing between them leaves the window holding money
+the total has not counted yet.
 
 ### React state notes
 
