@@ -8,10 +8,11 @@ that completes it.
 
 ---
 
-**You are here:** **Track 4 is complete.** A run can be jumped forward from
-the page — presets or until the floor is empty — and a jump lands on a
-labelled window of metrics rather than on a bigger number. Awaiting a browser
-pass.
+**You are here:** **Track 4.5 (dark redesign) is complete, awaiting a browser
+pass.** The app is dark-only on a semantic token layer (shadcn/ui, zinc),
+every page owns its viewport with creation in dialogs, and the simulator is
+two control bars over Floor / Throughput / Metrics tabs — the Metrics pane is
+where Track 5's dashboard lands.
 
 **Next up:** Track 6 (operating expense). Track 6 is what makes the score able
 to go down and so what makes an agent's objective non-degenerate; Track 5 (the
@@ -575,6 +576,30 @@ wants determinism, not a background loop racing it.
       The README's Phase 2 is rewritten: the speed control is recorded as
       **deliberately not built**, run-to-completion as delivered by Run until
       idle, and the unattended clock and calendar as still open.
+
+## Track 4.5 — Dark redesign (`feat/dark-theme-shell`)
+
+Decided 2026-09-03 after Track 4's browser pass: the page had grown past its
+layout — everything competed for one scrolling column, and acting meant
+scrolling. One track, because Tracks 5–7 all build UI on top of these
+conventions (CLAUDE.md "Styling" holds them).
+
+- [x] `feat/theme-tokens` — `@/` alias, shadcn/ui on zinc, semantic token
+      layer in `index.css` (+ `running`/`starved`/`saturated` machine-state
+      tokens), dark hard-set on `<html>`
+- [x] `feat/app-shell` — `h-dvh` shell, sidebar with icons, pages own the
+      viewport (regions scroll, pages don't)
+- [x] `feat/ui-primitives` — shadcn table/dialog/select/tabs/etc. replace the
+      hand-rolled primitives; ConfirmDialog wraps Dialog; toast stays ours
+      (the "Clear stale lock" action depends on it)
+- [x] `feat/list-pages` — the five list pages: PageHeader + "New …" dialog +
+      internally-scrolling sticky-header table
+- [x] `feat/simulator-layout` — control bars + Floor/Throughput/Metrics tabs;
+      `WorkCenterTable` (stable name order, three-state badges) replaces the
+      cards
+- [x] `fix/release-race` — releasing waits out the clock's beat like a jump,
+      and the picker lists only orders not yet released into the selected run
+- [x] `docs/style-convention` — CLAUDE.md styling convention + this entry
 
 ## Track 5 onward — re-plan when reached
 
