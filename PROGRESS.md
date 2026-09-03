@@ -507,6 +507,30 @@ wants determinism, not a background loop racing it.
       Confirmed live: a run at tick 7100 had earned $930 while the 5000 rows
       `/ticks` returned (2101–7100) held $0 of it — the old curve drew a flat
       line at zero under a summary reading $930.
+- [x] 4.3 Jump controls, `SimulatingOverlay`, clock interlock. `100 / 500 /
+      1000` and Run until idle, chunked at 500 to match `TICKS_PER_BATCH`,
+      ceiling of 100000 ticks on until-idle.
+      **Decided:** Stop halts dispatching and never aborts in flight. The
+      server commits that batch either way, so aborting would save a second
+      and leave the page claiming a tick the run had passed; halting instead
+      makes every stopped jump a real resumable state, which is exactly what
+      3.2's load-once/write-once design bought.
+      **Decided:** the overlay shows **progress only** — no metrics. It is up
+      for a second or two, and a figure that appears and vanishes cannot be
+      checked. Stop is the only live control in it: an until-idle jump can run
+      to its ceiling, and a reload would strand the run's lock instead of
+      ending it.
+      **Decided:** a 200 ms gate before it appears. Every preset clears it, so
+      it behaves as "always" for real work; it exists so an until-idle jump on
+      an empty floor doesn't flash a modal for a frame. The bar is determinate
+      only above one chunk — a one-chunk jump would snap 0→100%.
+      **Decided:** a jump stops the clock and waits out any beat in flight,
+      rather than letting the two collide. They contend for the same server
+      lock, and colliding would raise a 409 out of ordinary use — making 4.5's
+      unlock button read as a workaround for our own bug.
+      Verified over HTTP: an overlapping advance *and* an overlapping release
+      both 409 with `Run 17 is already advancing`, which is why the overlay
+      blocks releasing too.
 
 ## Track 5 onward — re-plan when reached
 

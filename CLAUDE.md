@@ -204,6 +204,33 @@ Advancing holds a server-side lock, so an overlapping call is a 409; an
 display clock. Stopping is client-side only: the run keeps its state and
 resumes where it left off.
 
+**Fast-forward is the point of the page, not a faster clock.** There is
+deliberately no speed multiplier: the question a run answers is where a set of
+releases ends up, not what it looks like going faster, and a "100×" button
+lies the moment the multiplier outruns the server's ~500 ticks a second. So
+the 1× clock is unchanged and the jumps sit beside it — `JUMP_TICKS`
+(`100 / 500 / 1000`) and **Run until idle**, which advances until the floor is
+empty or `IDLE_TICK_CEILING` (100000) stops it, so a floor that can never
+empty doesn't advance until the tab closes.
+
+A jump chunks at `CHUNK_TICKS` (500), matching the server's `TICKS_PER_BATCH`,
+so a chunk is exactly one transaction and **Stop always lands on a committed
+tick boundary** — it stops dispatching and never aborts in flight, because the
+server commits that batch regardless and an aborted request would only leave
+the page claiming a tick the run has passed. Until-idle terminates on
+`AdvanceResult.wipCount`, not on a follow-up `GET`, so the loop makes no other
+request; there is nothing per chunk to refresh, since the overlay shows
+progress only. Floor and chart refresh once when the jump lands.
+
+`SimulatingOverlay` covers the page while it runs, and Stop is the only live
+control in it — an until-idle jump can run to its ceiling and a reload would
+strand the run's lock rather than end it. It appears on a 200 ms gate, which
+every real jump clears; the gate exists so a jump that returns immediately
+doesn't flash a modal. The bar is determinate only above one chunk, since a
+one-chunk jump has nothing to report until it is already done. A jump **stops
+the clock first** and waits out any beat in flight: both contend for the same
+lock, and letting them collide would raise a 409 out of ordinary use.
+
 Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
 through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
 capacity read-only — editing the live work center would change nothing about a
@@ -230,9 +257,17 @@ the total has not counted yet.
 
 ### React state notes
 
-Fetched data (`routings`, `workOrders`, `parts`, `salesOrders`) is mirrored into refs via `useEffect` because the tick interval's effect depends only on `isRunning`; the interval callback reads `*Ref.current` to avoid restarting the simulation clock whenever data loads. Add new tick-time inputs the same way.
+The page holds two refs, both about who owns the run's lock: `advancing` is
+true while any advance is in flight, so the display clock's beat skips rather
+than queues and a jump waits a beat out instead of racing it into a 409, and
+`stopJump` is what Stop sets — read at the top of the chunk loop, so stopping
+lands on a committed boundary.
 
-Routings are fetched lazily: `releaseOrder` GETs `/api/routings/:id` for the selected work order, caches it in the `routings` map, and instantiates `order.quantity` WIP parts at step 0 with `crypto.randomUUID()` ids.
+(The refs that used to mirror `routings`, `workOrders`, `parts` and
+`salesOrders` for the tick callback, and the lazy `GET /api/routings/:id` that
+instantiated WIP parts with `crypto.randomUUID()`, went with the frontend
+engine in 3.4. Releasing is `POST /:id/releases` now and the server pins the
+steps.)
 
 ### Shared UI primitives
 
