@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import WorkCenterCard from "../components/WorkCenterCard";
 import SimulatingOverlay from "../components/SimulatingOverlay";
+import RunMetricsStrip from "../components/RunMetricsStrip";
 import ThroughputChart from "../components/ThroughputChart";
 import {
   cumulativeThroughput,
@@ -13,11 +14,13 @@ import {
   deleteRun,
   getRun,
   getRunFloor,
+  getRunMetrics,
   getRunTicks,
   listRuns,
   releaseWorkOrder,
   type Run,
   type RunFloor,
+  type RunMetrics,
   type RunSummary,
   type TickSample,
 } from "../api/runs";
@@ -76,6 +79,7 @@ function SimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
+  const [metrics, setMetrics] = useState<RunMetrics | null>(null);
 
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -119,6 +123,23 @@ function SimulationPage() {
     [],
   );
 
+  /**
+   * The strip's window: the whole run when one is opened, the jump's own ticks
+   * after a jump. Deliberately *not* on the clock's beat — `/metrics` reads
+   * and aggregates every observation in the window, which is a per-center row
+   * per center per tick, and no eye reads a strip that redraws every second.
+   */
+  const loadMetrics = useCallback(
+    async (id: number, fromTick?: number, toTick?: number) => {
+      try {
+        setMetrics(await getRunMetrics(id, fromTick, toTick));
+      } catch (error) {
+        report(error, "Failed to load run metrics");
+      }
+    },
+    [report],
+  );
+
   // remounts on navigation, so work orders created in the order entry module
   // show up without a reload
   useEffect(() => {
@@ -158,6 +179,7 @@ function SimulationPage() {
     setRun(null);
     setFloor(null);
     setSeries([]);
+    setMetrics(null);
   }, []);
 
   useEffect(() => {
@@ -168,13 +190,15 @@ function SimulationPage() {
         await refresh(id);
       } catch (error) {
         if (!cancelled) report(error, "Failed to load run");
+        return;
       }
+      if (!cancelled) await loadMetrics(id);
     }
     load(runId);
     return () => {
       cancelled = true;
     };
-  }, [runId, refresh, report]);
+  }, [runId, refresh, report, loadMetrics]);
 
   /**
    * Advancing is synchronous on the server and holds a lock, so a second call
@@ -248,6 +272,7 @@ function SimulationPage() {
         : `Advancing ${target.toLocaleString()} ticks`;
       const ticksTotal = untilIdle ? null : target;
 
+      const startTick = run?.tickNum ?? 0;
       advancing.current = true;
       stopJump.current = false;
       setStopping(false);
@@ -282,6 +307,10 @@ function SimulationPage() {
         report(error, "Failed to load run");
       }
 
+      // the strip re-windows onto exactly what the jump covered, which is the
+      // question a jump asks: what happened over *those* ticks
+      if (done > 0) await loadMetrics(runId, startTick + 1, startTick + done);
+
       if (hitCeiling) {
         showToast(
           `Stopped at ${IDLE_TICK_CEILING.toLocaleString()} ticks with work still on the floor`,
@@ -289,7 +318,7 @@ function SimulationPage() {
         );
       }
     },
-    [runId, run, jump, awaitIdleClock, refresh, report, showToast],
+    [runId, run, jump, awaitIdleClock, refresh, loadMetrics, report, showToast],
   );
 
   const onCreateRun = async () => {
@@ -347,6 +376,11 @@ function SimulationPage() {
     openingCents(history, run?.throughputCents ?? 0),
   );
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
+  // `/metrics` carries work center ids and no names — a run keeps no copy of
+  // them, so the floor's live names are where the strip gets them
+  const centerNames = new Map(
+    (floor?.workCenters ?? []).map((center) => [center.workCenterId, center.name]),
+  );
 
   return (
     <div className="min-h-screen flex flex-col items-center gap-4 bg-slate-100 p-6">
@@ -437,6 +471,10 @@ function SimulationPage() {
           );
         })}
       </div>
+
+      {metrics && (
+        <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
+      )}
 
       <div className="flex gap-4">
         <button

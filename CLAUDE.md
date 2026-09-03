@@ -231,6 +231,17 @@ one-chunk jump has nothing to report until it is already done. A jump **stops
 the clock first** and waits out any beat in flight: both contend for the same
 lock, and letting them collide would raise a 409 out of ordinary use.
 
+`RunMetricsStrip` is what a jump lands on — one row from `GET /:id/metrics`,
+**not** a dashboard, and Track 5 replaces it. It shows the whole run when a run
+is opened and re-windows onto the jump's own ticks (`startTick + 1 …
+startTick + done`) right after a jump, and it is **never** fetched on the
+clock's beat: `/metrics` reads and aggregates every tick row, per-centre row
+and finished part in the window. The window label comes from the *response*,
+so a strip left over from an earlier window states what it covers rather than
+misleading — the ledger's own case is a centre reading 10% utilization over a
+run and 52% over the ticks it worked. Work-centre *names* come off `/floor`,
+since `/metrics` carries ids and a run keeps no copy of the names.
+
 Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
 through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
 capacity read-only — editing the live work center would change nothing about a

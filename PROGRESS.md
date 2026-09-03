@@ -531,6 +531,21 @@ wants determinism, not a background loop racing it.
       Verified over HTTP: an overlapping advance *and* an overlapping release
       both 409 with `Run 17 is already advancing`, which is why the overlay
       blocks releasing too.
+- [x] 4.4 `RunMetricsStrip` — one row from `GET /:id/metrics`, the whole run on
+      open and the jump's own ticks after a jump. Explicitly a placeholder for
+      Track 5, not a dashboard.
+      **Decided:** never fetched on the clock's beat. `/metrics` reads and
+      aggregates every tick row, per-centre row and finished part in the
+      window, which at 50000 ticks is a per-centre row per centre per tick.
+      **Decided:** the window label comes from the *response*, so a strip left
+      over from an earlier window says what it covers instead of misleading.
+      Track 2's case is the reason: one centre read 10% utilization over a
+      whole run and 52% over the ticks it was working.
+      Names come off `/floor` — `/metrics` carries ids, and names are the one
+      thing a run keeps no copy of.
+      Exercised over HTTP: a jump's window (`?fromTick=601&toTick=1100`) came
+      back `tickCount: 500`, mean WIP 3.12, peak 25, busiest centre 19.3% with
+      a worst queue of 11.
 
 ## Track 5 onward — re-plan when reached
 
