@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FastForward, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
 import SimulatingOverlay from "../components/SimulatingOverlay";
-import RunMetricsStrip from "../components/RunMetricsStrip";
+import RunDashboard from "../components/RunDashboard";
 import TickSeriesChart from "../components/TickSeriesChart";
 import {
   cumulativeThroughput,
@@ -487,11 +487,6 @@ function SimulationPage() {
     (run?.releasedOrders ?? []).map((released) => released.workOrderId),
   );
   const releasableOrders = workOrders.filter((wo) => !releasedIds.has(wo.id));
-  // `/metrics` carries work center ids and no names — a run keeps no copy of
-  // them, so the floor's live names are where the strip gets them
-  const centerNames = new Map(
-    (floor?.workCenters ?? []).map((center) => [center.workCenterId, center.name]),
-  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-6">
@@ -735,10 +730,18 @@ function SimulationPage() {
             </div>
           </TabsContent>
 
-          {/* Track 5's dashboard lands in this pane; the strip is its placeholder. */}
-          <TabsContent value="metrics" className="min-h-0 flex-1 overflow-auto">
+          <TabsContent value="metrics" className="flex min-h-0 flex-1 flex-col">
             {metrics ? (
-              <RunMetricsStrip metrics={metrics} centerNames={centerNames} />
+              <RunDashboard
+                metrics={metrics}
+                // `/metrics` carries work center ids and no names or capacities
+                // — the floor's frozen copy is where both come from
+                centers={floor?.workCenters ?? []}
+                tickNum={run.tickNum}
+                onWindow={(fromTick, toTick) =>
+                  loadMetrics(run.id, fromTick, toTick)
+                }
+              />
             ) : (
               <p className="text-sm text-muted-foreground">
                 No metrics yet — advance the run to observe some ticks.
