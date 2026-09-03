@@ -9,9 +9,10 @@ that completes it.
 ---
 
 **You are here:** **Track 5 (run dashboard) is complete, awaiting a browser
-pass.** The Metrics tab is a real dashboard — stat cards over a work-centre
-table ranked by utilization, with window controls — and the Throughput tab
-draws three series: cumulative money, trailing rate, and WIP.
+pass.** The Dashboard tab is a real dashboard — stat cards over a work-centre
+table ranked by utilization, with window controls — and the Trends tab draws
+three series: cumulative money, trailing rate, and WIP, each with a hover
+hint saying what the chart answers.
 
 **Next up:** Track 6 (operating expense). Track 6 is what makes the score able
 to go down and so what makes an agent's objective non-degenerate.
@@ -637,6 +638,14 @@ no per-centre *time series*, deferred until something needs it, and the
 - [x] 5.4 Doc sweep: CLAUDE.md (dashboard paragraph, three-series chart
       pipeline, `throughputRate`'s left-edge rule), README (dashboard
       delivered, chart bullet), this file.
+- [x] 5.5 Chart hints + honest tab names. Each chart sits in a titled card
+      with an Info tooltip (shadcn tooltip, added via `npx shadcn add`)
+      saying what the chart answers — the y-axis says what is plotted, the
+      hint says why you'd look.
+      **Decided:** the tabs rename to **Floor / Trends / Dashboard**, by view
+      shape: "Throughput" stopped being honest once rate and WIP moved in,
+      and "Metrics" overlapped it — throughput is itself a metric shown in
+      both tabs.
 
 ## Track 6 onward — re-plan when reached
 

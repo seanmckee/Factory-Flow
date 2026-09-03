@@ -244,7 +244,7 @@ and an action toast lives 12 s rather than 3.5 s). It is worded as an assertion
 the user is making, not a retry: if the run really is advancing elsewhere,
 clearing the lock lets two writers rewrite the same WIP rows.
 
-`RunDashboard` (the Metrics tab, Track 5) is what a jump lands on — stat cards
+`RunDashboard` (the Dashboard tab, Track 5) is what a jump lands on — stat cards
 (window throughput, finished count, cycle time, WIP) over a work-centre table
 ranked by **utilization descending**, the constraint on top; ranking is safe
 there because the pane redraws only when a window is asked for, unlike the
@@ -263,7 +263,10 @@ copy of the names.
 
 The page is two persistent control bars (run picking/creation, then
 transport: clock, release, fast-forward) over three tabs — **Floor**,
-**Throughput**, **Metrics** — so every control stays on screen. The floor is
+**Trends**, **Dashboard** — named by view shape (a snapshot of now, series
+over time, an aggregate over a window), because "Throughput" stopped being an
+honest tab name once rate and WIP moved in and "Metrics" overlapped it —
+throughput is itself a metric. Every control stays on screen. The floor is
 `WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
 order — the floor redraws every tick, so the queue signal is the badge and the
 Waiting column, never the row order; the chart tab reads `GET /:id/ticks` and
@@ -277,7 +280,8 @@ could only read 0% or 100% for a single machine.
 
 Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The Throughput tab draws three series from one `GET /:id/ticks` response,
+The Trends tab draws three series from one `GET /:id/ticks` response,
+each in a titled card with a hover hint saying what the chart answers,
 each through `TickSeriesChart` (the one recharts wrapper — data plus
 formatters, token colours): the stored per-tick money **accumulated**
 (`openingCents(history, run.throughputCents)` →
