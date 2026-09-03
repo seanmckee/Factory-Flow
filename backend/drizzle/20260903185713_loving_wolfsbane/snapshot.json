@@ -1,7 +1,7 @@
 {
   "version": "8",
   "dialect": "postgres",
-  "id": "57067191-df17-4ef5-891e-0341349ca17f",
+  "id": "71bbd3b6-437b-4518-a477-f9347e35c119",
   "prevIds": [
     "aaa1cff0-4525-4248-910e-3f85c5669daa"
   ],
@@ -44,12 +44,6 @@
     },
     {
       "isRlsEnabled": false,
-      "name": "run_routing_steps",
-      "entityType": "tables",
-      "schema": "public"
-    },
-    {
-      "isRlsEnabled": false,
       "name": "run_tick_work_centers",
       "entityType": "tables",
       "schema": "public"
@@ -63,6 +57,18 @@
     {
       "isRlsEnabled": false,
       "name": "run_wip_parts",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "run_work_centers",
+      "entityType": "tables",
+      "schema": "public"
+    },
+    {
+      "isRlsEnabled": false,
+      "name": "run_work_order_steps",
       "entityType": "tables",
       "schema": "public"
     },
@@ -488,62 +494,23 @@
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "run_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "run_routing_steps"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
       "name": "routing_id",
       "entityType": "columns",
       "schema": "public",
-      "table": "run_routing_steps"
+      "table": "run_released_orders"
     },
     {
-      "type": "integer",
+      "type": "varchar(255)",
       "typeSchema": null,
       "notNull": true,
       "dimensions": 0,
       "default": null,
       "generated": null,
       "identity": null,
-      "name": "sequence",
+      "name": "routing_revision",
       "entityType": "columns",
       "schema": "public",
-      "table": "run_routing_steps"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "work_center_id",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "run_routing_steps"
-    },
-    {
-      "type": "integer",
-      "typeSchema": null,
-      "notNull": true,
-      "dimensions": 0,
-      "default": null,
-      "generated": null,
-      "identity": null,
-      "name": "process_time_seconds",
-      "entityType": "columns",
-      "schema": "public",
-      "table": "run_routing_steps"
+      "table": "run_released_orders"
     },
     {
       "type": "integer",
@@ -765,6 +732,110 @@
       "entityType": "columns",
       "schema": "public",
       "table": "run_wip_parts"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_centers"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "work_center_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_centers"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "capacity",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_centers"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_order_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "work_order_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_order_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "sequence",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_order_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "work_center_id",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_order_steps"
+    },
+    {
+      "type": "integer",
+      "typeSchema": null,
+      "notNull": true,
+      "dimensions": 0,
+      "default": null,
+      "generated": null,
+      "identity": null,
+      "name": "process_time_seconds",
+      "entityType": "columns",
+      "schema": "public",
+      "table": "run_work_order_steps"
     },
     {
       "type": "serial",
@@ -1245,23 +1316,6 @@
       "table": "run_released_orders"
     },
     {
-      "nameExplicit": false,
-      "columns": [
-        "run_id"
-      ],
-      "schemaTo": "public",
-      "tableTo": "simulation_runs",
-      "columnsTo": [
-        "id"
-      ],
-      "onUpdate": "NO ACTION",
-      "onDelete": "CASCADE",
-      "name": "run_routing_steps_run_id_simulation_runs_id_fkey",
-      "entityType": "fks",
-      "schema": "public",
-      "table": "run_routing_steps"
-    },
-    {
       "nameExplicit": true,
       "columns": [
         "run_id",
@@ -1330,6 +1384,57 @@
       "entityType": "fks",
       "schema": "public",
       "table": "run_wip_parts"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "run_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "simulation_runs",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "run_work_centers_run_id_simulation_runs_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "run_work_centers"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "run_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "simulation_runs",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "name": "run_work_order_steps_run_id_simulation_runs_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "run_work_order_steps"
+    },
+    {
+      "nameExplicit": false,
+      "columns": [
+        "work_order_id"
+      ],
+      "schemaTo": "public",
+      "tableTo": "work_orders",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "name": "run_work_order_steps_work_order_id_work_orders_id_fkey",
+      "entityType": "fks",
+      "schema": "public",
+      "table": "run_work_order_steps"
     },
     {
       "nameExplicit": false,
@@ -1413,18 +1518,6 @@
     {
       "columns": [
         "run_id",
-        "routing_id",
-        "sequence"
-      ],
-      "nameExplicit": false,
-      "name": "run_routing_steps_pkey",
-      "entityType": "pks",
-      "schema": "public",
-      "table": "run_routing_steps"
-    },
-    {
-      "columns": [
-        "run_id",
         "tick_num",
         "work_center_id"
       ],
@@ -1444,6 +1537,29 @@
       "entityType": "pks",
       "schema": "public",
       "table": "run_ticks"
+    },
+    {
+      "columns": [
+        "run_id",
+        "work_center_id"
+      ],
+      "nameExplicit": false,
+      "name": "run_work_centers_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "run_work_centers"
+    },
+    {
+      "columns": [
+        "run_id",
+        "work_order_id",
+        "sequence"
+      ],
+      "nameExplicit": false,
+      "name": "run_work_order_steps_pkey",
+      "entityType": "pks",
+      "schema": "public",
+      "table": "run_work_order_steps"
     },
     {
       "columns": [

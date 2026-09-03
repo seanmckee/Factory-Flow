@@ -15,16 +15,9 @@ CREATE TABLE "run_finished_parts" (
 CREATE TABLE "run_released_orders" (
 	"run_id" integer,
 	"work_order_id" integer,
+	"routing_id" integer NOT NULL,
+	"routing_revision" varchar(255) NOT NULL,
 	CONSTRAINT "run_released_orders_pkey" PRIMARY KEY("run_id","work_order_id")
-);
---> statement-breakpoint
-CREATE TABLE "run_routing_steps" (
-	"run_id" integer,
-	"routing_id" integer,
-	"sequence" integer,
-	"work_center_id" integer NOT NULL,
-	"process_time_seconds" integer NOT NULL,
-	CONSTRAINT "run_routing_steps_pkey" PRIMARY KEY("run_id","routing_id","sequence")
 );
 --> statement-breakpoint
 CREATE TABLE "run_tick_work_centers" (
@@ -56,6 +49,22 @@ CREATE TABLE "run_wip_parts" (
 	CONSTRAINT "run_wip_parts_run_id_part_uuid_unique" UNIQUE("run_id","part_uuid")
 );
 --> statement-breakpoint
+CREATE TABLE "run_work_centers" (
+	"run_id" integer,
+	"work_center_id" integer,
+	"capacity" integer NOT NULL,
+	CONSTRAINT "run_work_centers_pkey" PRIMARY KEY("run_id","work_center_id")
+);
+--> statement-breakpoint
+CREATE TABLE "run_work_order_steps" (
+	"run_id" integer,
+	"work_order_id" integer,
+	"sequence" integer,
+	"work_center_id" integer NOT NULL,
+	"process_time_seconds" integer NOT NULL,
+	CONSTRAINT "run_work_order_steps_pkey" PRIMARY KEY("run_id","work_order_id","sequence")
+);
+--> statement-breakpoint
 CREATE TABLE "simulation_runs" (
 	"id" serial PRIMARY KEY,
 	"name" varchar(255) NOT NULL,
@@ -72,9 +81,11 @@ ALTER TABLE "run_finished_parts" ADD CONSTRAINT "run_finished_parts_work_order_i
 ALTER TABLE "run_finished_parts" ADD CONSTRAINT "run_finished_parts_sales_order_id_sales_orders_id_fkey" FOREIGN KEY ("sales_order_id") REFERENCES "sales_orders"("id") ON DELETE SET NULL;--> statement-breakpoint
 ALTER TABLE "run_released_orders" ADD CONSTRAINT "run_released_orders_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "run_released_orders" ADD CONSTRAINT "run_released_orders_work_order_id_work_orders_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT;--> statement-breakpoint
-ALTER TABLE "run_routing_steps" ADD CONSTRAINT "run_routing_steps_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "run_tick_work_centers" ADD CONSTRAINT "run_tick_work_centers_run_id_tick_num_run_ticks_fkey" FOREIGN KEY ("run_id","tick_num") REFERENCES "run_ticks"("run_id","tick_num") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "run_ticks" ADD CONSTRAINT "run_ticks_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "run_wip_parts" ADD CONSTRAINT "run_wip_parts_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
 ALTER TABLE "run_wip_parts" ADD CONSTRAINT "run_wip_parts_work_order_id_work_orders_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT;--> statement-breakpoint
+ALTER TABLE "run_work_centers" ADD CONSTRAINT "run_work_centers_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "run_work_order_steps" ADD CONSTRAINT "run_work_order_steps_run_id_simulation_runs_id_fkey" FOREIGN KEY ("run_id") REFERENCES "simulation_runs"("id") ON DELETE CASCADE;--> statement-breakpoint
+ALTER TABLE "run_work_order_steps" ADD CONSTRAINT "run_work_order_steps_work_order_id_work_orders_id_fkey" FOREIGN KEY ("work_order_id") REFERENCES "work_orders"("id") ON DELETE RESTRICT;--> statement-breakpoint
 ALTER TABLE "simulation_runs" ADD CONSTRAINT "simulation_runs_parent_run_id_simulation_runs_id_fkey" FOREIGN KEY ("parent_run_id") REFERENCES "simulation_runs"("id") ON DELETE RESTRICT;

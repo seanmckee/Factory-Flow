@@ -217,7 +217,7 @@ export const runTickWorkCenters = pgTable(
   {
     runId: integer("run_id").notNull(),
     tickNum: integer("tick_num").notNull(),
-    /** un-keyed on purpose: see the note above `runRoutingSteps` */
+    /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
     workCenterId: integer("work_center_id").notNull(),
     busy: integer("busy").notNull(),
     /** parts that wanted a machine here and didn't get one */
@@ -240,6 +240,11 @@ export const runTickWorkCenters = pgTable(
 /**
  * Which work orders a run owns. The primary key is the double-release guard
  * `releaseOrder` lacks today. No release tick here — it's on the part.
+ *
+ * `routing_id` / `routing_revision` record which routing the steps below were
+ * copied from. Provenance only: nothing reads them to decide behaviour, and
+ * `routing_revision` is a hand-typed label that `PUT /api/routings/:id/steps`
+ * does not bump, so two releases can honestly disagree while both saying "A".
  */
 export const runReleasedOrders = pgTable(
   "run_released_orders",
@@ -250,30 +255,58 @@ export const runReleasedOrders = pgTable(
     workOrderId: integer("work_order_id")
       .references(() => workOrders.id, { onDelete: "restrict" })
       .notNull(),
+    routingId: integer("routing_id").notNull(),
+    routingRevision: varchar("routing_revision", { length: 255 }).notNull(),
   },
   (table) => [primaryKey({ columns: [table.runId, table.workOrderId] })],
 );
 
 /**
- * The routing each part was released against, copied in on first release.
- * Without it, `PUT /api/routings/:id/steps` re-plans live parts mid-route and
- * shortening a list strands them past its end.
- *
- * `routing_id` and `work_center_id` are **un-keyed**, as is
- * `run_tick_work_centers.work_center_id` — don't add FKs. A snapshot and a set
- * of observations exist to outlive edits to what they copied, and an FK would
- * either erase a finished run's history or add a 500 path to work-centre
- * deletion that doesn't exist today. Work-center capacity is not snapshotted
- * and is still read live, so editing it mid-run shifts the utilization
- * denominator for ticks already observed.
+ * Work-center capacity as it stood when the run was created, copied for every
+ * centre in the factory. The engine reads capacity from here and never from
+ * `work_centers`, which is what lets two runs disagree about the drill press:
+ * change it in one run without touching the other, or the finished history of
+ * either.
  */
-export const runRoutingSteps = pgTable(
-  "run_routing_steps",
+export const runWorkCenters = pgTable(
+  "run_work_centers",
   {
     runId: integer("run_id")
       .references(() => simulationRuns.id, { onDelete: "cascade" })
       .notNull(),
-    routingId: integer("routing_id").notNull(),
+    /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
+    workCenterId: integer("work_center_id").notNull(),
+    capacity: integer("capacity").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.workCenterId] })],
+);
+
+/**
+ * The steps a released work order follows, copied from its routing at release
+ * and never touched again. Keyed by **work order**, not by routing: releasing
+ * work order A pins the routing as it is now, and editing that routing
+ * afterwards changes nothing for A while the next release picks up the edit.
+ * Ten work orders on an unedited routing means ten identical copies of a few
+ * rows, which is cheaper than any scheme that makes a part's steps ambiguous.
+ *
+ * Without this, `PUT /api/routings/:id/steps` re-plans parts already halfway
+ * through a route, and shortening a list strands them past its end.
+ *
+ * `work_center_id` here and in `run_work_centers` / `run_tick_work_centers` is
+ * **un-keyed** — don't add FKs. A pinned copy and a set of observations exist
+ * to outlive edits to what they copied, and an FK would either erase a
+ * finished run's history or add a 500 path to work-centre deletion that
+ * doesn't exist today.
+ */
+export const runWorkOrderSteps = pgTable(
+  "run_work_order_steps",
+  {
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, { onDelete: "restrict" })
+      .notNull(),
     /** 0-based, renumbered from array order as the live table is */
     sequence: integer("sequence").notNull(),
     workCenterId: integer("work_center_id").notNull(),
@@ -281,7 +314,7 @@ export const runRoutingSteps = pgTable(
   },
   (table) => [
     primaryKey({
-      columns: [table.runId, table.routingId, table.sequence],
+      columns: [table.runId, table.workOrderId, table.sequence],
     }),
   ],
 );

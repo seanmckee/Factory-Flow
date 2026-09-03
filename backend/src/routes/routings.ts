@@ -224,9 +224,9 @@ router.patch("/:id", async (req, res) => {
  * reinserted inside a transaction, which also renumbers sequences contiguously.
  *
  * Deliberately allowed while work orders reference the routing: changing a
- * process and watching the effect is the point of the simulator. A run already
- * in flight keeps the routing it was released with, since the frontend caches
- * routings per released order.
+ * process and watching the effect is the point of the simulator. Work already
+ * released is unaffected — a release copies the steps it will follow into
+ * `run_work_order_steps`, so an edit here reaches only later releases.
  */
 router.put("/:id/steps", async (req, res) => {
   try {

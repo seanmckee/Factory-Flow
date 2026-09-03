@@ -8,23 +8,27 @@ that completes it.
 
 ---
 
-**You are here:** Tracks 1 and 2 done — the backend owns the engine (types, a
-seeded replayable tick, the money model) and the tick reports what each work
-center did while it ran, with a window of those observations reducing to
-utilization, queue depth, WIP and cycle time. Track 3 has started: 3.1 landed
-the schema and migration for run persistence, so the tables exist but nothing
-writes them — a run is not yet an addressable object, and the frontend still
-runs its own copy of the engine until 3.4 deletes it. 1.1 shipped in
-`feat/engine-to-backend`; 1.2-1.3 in `feat/engine-to-backend-tick`; 1.0 on its
-own branch, being a frontend refactor rather than part of the move. Track 2
-shipped in `feat/simulation-metrics`.
+**You are here:** Tracks 1 and 2 done — the backend owns the engine and the
+tick reports what each work center did while it ran. Track 3 in progress: 3.1
+and 3.1b landed the schema and migration for run persistence, eight tables, and
+established the invariant that **a run reads its own config and never the live
+factory tables again**. The tables exist but nothing writes them; the frontend
+still runs its own copy of the engine until 3.4 deletes it.
 
-**Next up:** Track 3, unit 3.2 — the run service. Load once, advance N ticks in
-memory, write once per batch in one transaction. 3.1 settled the routing
-snapshot question (yes, `run_routing_steps`), so what is left open in this track
-is what "reset" means (3.3), whether work-center *capacity* is snapshotted
-alongside the steps (see 3.1's note), and the fact that `work_orders.status` has
-still never had a writer.
+**Next up:** 3.2a — `creditFinishedParts`. `run_finished_parts` has per-part
+money columns and `calculateThroughput` returns only a tick total, computing the
+per-part attribution internally and discarding it. Split it: the new function
+returns a credit per finished part and `calculateThroughput` becomes a sum over
+it, so the existing throughput tests stand as the contract on the sum. Then 3.2,
+the run service.
+
+**Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
+API an agent can drive; Track 6 is what makes driving it mean anything, because
+money only goes up today and "release everything" wins by default. Skippable
+until after the agent: 3.4, 3.5, Track 5, and most of Track 4 (fast-forward
+falls out of 3.2's load-once/write-once design). Track 7 forking is *not*
+load-bearing either — two runs from the same seed and config with different
+policies is already a valid comparison, since the RNG is a pure hash.
 
 ---
 
@@ -235,11 +239,48 @@ Where a run becomes a server-side object an agent can address.
       - `npm run seed` now deletes `simulation_runs` first: run parts and
         released orders hold RESTRICT references to work orders, and the cascade
         clears a run's history in one statement.
-      - **New open decision, deferred:** work-center **capacity** is still read
-        live, so editing it mid-run retroactively changes the utilization
-        denominator for ticks already observed — the same class of drift the
-        routing snapshot just fixed. Freezing it means a per-run work-center
-        snapshot; decide in 3.2 or 3.3, when there is a loader to read it.
+      - Work-center **capacity** was left read-live here, which retroactively
+        moved the utilization denominator for ticks already observed. Settled in
+        3.1b: frozen per run.
+- [x] 3.1b Re-key the pinned steps and freeze capacity, after talking the fork
+      model through (2026-09-03). 3.1 pinned steps per **run**, first release
+      winning, which silently made a later release follow an older routing.
+      **Decided:** pin per **work order**, at release — `run_routing_steps`
+      becomes `run_work_order_steps` keyed `(run_id, work_order_id, sequence)`.
+      Editing a routing then affects only releases made after the edit, and two
+      work orders off one routing can be following different step lists in the
+      same run, which is what `routings.revision` has always implied. Ten work
+      orders on an unedited routing means ten identical copies of a few rows —
+      cheaper than any scheme that makes a part's steps ambiguous.
+      **Decided:** capacity is frozen too, as `run_work_centers
+      (run_id, work_center_id, capacity)` copied at run creation — settling the
+      question 3.1 deferred. Capacity is the bottleneck lever from the book, so
+      it is the first thing a fork will want to change.
+      **The invariant this buys:** once a run exists the engine reads run-owned
+      config only, never `work_centers` or `routing_steps`. Forking is then a
+      copy of rows rather than a versioning scheme bolted on in Track 7.
+      **Engine:** `WipPart.routingId` is *gone* — the map is keyed by
+      `workOrderId`, which the part already carried, so the re-key removed a
+      field instead of adding one. New test: two work orders, two pinned step
+      lists, each part following its own.
+      **Provenance:** `run_released_orders` gains `routing_id` +
+      `routing_revision`, recording what was copied. Nothing reads them to
+      decide behaviour, deliberately — `PUT /api/routings/:id/steps` does not
+      bump `revision`, so two releases can differ while both saying "A". Fixing
+      that writer is a separate call.
+      Migration regenerated as one file rather than a correction on top, since
+      3.1's was never applied. Also corrected the table count: 3.1 said "six",
+      which counted bullet groups, not tables.
+      **Still open, one layer up:** a run has no editable *default* config for
+      future releases — editing what the next release will pin still means
+      editing the live routing, which is shared. Per-run demand (which orders
+      exist, what they pay) is unfrozen for the same reason. The money columns
+      on `run_finished_parts` already protect completed history, so neither is
+      urgent; both are the same freeze-at-a-moment pattern again if needed.
+- [ ] 3.2a `creditFinishedParts` — per-part money attribution, split out of
+      `calculateThroughput`, which returns a tick total and throws the
+      attribution away. `run_finished_parts` cannot be filled without it.
+      Pure, so it lands with tests before the service.
 - [ ] 3.2 Run service. **Never persist per tick** — load once, advance N ticks in
       memory, write once per batch, one transaction. Neon over a WebSocket pool
       makes every write a round trip; per-tick writes make Track 4 impossible.

@@ -207,7 +207,6 @@ describe("aggregateMetrics", () => {
       {
         id: "part-1",
         workOrderId: 1,
-        routingId: 1,
         releasedAtTick: 0,
         stepIndex: 0,
         progressSeconds: 0,

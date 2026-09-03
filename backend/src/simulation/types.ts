@@ -15,12 +15,6 @@ export type WipPart = {
   id: string;
   workOrderId: number;
   /**
-   * Denormalized from the work order. Not a stored column — the loader fills it
-   * in when a run is hydrated, so a tick stays a pure function of parts plus
-   * routings and never has to reach back through the work order.
-   */
-  routingId: number;
-  /**
    * The tick this part was released onto the floor, carried for the whole of
    * its life so that cycle time is `completedAtTick - releasedAtTick`.
    *
@@ -63,7 +57,12 @@ export type RoutingStep = {
   processTimeSeconds: number;
 };
 
-/** Steps in sequence order. Keyed by routing id where the engine holds a Map. */
+/**
+ * Steps in sequence order, as pinned for one work order at release. Keyed by
+ * **work order id** where the engine holds a Map: a routing edit only affects
+ * releases made after it, so two work orders on the same routing can be
+ * following different step lists at the same time.
+ */
 export type Routing = {
   steps: RoutingStep[];
 };

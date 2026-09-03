@@ -82,13 +82,13 @@ type Claim = {
 
 function resolve(
   part: WipPart,
-  routings: Map<number, Routing>,
+  routingByWorkOrder: Map<number, Routing>,
   workCenters: Map<number, WorkCenter>,
 ): Claim | null {
-  const routing = routings.get(part.routingId);
+  const routing = routingByWorkOrder.get(part.workOrderId);
   if (!routing) {
     throw new Error(
-      `Part ${part.id} references routing ${part.routingId}, which was not loaded`,
+      `Part ${part.id} has no pinned routing for work order ${part.workOrderId}`,
     );
   }
   const step = routing.steps[part.stepIndex];
@@ -116,7 +116,8 @@ function resolve(
  */
 export function simulateTick(
   wipParts: WipPart[],
-  routings: Map<number, Routing>,
+  /** keyed by work order id: each release pins its own copy of the steps */
+  routingByWorkOrder: Map<number, Routing>,
   tickNum: number,
   workCenters: Map<number, WorkCenter>,
   rngSeed: number,
@@ -126,7 +127,7 @@ export function simulateTick(
 
   for (const source of wipParts) {
     const part = { ...source };
-    const claim = resolve(part, routings, workCenters);
+    const claim = resolve(part, routingByWorkOrder, workCenters);
     if (!claim) {
       // stranded past the end of a shortened routing: credited now, and it
       // holds no machine on the way out
