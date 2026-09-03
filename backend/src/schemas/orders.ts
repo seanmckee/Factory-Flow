@@ -105,7 +105,7 @@ export const updatePartSchema = z
 
 // Routings
 
-function routingText(label: string) {
+function boundedText(label: string) {
   return z
     .string({ error: `${label} must be text` })
     .trim()
@@ -132,16 +132,16 @@ const stepListSchema = z
 
 export const createRoutingSchema = z.object({
   partId: positiveInt("partId"),
-  name: routingText("name"),
+  name: boundedText("name"),
   // omitted takes the column default of "A"
-  revision: routingText("revision").optional(),
+  revision: boundedText("revision").optional(),
   steps: stepListSchema,
 });
 
 export const updateRoutingSchema = z
   .object({
-    name: routingText("name").optional(),
-    revision: routingText("revision").optional(),
+    name: boundedText("name").optional(),
+    revision: boundedText("revision").optional(),
   })
   .refine((body) => body.name !== undefined || body.revision !== undefined, {
     error: "provide name or revision",
@@ -174,3 +174,50 @@ export type CreateSalesOrderBody = z.infer<typeof createSalesOrderSchema>;
 export type CreateWorkOrderBody = z.infer<typeof createWorkOrderSchema>;
 export type CreateWorkCenterBody = z.infer<typeof createWorkCenterSchema>;
 export type CreateRoutingBody = z.infer<typeof createRoutingSchema>;
+
+/**
+ * A run's seed. Any int the column holds will do — it is hashed with the work
+ * order, unit and step to produce a draw — and it is optional on create so a
+ * caller that does not care gets a random one and can read it back to replay.
+ */
+const seedInt = z
+  .int({ error: "rngSeed must be a whole number" })
+  .nonnegative({ error: "rngSeed must be greater than or equal to zero" })
+  .max(2147483647, { error: "rngSeed must fit in a 32-bit integer" });
+
+export const createRunSchema = z.object({
+  name: boundedText("name"),
+  rngSeed: seedInt.optional(),
+});
+
+export const releaseWorkOrderSchema = z.object({
+  workOrderId: positiveInt("workOrderId"),
+});
+
+/**
+ * How many ticks one request advances. Capped because advancing is synchronous
+ * and roughly 500 ticks per second — an uncapped request would hold a
+ * connection for minutes with nothing to show until it finished. An agent that
+ * wants more calls again; the run is resumable by construction.
+ */
+export const MAX_TICKS_PER_REQUEST = 20000;
+
+export const advanceRunSchema = z.object({
+  ticks: positiveInt("ticks").max(MAX_TICKS_PER_REQUEST, {
+    error: `ticks must be ${MAX_TICKS_PER_REQUEST} or fewer per request`,
+  }),
+});
+
+/** Optional tick window for reading a run's metrics, from the query string. */
+export const metricsWindowSchema = z.object({
+  fromTick: z.coerce
+    .number({ error: "fromTick must be a number" })
+    .int({ error: "fromTick must be a whole number" })
+    .positive({ error: "fromTick must be greater than zero" })
+    .optional(),
+  toTick: z.coerce
+    .number({ error: "toTick must be a number" })
+    .int({ error: "toTick must be a whole number" })
+    .positive({ error: "toTick must be greater than zero" })
+    .optional(),
+});

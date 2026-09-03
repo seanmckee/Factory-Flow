@@ -6,6 +6,7 @@ import workCentersRouter from "./routes/workCenters.js";
 import routingsRouter from "./routes/routings.js";
 import workOrderRouter from "./routes/workOrders.js";
 import salesOrderRouter from "./routes/salesOrders.js";
+import runsRouter from "./routes/runs.js";
 
 dotenv.config();
 
@@ -24,6 +25,7 @@ app.use("/api/work-centers", workCentersRouter);
 app.use("/api/routings", routingsRouter);
 app.use("/api/work-orders", workOrderRouter);
 app.use("/api/sales-orders", salesOrderRouter);
+app.use("/api/runs", runsRouter);
 
 app.listen(port, () => {
   console.log(`Backend running on http://localhost:${port}`);

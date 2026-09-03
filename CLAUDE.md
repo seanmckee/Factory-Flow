@@ -43,6 +43,21 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - ESM with `"module": "nodenext"` — **relative imports must carry the `.js` extension** (`./db/index.js`), even though the sources are `.ts`.
 - `tsconfig.json` enables `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; array indexing and destructuring yield `T | undefined`, so seed/route code explicitly null-checks after `.returning()`.
 - Each router in `src/routes/` is a default-exported `Router` mounted at `/api/<resource>` in `src/server.ts`. Sales orders and work orders expose `POST` and `DELETE /:id` alongside their GETs; work centers, parts and routings expose `POST`, `PATCH /:id` and `DELETE /:id`. Routings add `PUT /:id/steps`, the only PUT in the API: steps are replaced wholesale because `UNIQUE(routing_id, sequence)` makes an incremental reorder collide halfway through, so the handler deletes and reinserts inside a transaction and renumbers sequences from array order. Step payloads therefore never carry a `sequence`.
+- `src/routes/runs.ts` is the run API, and the only router that holds no DB
+  code: `lib/runService.ts` owns loading, the lock and the batched writes, and
+  the routes validate, map an `HttpError` onto its status and serialise. Routes
+  are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
+  frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
+  `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
+  `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
+  at roughly 500 ticks a second; a caller that wants more calls again, since a
+  run is resumable by construction. `unlock` is **not** a reset — it clears a
+  lock a dead process left, and re-creating a run with the same seed reproduces
+  it exactly, so rewinding one is not a feature. `work_orders.status` still has
+  no writer and should not gain one here: a release is per-run
+  (`run_released_orders`), so a single global column cannot say whether a work
+  order is running.
 - Deletes come in two flavours. Sales and work orders cascade their allocations, so `DELETE` refuses with `409 { message, requiresConfirmation: true, allocations }` and the client re-sends with `?force=true`. Work centers do **not**: `routing_steps.work_center_id` is `ON DELETE RESTRICT`, so a referenced centre can't be removed at all and its 409 deliberately omits `requiresConfirmation` — `deleteConflict()` on the client ignores it and the message lands in the error toast instead of a confirm dialog. Don't add a `?force=` path there without changing the FK.
 - Parts carry **both** shapes, because their three foreign keys disagree: `work_orders.part_id` and `sales_orders.part_id` are RESTRICT (hard refusal, no `requiresConfirmation`) while `routings.part_id` is CASCADE (confirmable, `?force=true`). `DELETE /api/parts/:id` checks RESTRICT first — when an order references the part no amount of force helps, so offering a confirm dialog would be a lie. `DeleteConflict` in `api/client.ts` therefore carries `allocations?` and `routings?` as optional per-resource detail.
 - Tests run under vitest with `environment: node` (`backend/vitest.config.ts`), the same way the frontend runs the simulation engine — pure functions only, no DB and no HTTP in the suite. `tsconfig.json` sets `"types": []`, so test globals are imported explicitly from `vitest` rather than relied on ambiently. The config's `include` is scoped to `src/**/*.test.ts` because `npm run build` compiles tests into `dist/` too, and an unscoped vitest would collect that stale copy as a second suite.

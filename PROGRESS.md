@@ -8,19 +8,17 @@ that completes it.
 
 ---
 
-**You are here:** Tracks 1 and 2 done. Track 3 in progress: the schema exists
-and is **applied to Neon**, and the run service works end to end — verified
-against the dev database at 600 ticks in 1.3s, money matching its allocations
-and splitting across two sales orders at different prices. 3.2b then fixed the
-seed, which had never actually determined a run. Nothing is behind HTTP yet and
-the frontend still runs its own engine copy until 3.4 deletes it.
+**You are here:** Track 3 is done bar the frontend. The run API is live and
+exercised over HTTP — create, release, advance, read metrics over a tick
+window, unlock, delete — with the schema applied to Neon. **An agent can drive
+the simulation now.** What is left in the track is 3.4, deleting the frontend's
+engine copy, and 3.5's doc sweep.
 
-**Next up:** 3.3 — routes. create / list / get / release / advance / delete,
-plus the **reset** that releases a lock left by a dead process, since 3.2 made
-that the only way out. This is the point at which the service gets executed for
-the first time: `simulateBatch` has 20 tests, `runService` has none by design
-(the suite is pure-functions-only, no DB), so 3.3 is also its first real
-exercise. The migration is still unapplied to Neon.
+**Next up:** Track 6 — operating expense. Recommended over 3.4/3.5/Track 5,
+because money still only goes up: with no cost accruing against simulated time
+and none for holding WIP, "release everything immediately" is the optimal
+policy and an agent would find it in two moves. Track 6 is what makes the
+objective non-degenerate. 3.4 and 3.5 block nothing an agent needs.
 
 **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an HTTP
 API an agent can drive; Track 6 is what makes driving it mean anything, because
@@ -359,9 +357,43 @@ Where a run becomes a server-side object an agent can address.
       lockstep. That is what broke `draws independently per part` in
       `simulationTick.test.ts`, whose parts are now numbered as a release
       numbers them.
-- [ ] 3.3 Routes — create / list / get / release / advance / delete.
-      **Open decision:** what "reset" means, and `work_orders.status` has never
-      had a writer.
+- [x] 3.3 Routes — `src/routes/runs.ts`, the only router with no DB code in it;
+      `runService` owns the loading, the lock and the writes.
+      **The open decision on "reset" is resolved: there isn't one.** Two things
+      were hiding under the word. Clearing a lock a dead process left is real
+      and is `POST /:id/unlock`, the only way out of `advancing` since the lock
+      is deliberately non-transactional. Rewinding a run to tick 0 is *not*
+      needed at all — 3.2b made a run reproducible from its seed, so deleting
+      and re-creating it gives the same run back. (Caveat: it re-copies the
+      *current* factory config, so a run started before a capacity edit is not
+      recoverable that way. Forking will be the answer if that ever matters.)
+      **`work_orders.status` stays unwritten, and that is now a decision, not
+      an omission:** a release is per-run, so one global column cannot say
+      whether a work order is running. `run_released_orders` is the truth.
+      **Decided:** `ticks` is capped at 20000 per request. Advancing is
+      synchronous at ~500 ticks/second, so an uncapped request would hold a
+      connection for minutes with nothing to show; a caller wanting more calls
+      again, a run being resumable by construction.
+      **Beyond the ledger's list:** `GET /:id/metrics?fromTick&toTick`, because
+      an agent that cannot read observations cannot experiment. It passes the
+      bounds down rather than slicing one series, since flow and cycle time
+      window on different columns by the engine's contract.
+      **Decided:** deleting a run needs no `?force=true` — a run owns
+      everything that cascades from it, so nothing outside it is lost. A run
+      another was forked from is a hard 409 with no confirm path, since losing
+      the baseline a comparison is against is not something to confirm past.
+      Also renamed the private `routingText` zod helper to `boundedText`, now
+      that a run name uses it too.
+      **Exercised over HTTP against the dev database**, which is the first time
+      `runService` ran at all: create with and without a seed, validation
+      failures, release, double release 409, unknown work order 404, the tick
+      cap 400, advance 200 and 3000 ticks, run summary with frozen money,
+      metrics over the whole run and over a window (wc51 reads 10% utilization
+      run-wide and 52% in the busy window — the bottleneck is only visible in
+      the right window), a backwards window 400, unlock, list, delete 204, and
+      404s throughout. **Two concurrent advances: one 200, one 409. A release
+      during an advance: 409** — the silent data loss the shared lock exists to
+      prevent. Server log clean.
 - [ ] 3.4 Frontend switchover **and** deletion of the frontend engine, one
       commit, so two engines never coexist untested. `cumulativeThroughput.ts`
       stays — it's a chart transform, not physics.

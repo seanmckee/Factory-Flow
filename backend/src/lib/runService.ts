@@ -1,4 +1,4 @@
-import { and, count, eq, inArray } from "drizzle-orm";
+import { and, count, eq, gte, inArray, lte, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   allocations,
@@ -21,7 +21,17 @@ import {
   PROCESS_TIME_DEVIATION,
   sampleProcessTime,
 } from "../simulation/sampleProcessTime.js";
+import {
+  aggregateCycleTime,
+  aggregateMetrics,
+  type CycleTimeAggregate,
+  type MetricsAggregate,
+} from "../simulation/metrics.js";
 import { simulateBatch, type RunState } from "../simulation/simulateBatch.js";
+import type {
+  TickMetrics,
+  TickWorkCenterMetrics,
+} from "../simulation/simulationTick.js";
 import type { Routing, WipPart } from "../simulation/types.js";
 import { HttpError } from "./httpError.js";
 
@@ -474,4 +484,229 @@ async function loadRunState(run: RunRow): Promise<RunState> {
       finishedCounts.map((row) => [row.workOrderId, Number(row.finished)]),
     ),
   };
+}
+
+export type RunSummary = RunRow & {
+  wipCount: number;
+  finishedCount: number;
+  /** every unit's frozen throughput, summed — the run's score so far */
+  throughputCents: number;
+  releasedOrders: {
+    workOrderId: number;
+    routingId: number;
+    routingRevision: string;
+  }[];
+};
+
+export async function listRuns(): Promise<RunRow[]> {
+  return db.select().from(simulationRuns).orderBy(simulationRuns.id);
+}
+
+/**
+ * A run and the counts that say where it got to. The money is summed from the
+ * frozen per-unit columns rather than from `run_ticks`, so it stays the same
+ * figure the finished parts justify.
+ */
+export async function getRun(runId: number): Promise<RunSummary> {
+  const [run] = await db
+    .select()
+    .from(simulationRuns)
+    .where(eq(simulationRuns.id, runId));
+  if (!run) throw new HttpError(404, `Run ${runId} not found`);
+
+  const [wip] = await db
+    .select({ count: count() })
+    .from(runWipParts)
+    .where(eq(runWipParts.runId, runId));
+
+  const [finished] = await db
+    .select({ count: count(), throughputCents: sum(runFinishedParts.throughputCents) })
+    .from(runFinishedParts)
+    .where(eq(runFinishedParts.runId, runId));
+
+  const releasedOrders = await db
+    .select({
+      workOrderId: runReleasedOrders.workOrderId,
+      routingId: runReleasedOrders.routingId,
+      routingRevision: runReleasedOrders.routingRevision,
+    })
+    .from(runReleasedOrders)
+    .where(eq(runReleasedOrders.runId, runId))
+    .orderBy(runReleasedOrders.workOrderId);
+
+  return {
+    ...run,
+    wipCount: Number(wip?.count ?? 0),
+    finishedCount: Number(finished?.count ?? 0),
+    // sum() is null over no rows, and arrives as a string from the driver
+    throughputCents: Number(finished?.throughputCents ?? 0),
+    releasedOrders,
+  };
+}
+
+export type RunMetrics = {
+  fromTick: number;
+  toTick: number;
+  throughputCents: number;
+  flow: MetricsAggregate;
+  cycleTime: CycleTimeAggregate;
+};
+
+/**
+ * The observations over a tick window, which is what an experiment is read
+ * from. The two aggregates window independently — flow on `tick_num`, cycle
+ * time on `completed_at_tick` — as the engine's own contract says, so this
+ * filters each on its own column rather than joining them.
+ *
+ * Work centers come from the run's frozen capacities, so utilization divides by
+ * the capacity the run actually ran with, not whatever the factory says now.
+ */
+export async function getRunMetrics(
+  runId: number,
+  fromTick?: number,
+  toTick?: number,
+): Promise<RunMetrics> {
+  const [run] = await db
+    .select()
+    .from(simulationRuns)
+    .where(eq(simulationRuns.id, runId));
+  if (!run) throw new HttpError(404, `Run ${runId} not found`);
+
+  const from = fromTick ?? 1;
+  const to = toTick ?? run.tickNum;
+  if (to < from) {
+    throw new HttpError(400, `toTick ${to} is before fromTick ${from}`);
+  }
+
+  const tickRows = await db
+    .select()
+    .from(runTicks)
+    .where(
+      and(
+        eq(runTicks.runId, runId),
+        gte(runTicks.tickNum, from),
+        lte(runTicks.tickNum, to),
+      ),
+    )
+    .orderBy(runTicks.tickNum);
+
+  const centerRows = await db
+    .select()
+    .from(runTickWorkCenters)
+    .where(
+      and(
+        eq(runTickWorkCenters.runId, runId),
+        gte(runTickWorkCenters.tickNum, from),
+        lte(runTickWorkCenters.tickNum, to),
+      ),
+    );
+
+  const finished = await db
+    .select()
+    .from(runFinishedParts)
+    .where(
+      and(
+        eq(runFinishedParts.runId, runId),
+        gte(runFinishedParts.completedAtTick, from),
+        lte(runFinishedParts.completedAtTick, to),
+      ),
+    )
+    .orderBy(runFinishedParts.completedAtTick, runFinishedParts.id);
+
+  const storedCenters = await db
+    .select({
+      workCenterId: runWorkCenters.workCenterId,
+      capacity: runWorkCenters.capacity,
+    })
+    .from(runWorkCenters)
+    .where(eq(runWorkCenters.runId, runId))
+    .orderBy(runWorkCenters.workCenterId);
+
+  const centersByTick = new Map<number, TickWorkCenterMetrics[]>();
+  for (const row of centerRows) {
+    const entry = {
+      workCenterId: row.workCenterId,
+      busy: row.busy,
+      queued: row.queued,
+    };
+    const list = centersByTick.get(row.tickNum);
+    if (list) list.push(entry);
+    else centersByTick.set(row.tickNum, [entry]);
+  }
+
+  const series: TickMetrics[] = tickRows.map((row) => ({
+    tickNum: row.tickNum,
+    wipCount: row.wipCount,
+    workCenters: centersByTick.get(row.tickNum) ?? [],
+  }));
+
+  return {
+    fromTick: from,
+    toTick: to,
+    throughputCents: tickRows.reduce((sum, row) => sum + row.throughputCents, 0),
+    flow: aggregateMetrics(
+      series,
+      new Map(
+        storedCenters.map((center) => [
+          center.workCenterId,
+          { id: center.workCenterId, capacity: center.capacity },
+        ]),
+      ),
+    ),
+    cycleTime: aggregateCycleTime(
+      finished.map((part) => ({
+        id: part.partUuid,
+        workOrderId: part.workOrderId,
+        releasedAtTick: part.releasedAtTick,
+        completedAtTick: part.completedAtTick,
+      })),
+    ),
+  };
+}
+
+/**
+ * Clears a lock left behind by a process that died mid-batch. The only way out
+ * of `advancing`, since the lock is deliberately not transactional — a lock
+ * that rolls back with its own transaction cannot stop a second caller.
+ *
+ * Safe because the batch it was holding either committed or rolled back: a run
+ * is never half-written, so there is no repair to do beyond letting it move
+ * again. Deliberately not a "reset": re-creating a run with the same seed
+ * reproduces it exactly, so rewinding one is not a feature anybody needs.
+ */
+export async function unlockRun(runId: number): Promise<RunRow> {
+  const [unlocked] = await db
+    .update(simulationRuns)
+    .set({ status: "idle" })
+    .where(eq(simulationRuns.id, runId))
+    .returning();
+  if (!unlocked) throw new HttpError(404, `Run ${runId} not found`);
+  return unlocked;
+}
+
+/**
+ * Deletes a run and, by cascade, all of its history. Pre-checks for forks so
+ * the `parent_run_id` RESTRICT surfaces as a 409 with our own message rather
+ * than a constraint error.
+ */
+export async function deleteRun(runId: number): Promise<void> {
+  const forks = await db
+    .select({ id: simulationRuns.id })
+    .from(simulationRuns)
+    .where(eq(simulationRuns.parentRunId, runId));
+
+  if (forks.length > 0) {
+    throw new HttpError(
+      409,
+      `Run ${runId} was forked by run${forks.length > 1 ? "s" : ""} ${forks
+        .map((fork) => fork.id)
+        .join(", ")}, which would lose the run they are compared against`,
+    );
+  }
+
+  const [deleted] = await db
+    .delete(simulationRuns)
+    .where(eq(simulationRuns.id, runId))
+    .returning({ id: simulationRuns.id });
+  if (!deleted) throw new HttpError(404, `Run ${runId} not found`);
 }
