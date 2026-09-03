@@ -9,7 +9,7 @@ import OrdersDataProvider from "../../orders/OrdersDataProvider";
 export default function OrdersLayout() {
   return (
     <OrdersDataProvider>
-      <div className="p-6">
+      <div className="h-full overflow-hidden p-6">
         <Outlet />
       </div>
     </OrdersDataProvider>
