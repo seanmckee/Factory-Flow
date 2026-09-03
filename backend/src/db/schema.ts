@@ -1,4 +1,15 @@
-import { integer, pgTable, varchar, serial, unique } from "drizzle-orm/pg-core";
+import {
+  integer,
+  pgTable,
+  varchar,
+  serial,
+  unique,
+  uuid,
+  primaryKey,
+  foreignKey,
+  index,
+  type AnyPgColumn,
+} from "drizzle-orm/pg-core";
 
 export const workCenters = pgTable("work_centers", {
   id: serial("id").primaryKey(),
@@ -92,4 +103,185 @@ export const allocations = pgTable(
   },
 
   (table) => [unique().on(table.salesOrderId, table.workOrderId)],
+);
+
+
+/* ---------------------------------------------------------------------------
+ * Run persistence: one run's history, below the shared factory definition
+ * above. The comments here flag only what a future edit would otherwise
+ * break.
+ * ------------------------------------------------------------------------- */
+
+export const simulationRuns = pgTable("simulation_runs", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 255 }).notNull(),
+  /** `idle` | `advancing` | `failed` — the advance lock. No writer yet. */
+  status: varchar("status", { length: 20 }).notNull().default("idle"),
+  tickNum: integer("tick_num").notNull().default(0),
+  /** the whole of the run's randomness; the draw needs no cursor */
+  rngSeed: integer("rng_seed").notNull(),
+  /** reserved for forking a run at a checkpoint; nothing sets it today */
+  parentRunId: integer("parent_run_id").references(
+    (): AnyPgColumn => simulationRuns.id,
+    { onDelete: "restrict" },
+  ),
+  forkedAtTick: integer("forked_at_tick"),
+});
+
+/**
+ * Parts on the floor: updated as one advances, deleted when it finishes.
+ * Deliberately carries neither `work_center_id` (derived from the routing the
+ * engine already holds in a Map) nor `routing_id` (on the work order, RESTRICT).
+ */
+export const runWipParts = pgTable(
+  "run_wip_parts",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    /** the engine's `WipPart.id`, and a draw key */
+    partUuid: uuid("part_uuid").notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, { onDelete: "restrict" })
+      .notNull(),
+    releasedAtTick: integer("released_at_tick").notNull(),
+    stepIndex: integer("step_index").notNull(),
+    progressSeconds: integer("progress_seconds").notNull().default(0),
+    actualProcessTimeSeconds: integer("actual_process_time_seconds").notNull(),
+  },
+  (table) => [unique().on(table.runId, table.partUuid)],
+);
+
+/**
+ * Append-only. The money columns are **frozen at finish time**, not recomputed:
+ * allocations cascade away with their sales order, and `calculateThroughput`
+ * credits an uncovered unit zero, so recomputing would let deleting a sales
+ * order rewrite a finished run's chart. Read in `(completed_at_tick, id)`
+ * order — a tick finishes several parts at once, at different prices.
+ */
+export const runFinishedParts = pgTable(
+  "run_finished_parts",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    partUuid: uuid("part_uuid").notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, { onDelete: "restrict" })
+      .notNull(),
+    releasedAtTick: integer("released_at_tick").notNull(),
+    completedAtTick: integer("completed_at_tick").notNull(),
+    /** `unit_price_cents - material_cost_cents`, or 0 for an uncovered unit */
+    throughputCents: integer("throughput_cents").notNull(),
+    /** null when the unit was uncovered — inventory, not revenue */
+    salesOrderId: integer("sales_order_id").references(() => salesOrders.id, {
+      onDelete: "set null",
+    }),
+    /** null exactly when `sales_order_id` is */
+    unitPriceCents: integer("unit_price_cents"),
+    materialCostCents: integer("material_cost_cents").notNull(),
+  },
+  (table) => [
+    unique().on(table.runId, table.partUuid),
+    index("run_finished_parts_run_id_completed_at_tick_id_idx").on(
+      table.runId,
+      table.completedAtTick,
+      table.id,
+    ),
+  ],
+);
+
+/** The series the chart reads. Not recomputable — WIP is mutable state. */
+export const runTicks = pgTable(
+  "run_ticks",
+  {
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    tickNum: integer("tick_num").notNull(),
+    throughputCents: integer("throughput_cents").notNull(),
+    wipCount: integer("wip_count").notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.tickNum] })],
+);
+
+/**
+ * What each work center did during a tick, one row per center **including idle
+ * ones**: utilization divides by the centre's own observed ticks, so a gap
+ * would report it idle for time it wasn't watched. `busy` counts machines.
+ */
+export const runTickWorkCenters = pgTable(
+  "run_tick_work_centers",
+  {
+    runId: integer("run_id").notNull(),
+    tickNum: integer("tick_num").notNull(),
+    /** un-keyed on purpose: see the note above `runRoutingSteps` */
+    workCenterId: integer("work_center_id").notNull(),
+    busy: integer("busy").notNull(),
+    /** parts that wanted a machine here and didn't get one */
+    queued: integer("queued").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.runId, table.tickNum, table.workCenterId],
+    }),
+    // named explicitly: drizzle-kit gives a composite key a random suffix that
+    // churns on every regeneration
+    foreignKey({
+      name: "run_tick_work_centers_run_id_tick_num_run_ticks_fkey",
+      columns: [table.runId, table.tickNum],
+      foreignColumns: [runTicks.runId, runTicks.tickNum],
+    }).onDelete("cascade"),
+  ],
+);
+
+/**
+ * Which work orders a run owns. The primary key is the double-release guard
+ * `releaseOrder` lacks today. No release tick here — it's on the part.
+ */
+export const runReleasedOrders = pgTable(
+  "run_released_orders",
+  {
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, { onDelete: "restrict" })
+      .notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.runId, table.workOrderId] })],
+);
+
+/**
+ * The routing each part was released against, copied in on first release.
+ * Without it, `PUT /api/routings/:id/steps` re-plans live parts mid-route and
+ * shortening a list strands them past its end.
+ *
+ * `routing_id` and `work_center_id` are **un-keyed**, as is
+ * `run_tick_work_centers.work_center_id` — don't add FKs. A snapshot and a set
+ * of observations exist to outlive edits to what they copied, and an FK would
+ * either erase a finished run's history or add a 500 path to work-centre
+ * deletion that doesn't exist today. Work-center capacity is not snapshotted
+ * and is still read live, so editing it mid-run shifts the utilization
+ * denominator for ticks already observed.
+ */
+export const runRoutingSteps = pgTable(
+  "run_routing_steps",
+  {
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    routingId: integer("routing_id").notNull(),
+    /** 0-based, renumbered from array order as the live table is */
+    sequence: integer("sequence").notNull(),
+    workCenterId: integer("work_center_id").notNull(),
+    processTimeSeconds: integer("process_time_seconds").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.runId, table.routingId, table.sequence],
+    }),
+  ],
 );

@@ -10,7 +10,7 @@ import type {
  * Throughput in Goldratt's sense: money made through sales, not parts produced.
  * A finished unit earns `unitPriceCents - materialCostCents` only if an
  * allocation covers it; units beyond what was sold earn nothing, which is what
- * makes releasing everything a losing move once Track 6 charges for the WIP.
+ * makes releasing everything a losing move once WIP is charged for.
  *
  * `priorCounts` maps a work order to how many of its units finished before this
  * tick. Rescanning the whole finished history here cost O(finished^2) over a

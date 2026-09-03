@@ -40,7 +40,7 @@ export type MetricsAggregate = {
   tickCount: number;
   /** Mean parts on the floor per tick. */
   meanWip: number;
-  /** The peak — Phase 7 names "WIP ballooned" as an outcome to explain. */
+  /** The peak: "WIP ballooned" is an outcome a report has to be able to name. */
   maxWip: number;
   /** Parts on the floor at the end of the window. */
   finalWip: number;
@@ -151,7 +151,7 @@ export type CycleTimeAggregate = {
 /**
  * Cycle time per part is `completedAtTick - releasedAtTick`, one tick being one
  * simulated second. It counts queueing, not just processing — a part waiting
- * its turn is accruing cycle time and, from Track 6, carrying cost.
+ * its turn is accruing cycle time and, once cost is modelled, carrying cost.
  *
  * Windowing is the caller's job, as in `aggregateMetrics`: filter by
  * `completedAtTick` and hand over what falls inside. The two windows are

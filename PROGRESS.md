@@ -8,21 +8,23 @@ that completes it.
 
 ---
 
-**You are here:** Track 1 done — the backend owns the engine: types, a seeded
-replayable tick, and the money model. Nothing drives it yet; the frontend still
-runs its own copy until 3.4 deletes it. 1.1 shipped in `feat/engine-to-backend`;
-1.2–1.3 in `feat/engine-to-backend-tick`. 1.0 shipped on its own branch because
-it is a frontend refactor, not part of the move. Track 2 done: the tick reports
-what each work center did while it ran, and a window of those observations
-reduces to utilization, queue depth, WIP and cycle time. Still nothing
-persists it — the engine computes the observations and throws them away at the
-end of the request, which is what Track 3 fixes.
+**You are here:** Tracks 1 and 2 done — the backend owns the engine (types, a
+seeded replayable tick, the money model) and the tick reports what each work
+center did while it ran, with a window of those observations reducing to
+utilization, queue depth, WIP and cycle time. Track 3 has started: 3.1 landed
+the schema and migration for run persistence, so the tables exist but nothing
+writes them — a run is not yet an addressable object, and the frontend still
+runs its own copy of the engine until 3.4 deletes it. 1.1 shipped in
+`feat/engine-to-backend`; 1.2-1.3 in `feat/engine-to-backend-tick`; 1.0 on its
+own branch, being a frontend refactor rather than part of the move. Track 2
+shipped in `feat/simulation-metrics`.
 
-**Next up:** Track 3, unit 3.1 — the schema and migration for run persistence.
-Its `run_ticks` / `run_tick_work_centers` / `released_at_tick` columns are
-already decided in Track 2's note below. Two open decisions are not: what
-"reset" means (3.3), and whether routings are snapshotted into a run at release
-time.
+**Next up:** Track 3, unit 3.2 — the run service. Load once, advance N ticks in
+memory, write once per batch in one transaction. 3.1 settled the routing
+snapshot question (yes, `run_routing_steps`), so what is left open in this track
+is what "reset" means (3.3), whether work-center *capacity* is snapshotted
+alongside the steps (see 3.1's note), and the fact that `work_orders.status` has
+still never had a writer.
 
 ---
 
@@ -173,32 +175,71 @@ cost model. 2.2 reports WIP as a count.
 
 Where a run becomes a server-side object an agent can address.
 
-- [ ] 3.1 Schema + migration — five tables:
+- [x] 3.1 Schema + migration — six tables. `run_routing_steps` was the open
+      decision below and is **decided: snapshot** (2026-09-03), so the count
+      went from five to six.
       - `simulation_runs` — name, status, `tick_num`, `rng_seed`, plus
         `parent_run_id` / `forked_at_tick` reserved for Track 7.
-      - `run_wip_parts` — run CASCADE, `part_uuid`, `work_order_id` RESTRICT,
-        `step_index`, progress + actual time, `UNIQUE(run_id, part_uuid)`.
-        **No `work_center_id`** — derive it from the routing the engine already
-        holds in a Map each tick. Storing it adds a 500 path on work-centre
-        delete that doesn't exist today and forces
-        `PUT /api/routings/:id/steps` to mutate live runs. **No `routing_id`** —
-        `work_orders.routing_id` is already RESTRICT, so it buys nothing.
+        **Decided:** `parent_run_id` is RESTRICT, not SET NULL — a fork exists
+        to be compared against what it branched from, so a child left pointing
+        at nothing with a `forked_at_tick` it can no longer interpret is worse
+        than refusing the delete. `status` is `idle` | `advancing` | `failed`
+        and is the **advance lock**: 3.2 loads, ticks N times in memory and
+        writes once, so two overlapping advances would each write a batch
+        computed from the same starting state. 3.2 is its writer; nothing sets
+        it yet, which is the one thing this unit knowingly left dangling.
+      - `run_wip_parts` — run CASCADE, `part_uuid` (the `uuid` column type, and
+        a draw key), `work_order_id` RESTRICT, `step_index`, progress + actual
+        time, `UNIQUE(run_id, part_uuid)`. **No `work_center_id`** — derive it
+        from the routing the engine already holds in a Map each tick. Storing it
+        adds a 500 path on work-centre delete that doesn't exist today. **No
+        `routing_id`** — `work_orders.routing_id` is already RESTRICT, so it
+        buys nothing.
       - `run_finished_parts` — append-only, `completed_at_tick`, plus **frozen
         money columns** (`throughput_cents`, `sales_order_id`,
         `unit_price_cents`, `material_cost_cents`) captured at finish time.
         Allocations mutate — they cascade with sales orders and are recreated by
         every new work order — so without freezing, deleting a sales order
         silently rewrites a finished run's chart, since `calculateThroughput`
-        skips missing records and credits $0 rather than failing. Order by
-        `(completed_at_tick, id)`, not id alone.
-      - `run_ticks` — `(run_id, tick_num, throughput_cents, wip_count)`, plus
-        `run_tick_work_centers` `(run_id, tick_num, work_center_id, busy,
-        queued)`; see Track 2's decision note for why. The chart reads this. Do
-        **not** plan to recompute it from `run_finished_parts`.
-      - `run_released_orders` — `(run_id, work_order_id)` UNIQUE. Guards
-        double-release (`releaseOrder` has no guard today, and persisted phantom
-        parts would accrue real carrying cost in Track 6) and defines which
-        orders a run owns.
+        skips missing records and credits $0 rather than failing. Indexed on
+        `(run_id, completed_at_tick, id)`, not id alone. **Decided:**
+        `sales_order_id` is SET NULL and nullable — null already means
+        *uncovered*, the frozen cents are what the chart reads, so a deleted
+        order costs the run only the ability to name the buyer, whereas RESTRICT
+        would let one finished run hold the whole order book hostage.
+        `unit_price_cents` is null exactly when `sales_order_id` is;
+        `material_cost_cents` is known either way and is what Track 6 values WIP
+        at.
+      - `run_ticks` — `(run_id, tick_num, throughput_cents, wip_count)`, PK on
+        `(run_id, tick_num)`, plus `run_tick_work_centers` `(run_id, tick_num,
+        work_center_id, busy, queued)`; see Track 2's decision note for why. The
+        chart reads this. Do **not** plan to recompute it from
+        `run_finished_parts`. **Decided:** `run_tick_work_centers` keys the tick
+        (a composite FK to `run_ticks`, cascading through to the run, named
+        explicitly because drizzle-kit otherwise generates a random suffix that
+        churns on regeneration) but leaves `work_center_id` **un-keyed** — these
+        are historical observations, so cascading would erase a finished run's
+        utilization when a centre is retired, and RESTRICT would add the same
+        500 path `run_wip_parts` avoids.
+      - `run_released_orders` — `(run_id, work_order_id)`, and that pair is the
+        primary key rather than a UNIQUE beside a serial: it *is* the identity.
+        Guards double-release (`releaseOrder` has no guard today, and persisted
+        phantom parts would accrue real carrying cost in Track 6) and defines
+        which orders a run owns. No release tick here — 2.3 put it on the part.
+      - `run_routing_steps` — `(run_id, routing_id, sequence, work_center_id,
+        process_time_seconds)`, PK on the first three, copied into the run on
+        first release of a work order using that routing. `setup_time_seconds`
+        is omitted, as it is from the engine's `RoutingStep`; `routing_id` and
+        `work_center_id` are un-keyed, because the point of a snapshot is to
+        outlive edits to what it copied.
+      - `npm run seed` now deletes `simulation_runs` first: run parts and
+        released orders hold RESTRICT references to work orders, and the cascade
+        clears a run's history in one statement.
+      - **New open decision, deferred:** work-center **capacity** is still read
+        live, so editing it mid-run retroactively changes the utilization
+        denominator for ticks already observed — the same class of drift the
+        routing snapshot just fixed. Freezing it means a per-run work-center
+        snapshot; decide in 3.2 or 3.3, when there is a loader to read it.
 - [ ] 3.2 Run service. **Never persist per tick** — load once, advance N ticks in
       memory, write once per batch, one transaction. Neon over a WebSocket pool
       makes every write a round trip; per-tick writes make Track 4 impossible.
@@ -211,13 +252,15 @@ Where a run becomes a server-side object an agent can address.
 - [ ] 3.5 Update `CLAUDE.md` and the README's "entirely ephemeral" limitation.
       Document that a crash loses at most one batch of ticks.
 
-**Open decision, Track 3:** snapshot routings into the run at release time
-(`run_routing_steps`)? `PUT /api/routings/:id/steps` currently claims an
-in-flight run "keeps the routing it was released with" — but that is a frontend
-caching accident, and it evaporates the moment the backend engine re-reads
-`routing_steps` each tick, so the guarantee in the docs becomes false during
-this track. A snapshot is the real fix and is what Track 7 forking needs anyway
-("same state, new branch"). Deferrable, but decide it deliberately.
+**Decided, Track 3** (2026-09-03): routings **are** snapshotted into the run at
+release time, as `run_routing_steps` in 3.1. `PUT /api/routings/:id/steps`
+replaces a routing's steps wholesale, and the docs' claim that an in-flight run
+"keeps the routing it was released with" was only ever a frontend caching
+accident — a backend engine reading `routing_steps` each tick would re-plan live
+parts mid-route, and shortening a list would strand parts past its end (see the
+latent bug below). The snapshot makes the documented guarantee real, and is what
+Track 7 needs for a fork to mean "same state, new branch". 3.2 owns the
+copy-on-release.
 
 ## Track 4 onward — re-plan when reached
 

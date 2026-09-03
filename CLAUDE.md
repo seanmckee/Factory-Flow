@@ -50,6 +50,15 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - Writes that span tables run in `db.transaction()`; helpers inside a transaction throw `HttpError` (`src/lib/httpError.ts`) to both roll back and carry a status. This is why `db/index.ts` uses the Neon WebSocket `Pool` rather than the HTTP driver, which has no transaction support.
 - Allocation rules live in `src/lib/allocate.ts` as pure functions taking plain objects, so they are unit-testable without a database. Allocations for a work order **must** be inserted in one statement, oldest-sales-order-first: ids come out ascending in insert order, and `calculateThroughput` credits finished units in allocation-id order.
 - Joins/aggregation are done in JS after separate `db.select()` calls rather than in SQL (see `salesOrders.ts` grouping allocations by sales order, `routings.ts` attaching ordered `steps`).
+- The `run_*` tables are one run's history; everything above them in
+  `schema.ts` is the shared factory definition. History cascades from
+  `simulation_runs`, references out to the definition are RESTRICT, and
+  `run_tick_work_centers.work_center_id` plus `run_routing_steps.{routing_id,
+  work_center_id}` are deliberately **un-keyed** — an FK there would erase a
+  finished run's history when a centre is retired, or add a 500 path to
+  work-centre deletion. `run_finished_parts` freezes its money columns at
+  finish time so a deleted sales order can't rewrite a finished run's chart.
+  `npm run seed` deletes `simulation_runs` first.
 
 ### Simulation engine (`backend/src/simulation/`)
 

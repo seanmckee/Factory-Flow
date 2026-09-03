@@ -9,8 +9,8 @@ import type {
 
 /**
  * What one work center did during one tick. The two claim passes below already
- * decide this; before Track 2 the tick computed it and threw it away, and the
- * frontend re-derived a worse version of it from the post-tick part list.
+ * decide this; the tick used to compute it and throw it away, and the frontend
+ * re-derived a worse version of it from the post-tick part list.
  *
  * That snapshot cannot be recovered afterwards: a part that finished this tick
  * held a machine for the whole of it and is gone from `wipParts` by the time
@@ -33,7 +33,7 @@ export type TickWorkCenterMetrics = {
   queued: number;
 };
 
-/** One tick's observations, the raw material Track 2's aggregations run over. */
+/** One tick's observations, the raw material `metrics.ts` aggregates. */
 export type TickMetrics = {
   /**
    * The tick these observations are of. Redundant with the argument the caller
@@ -50,8 +50,8 @@ export type TickMetrics = {
   wipCount: number;
   /**
    * One entry per work center passed in, including centers that sat idle — a
-   * centre at 0/0 is an observation, not an absence, and Track 6 charges it
-   * rent either way. Aggregations downstream depend on the denominator not
+   * centre at 0/0 is an observation, not an absence, and it costs the same to
+   * own either way. Aggregations downstream depend on the denominator not
    * moving as centers drop in and out of the series.
    */
   workCenters: TickWorkCenterMetrics[];

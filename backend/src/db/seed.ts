@@ -9,6 +9,7 @@ import {
   workOrders,
   allocations,
   salesOrders,
+  simulationRuns,
 } from "./schema.js";
 
 const db = drizzle(process.env.DATABASE_URL!);
@@ -16,6 +17,9 @@ const db = drizzle(process.env.DATABASE_URL!);
 async function seed() {
   console.log("Seeding database...");
 
+  // runs first: their parts and released orders hold RESTRICT references to
+  // work orders, and deleting a run cascades all of its history away
+  await db.delete(simulationRuns);
   await db.delete(allocations);
   await db.delete(salesOrders);
   await db.delete(workOrders);
