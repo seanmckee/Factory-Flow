@@ -11,15 +11,19 @@
 
 /** A part on the shop floor, mid-route. Persisted as `run_wip_parts`. */
 export type WipPart = {
-  /** uuid, unique within a run */
+  /**
+   * uuid, unique within a run. Row identity only — it is deliberately not an
+   * input to any draw, since a fresh uuid per release would mean the seed did
+   * not determine the run.
+   */
   id: string;
   workOrderId: number;
   /**
-   * Denormalized from the work order. Not a stored column — the loader fills it
-   * in when a run is hydrated, so a tick stays a pure function of parts plus
-   * routings and never has to reach back through the work order.
+   * 0-based position within its work order's quantity, and half of this part's
+   * draw key. Stored, because it has to survive a reload for the run to stay
+   * reproducible.
    */
-  routingId: number;
+  unitIndex: number;
   /**
    * The tick this part was released onto the floor, carried for the whole of
    * its life so that cycle time is `completedAtTick - releasedAtTick`.
@@ -63,7 +67,12 @@ export type RoutingStep = {
   processTimeSeconds: number;
 };
 
-/** Steps in sequence order. Keyed by routing id where the engine holds a Map. */
+/**
+ * Steps in sequence order, as pinned for one work order at release. Keyed by
+ * **work order id** where the engine holds a Map: a routing edit only affects
+ * releases made after it, so two work orders on the same routing can be
+ * following different step lists at the same time.
+ */
 export type Routing = {
   steps: RoutingStep[];
 };

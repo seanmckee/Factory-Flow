@@ -43,6 +43,22 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - ESM with `"module": "nodenext"` — **relative imports must carry the `.js` extension** (`./db/index.js`), even though the sources are `.ts`.
 - `tsconfig.json` enables `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; array indexing and destructuring yield `T | undefined`, so seed/route code explicitly null-checks after `.returning()`.
 - Each router in `src/routes/` is a default-exported `Router` mounted at `/api/<resource>` in `src/server.ts`. Sales orders and work orders expose `POST` and `DELETE /:id` alongside their GETs; work centers, parts and routings expose `POST`, `PATCH /:id` and `DELETE /:id`. Routings add `PUT /:id/steps`, the only PUT in the API: steps are replaced wholesale because `UNIQUE(routing_id, sequence)` makes an incremental reorder collide halfway through, so the handler deletes and reinserts inside a transaction and renumbers sequences from array order. Step payloads therefore never carry a `sequence`.
+- `src/routes/runs.ts` is the run API, and the only router that holds no DB
+  code: `lib/runService.ts` owns loading, the lock and the batched writes, and
+  the routes validate, map an `HttpError` onto its status and serialise. Routes
+  are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
+  frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
+  `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
+  `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
+  `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
+  at roughly 500 ticks a second; a caller that wants more calls again, since a
+  run is resumable by construction. `unlock` is **not** a reset — it clears a
+  lock a dead process left, and re-creating a run with the same seed reproduces
+  it exactly, so rewinding one is not a feature. `work_orders.status` still has
+  no writer and should not gain one here: a release is per-run
+  (`run_released_orders`), so a single global column cannot say whether a work
+  order is running.
 - Deletes come in two flavours. Sales and work orders cascade their allocations, so `DELETE` refuses with `409 { message, requiresConfirmation: true, allocations }` and the client re-sends with `?force=true`. Work centers do **not**: `routing_steps.work_center_id` is `ON DELETE RESTRICT`, so a referenced centre can't be removed at all and its 409 deliberately omits `requiresConfirmation` — `deleteConflict()` on the client ignores it and the message lands in the error toast instead of a confirm dialog. Don't add a `?force=` path there without changing the FK.
 - Parts carry **both** shapes, because their three foreign keys disagree: `work_orders.part_id` and `sales_orders.part_id` are RESTRICT (hard refusal, no `requiresConfirmation`) while `routings.part_id` is CASCADE (confirmable, `?force=true`). `DELETE /api/parts/:id` checks RESTRICT first — when an order references the part no amount of force helps, so offering a confirm dialog would be a lie. `DeleteConflict` in `api/client.ts` therefore carries `allocations?` and `routings?` as optional per-resource detail.
 - Tests run under vitest with `environment: node` (`backend/vitest.config.ts`), the same way the frontend runs the simulation engine — pure functions only, no DB and no HTTP in the suite. `tsconfig.json` sets `"types": []`, so test globals are imported explicitly from `vitest` rather than relied on ambiently. The config's `include` is scoped to `src/**/*.test.ts` because `npm run build` compiles tests into `dist/` too, and an unscoped vitest would collect that stale copy as a second suite.
@@ -50,6 +66,35 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - Writes that span tables run in `db.transaction()`; helpers inside a transaction throw `HttpError` (`src/lib/httpError.ts`) to both roll back and carry a status. This is why `db/index.ts` uses the Neon WebSocket `Pool` rather than the HTTP driver, which has no transaction support.
 - Allocation rules live in `src/lib/allocate.ts` as pure functions taking plain objects, so they are unit-testable without a database. Allocations for a work order **must** be inserted in one statement, oldest-sales-order-first: ids come out ascending in insert order, and `calculateThroughput` credits finished units in allocation-id order.
 - Joins/aggregation are done in JS after separate `db.select()` calls rather than in SQL (see `salesOrders.ts` grouping allocations by sales order, `routings.ts` attaching ordered `steps`).
+- The eight `run_*` / `simulation_runs` tables are one run's history;
+  everything above them in `schema.ts` is the shared factory definition.
+  **The invariant: once a run exists, the engine reads that run's own config —
+  `run_work_centers` for capacity, `run_work_order_steps` for steps — and never
+  `work_centers` or `routing_steps` again.** That is what lets two runs
+  disagree about the drill press, and what makes forking a copy rather than a
+  versioning scheme. Steps are pinned per **work order** at release, so editing
+  a routing changes only releases made after the edit and never re-plans a part
+  already halfway through a route.
+- History cascades from `simulation_runs`, and references out to the shared
+  definition are RESTRICT — a work order a run has released can't be deleted
+  from under it. Four columns are deliberately **un-keyed**: `work_center_id`
+  in `run_work_centers`, `run_work_order_steps` and `run_tick_work_centers`,
+  plus `run_released_orders.routing_id`. A pinned copy and a set of
+  observations exist to outlive edits to what they copied; an FK would either
+  erase a finished run's history when a centre is retired or add a 500 path to
+  work-centre deletion. `run_finished_parts` freezes its money columns at
+  finish time for the same reason — otherwise deleting a sales order rewrites
+  what a finished run earned. `npm run seed` deletes `simulation_runs` first.
+- `/floor` and `/metrics` deliberately answer different questions. `/floor` is
+  a **snapshot** — what is at each center and how far along — built by the pure
+  `deriveFloorView`, and it is what the simulation page's cards draw.
+  `/metrics` is a **rate over a window**, and must come from the tick's own
+  emitted observations. A machine can read `slotsInUse: 0` on the floor having
+  been busy for the whole of that tick, because the part it held finished the
+  step and moved on; that is exactly the undercount that makes a post-tick
+  snapshot the wrong source for utilization. `WorkCenterFloorView` therefore
+  has no `utilization` field at all — an instantaneous `slotsInUse / capacity`
+  reads only 0, ½ or 1, and naming it utilization invites the confusion.
 
 ### Simulation engine (`backend/src/simulation/`)
 
@@ -61,13 +106,49 @@ under `environment: node`. The frontend keeps a copy until it switches over.
 Two rules the port established, and both matter to how failures surface:
 
 - Randomness is **not** drawn at call time. `sampleProcessTime` is a pure
-  function of `(seed, partId, stepIndex)`, so a run persists a single `rng_seed`
-  and nothing else — a replay or a fork reproduces every draw with no cursor to
-  restore. Don't reintroduce `Math.random()`.
-- A referenced-but-absent record **throws** (a part's routing, a step's work
+  function of `(seed, workOrderId, unitIndex, stepIndex)`, so a run persists a
+  single `rng_seed` and nothing else — a replay, a re-creation or a fork
+  reproduces every draw with no cursor to restore. Don't reintroduce
+  `Math.random()`, and **don't put the part's uuid or the run id in the draw
+  key**: uuids are minted fresh at every release, so keying on one (as the
+  engine did until 2026-09-03) means two runs created with the same seed draw
+  different noise and comparing them measures the dice rather than the
+  decision. `UNIQUE(run_id, work_order_id, unit_index)` is what makes the key
+  name exactly one part. Two parts of one work order differ only by
+  `unitIndex`, so a test giving both index 0 will see them move in lockstep —
+  a release numbers them 0..quantity-1.
+- A referenced-but-absent record **throws** (a work order's pinned steps, a step's work
   center, a finished part's work order, an allocation's sales order). A silent
   zero reads to a fork comparison as a policy that lost money rather than as a
   bug. An *uncovered* unit is different — it legitimately earns nothing.
+
+`calculateThroughput` is the **sum** of `creditFinishedParts`, which credits
+each finished unit to the allocation covering it and returns
+`FinishedPartCredit` per part — the shape `run_finished_parts` freezes. The
+total and the per-part attribution must agree by construction: a run stores the
+parts and charts the total, and two code paths would eventually disagree about
+what a run earned. `salesOrderId` and `unitPriceCents` are null together and
+only for an uncovered unit, whose material cost is still recorded.
+
+Advancing a run is split across the pure/impure line. `simulateBatch`
+(`simulation/simulateBatch.ts`) takes a `RunState`, ticks it N times in memory
+and returns a `RunBatch` — the surviving WIP, the finished records with their
+frozen money, a `TickRecord` per tick, and the advanced `priorCounts` — while
+`lib/runService.ts` only loads the state, calls it, and writes the batch. All
+the logic that decides anything is therefore under test with no database;
+`runService` holds no arithmetic. `priorCounts` advances *within* a batch, so a
+unit finishing at tick 5 is priced against the allocation after the one that
+covered a unit finishing at tick 3, and carrying it out means a long advance
+runs as several batches without re-reading it.
+
+`runService` writes per batch, never per tick — `TICKS_PER_BATCH` is 500, each
+batch one transaction, so a crash costs at most one batch and a 5000-tick
+advance reads once and writes ten times. Inserts are split at
+`ROWS_PER_INSERT`, because Postgres caps bind parameters near 65535 and 500
+ticks of a twenty-centre factory is ten thousand per-centre rows. Both
+advancing and releasing take the run's `advancing` lock via `withRunLock`: an
+advance replaces the WIP rows wholesale, so a release landing mid-batch would
+be deleted by the write that follows it.
 
 `simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
 `wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
@@ -102,15 +183,28 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 
 `src/data/*.ts` are stale unused fixtures that no longer match the current types. Don't use them as a reference.
 
-### Simulation engine (`src/simulation/`)
+### Driving a run (`src/pages/SimulationPage.tsx`)
 
-All engine logic is pure functions, unit-tested with vitest under a `node` environment (no jsdom, no component tests). `SimulationPage` is the only stateful driver: a `setInterval(…, 1000)` calls `simulateTick` once per real second, so **one tick = one simulated second**.
+**The frontend has no engine.** It was deleted when the page switched over;
+`src/simulation/` holds only `cumulativeThroughput.ts`, a chart transform. Don't
+reintroduce simulation logic here — the backend owns it, and two copies drifted
+badly the one time they coexisted.
 
-`simulateTick(wipParts, routings, tickNum)` invariants:
+The page drives a server-side run: it picks or creates one, releases work
+orders into it, and a `setInterval(…, 1000)` calls
+`POST /api/runs/:id/advance {ticks: 1}`, so **one tick = one simulated second**
+as before. It holds no simulation state — WIP, money and the tick number are
+the run's, so a reload resumes the same run and two tabs cannot disagree.
+Advancing holds a server-side lock, so an overlapping call is a 409; an
+`advancing` ref skips a beat rather than queueing one, the interval being a
+display clock. Stopping is client-side only: the run keeps its state and
+resumes where it left off.
 
-- A work center runs up to `capacity` parts at once — the column defaults to 1 and is editable from the simulation page, so don't treat 1 as an invariant. Claiming happens in two passes: parts already in service (`progressSeconds > 0`) claim their work center first, then idle parts take whatever machines remain free. Unclaimed parts simply don't advance that tick — queueing is implicit, there is no queue data structure.
-- A part completing its last step is pushed to `finishedParts` with `completedAtTick` and marked `stepIndex = -1`, which the final `filter` uses to drop it from WIP.
-- On each step transition a fresh `actualProcessTimeSeconds` is drawn from `sampleProcessTime(nominal, 0.3)` — uniform ±30% around the routing's nominal time, floored at 1. This statistical variation is the point of the model, not noise to be removed.
+Cards come from `GET /:id/floor` and the chart from `GET /:id/ticks`, fed
+through `cumulativeThroughput`. `WorkCenterCard` shows the run's **frozen**
+capacity read-only — editing the live work center would change nothing about a
+run already created — and no longer shows a "% utilized", which was
+`slotsInUse / capacity` and could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 

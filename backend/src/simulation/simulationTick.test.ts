@@ -11,6 +11,7 @@ const testRouting: Routing = {
   ],
 };
 
+/** keyed by work order id, as the engine reads it */
 const testRoutings = new Map<number, Routing>([[1, testRouting]]);
 
 const makeWorkCenters = (firstStepCapacity: number) =>
@@ -24,7 +25,7 @@ const testWorkCenters = makeWorkCenters(1);
 const makeWipPart = (id: string, overrides: Partial<WipPart> = {}): WipPart => ({
   id,
   workOrderId: 1,
-  routingId: 1,
+  unitIndex: 0,
   releasedAtTick: 0,
   stepIndex: 0,
   progressSeconds: 0,
@@ -146,10 +147,12 @@ describe("simulateTick", () => {
         },
       ],
     ]);
+    // distinct unit indices, as a release assigns them: the unit index is what
+    // separates two parts' luck now that the draw key holds no uuid
     const result = simulateTick(
       [
-        makeWipPart("part-1", { progressSeconds: 4 }),
-        makeWipPart("part-2", { progressSeconds: 4 }),
+        makeWipPart("part-1", { unitIndex: 0, progressSeconds: 4 }),
+        makeWipPart("part-2", { unitIndex: 1, progressSeconds: 4 }),
       ],
       routings,
       1,
@@ -201,10 +204,38 @@ describe("simulateTick", () => {
     });
   });
 
-  it("throws when a part's routing was not loaded", () => {
+  it("throws when a part's work order has no pinned routing", () => {
     expect(() =>
       simulateTick([makeWipPart("part-1")], new Map(), 1, testWorkCenters, SEED),
-    ).toThrow(/routing 1/);
+    ).toThrow(/work order 1/);
+  });
+
+  it("follows each work order's own pinned steps, not a shared routing", () => {
+    // two work orders off the same routing, released either side of an edit
+    // that moved the second operation to a different work center
+    const pinned = new Map<number, Routing>([
+      [
+        1,
+        { steps: [{ workCenterId: 10, processTimeSeconds: 5 }] },
+      ],
+      [
+        2,
+        { steps: [{ workCenterId: 20, processTimeSeconds: 5 }] },
+      ],
+    ]);
+    const before = makeWipPart("part-before", { workOrderId: 1 });
+    const after = makeWipPart("part-after", { workOrderId: 2 });
+
+    const result = simulateTick([before, after], pinned, 1, testWorkCenters, SEED);
+
+    // each claimed a machine at its own center, so both advanced despite
+    // capacity 1 everywhere — proof they are not reading the same step list
+    expect(result.wipParts.map((p) => p.progressSeconds)).toEqual([1, 1]);
+    const busy = new Map(
+      result.metrics.workCenters.map((wc) => [wc.workCenterId, wc.busy]),
+    );
+    expect(busy.get(10)).toBe(1);
+    expect(busy.get(20)).toBe(1);
   });
 
   it("throws when a step's work center was not loaded", () => {
