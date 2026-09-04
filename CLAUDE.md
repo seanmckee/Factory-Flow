@@ -352,8 +352,14 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 **The frontend has no engine.** It was deleted when the page switched over;
 `src/simulation/` holds only pure, unit-tested chart/display transforms —
 `cumulativeThroughput.ts` (+ `openingCents`), `netProfit.ts`,
-`throughputRate.ts` (`trailingRate`), `standingCost.ts` and `simTime.ts`
-(day/time/duration formatting, `chartBucket`). Don't reintroduce simulation
+`throughputRate.ts` (`trailingRate`), `capital.ts` (action labels and
+`formatSpend`) and `simTime.ts`
+(day/time/duration formatting, `chartBucket`). `standingCost.ts`
+(`windowStandingCostCents`) is **deleted**: it derived a per-centre cost as
+rate × observed ticks ÷ `dayTicks`, and 6E made the rate per *machine* with
+the machine count itself movable mid-window, so the figure was wrong twice
+over. `capacityTicks` is not a substitute — rent is owed on machines whether
+or not anyone staffs them, and capacity-ticks count staffed ones. Don't reintroduce simulation
 logic here — the backend owns it, and two copies drifted badly the one time
 they coexisted.
 
@@ -433,18 +439,33 @@ clock's beat: it reads and aggregates every tick row, per-centre row and
 finished part in the window. The window label comes from the *response*, so a
 dashboard left over from an earlier window states what it covers rather than
 misleading — the ledger's own case is a centre reading 10% utilization over a
-run and 52% over the ticks it worked. Work-centre *names, frozen
-capacities and frozen standing rates* come off `/floor`, since `/metrics`
+run and 52% over the ticks it worked. Work-centre *names, machines, operators and the frozen
+rates and prices* come off `/floor`, since `/metrics`
 carries ids and a run keeps no copy of the names — the Deliveries table's
-client-side join to `GET /api/sales-orders` is the same pattern. The table's Standing cost
-column is derived client-side (`windowStandingCostCents`: rate × observed
-ticks ÷ `dayTicks`) — display-only, the summed tick columns are the ledger,
-and the gap between the column's sum and the opex card is facility overhead.
-The window line shows ≈ days via the run's frozen `dayTicks`
+client-side join to `GET /api/sales-orders` is the same pattern. Its Machines
+and Operators columns are therefore **current config, not window figures**,
+and the operator count reads in the `starved` tone when it differs from the
+machine count: one of the two is being paid for and not used. Beside them sit
+`busyMachineTicks` and `capacityTicks`, the utilization fraction's own two
+halves. Below the deliveries, the **capital log** (`GET /:id/actions`) lists
+every action whole-run with what it cost and the config it produced —
+whole-run on purpose, since an action is a decision taken at a tick, not a
+rate over a window, and reading it against the window containing it is the
+point. The window line shows ≈ days via the run's frozen `dayTicks`
 (`simTime.ts`, 28,800 fallback).
 
+Capital actions live in a **dialog** off the transport bar, not in more bar
+controls: buying is a whole-factory question, so what answers it is the table
+showing every centre's machines, operators, rent, wages and prices at once,
+with the short side of `min(machines, operators)` called out. Applying one
+waits the clock's beat out and holds the `advancing` ref exactly as releasing
+does — all three contend for the same server lock — and the buttons are
+disabled during a jump, which holds it outright. Prices shown are the run's
+**frozen** ones off `/floor`, so a price edited in setup after the run started
+neither changes the quote nor what the server charges.
+
 The page is two persistent control bars (run picking/creation, then
-transport: clock, release, fast-forward) over three tabs — **Floor**,
+transport: clock, release, capital, fast-forward) over three tabs — **Floor**,
 **Trends**, **Dashboard** — named by view shape (a snapshot of now, series
 over time, an aggregate over a window), because "Throughput" stopped being an
 honest tab name once rate and WIP moved in and "Metrics" overlapped it —
@@ -452,16 +473,20 @@ throughput is itself a metric. Every control stays on screen. The floor is
 `WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
 order — the floor redraws every tick, so the queue signal is the badge and the
 Waiting column, never the row order; the Trends tab reads `GET /:id/ticks` once
-and derives its four series from it (see the chart pipeline below). The table shows the run's **frozen** capacity
+and derives its four series from it (see the chart pipeline below). The table shows the run's **frozen effective** capacity
 read-only — editing the live work center would change nothing about a run
-already created — and no "% utilized", which was `slotsInUse / capacity` and
+already created, and capital actions are the way a run's own capacity moves —
+with an unstaffed machine (or an operator with no machine) called out beside
+the slot count rather than hidden behind a smaller number. There is no
+"% utilized", which was `slotsInUse / capacity` and
 could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 
 Throughput is measured in **cents**, not parts, and since Track 6A it is only
-half the score: a run's `netCents` is throughput minus operating expense minus
-carrying cost, computed at read time from frozen columns on both sides. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
+half the score: a run's `netCents` is throughput minus operating expense,
+carrying cost, wages and capital spend, computed at read time from frozen
+columns on every side. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
 The Trends tab is **one chart on one clock** (`TrendsChart`; the per-series
 `TickSeriesChart` wrapper is deleted) drawing four series from one
@@ -541,6 +566,17 @@ own task.
 Ordered-list editing lives in `src/setup/routingSteps.ts` — `moveStep`,
 `removeStep`, `parseSteps`, `toDrafts` — pure functions unit-tested like the
 simulation engine, with `StepEditor` as the shared UI over them.
+
+`src/setup/workCenterFields.ts` is the same idea for the work-centre editor's
+seven numeric columns: a spec (`WORK_CENTER_FIELDS`) driving the create
+dialog's fields, the draft seeding, the parse and the changed-column diff, all
+pure and tested. It exists because the page previously declared, validated and
+diffed each field by hand, and at seven the failure mode is silent — add a
+column and forget it in the commit, and the input edits nothing. The **table
+cells stay explicit** at the call site, which is what the
+tables-aren't-data-driven convention is actually about: bespoke cells, not
+bespoke plumbing. `count` fields are whole numbers, `money` fields are typed
+in dollars and sent as cents through `dollarsToCents`.
 
 ## Styling
 

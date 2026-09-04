@@ -23,9 +23,12 @@ import type { FloorWorkCenter } from "../api/runs";
  * Row order is stable (by name): the floor redraws every tick, and rows that
  * jump around under a live clock can't be watched. The queue signal lives in
  * the badge and the Waiting column, not in the ordering.
- * Capacity is the run's own frozen copy, and there is no "% utilized" — an
- * instantaneous slotsInUse/capacity reads only 0, ½ or 1; utilization is a
- * rate over a window and lives on the metrics tab.
+ * Capacity is the run's own frozen copy — **effective** capacity, so a centre
+ * with two machines and one operator shows one slot, with the unstaffed
+ * machine called out beside it: it is rent with no output, which is a mistake
+ * worth seeing rather than hiding behind a smaller number. There is no
+ * "% utilized" — an instantaneous slotsInUse/capacity reads only 0, ½ or 1;
+ * utilization is a rate over a window and lives on the dashboard.
  */
 
 type CenterState = "starved" | "running" | "saturated";
@@ -108,6 +111,13 @@ export default function WorkCenterTable({
               </TableCell>
               <TableCell className="text-right tabular-nums text-muted-foreground">
                 {center.slotsInUse}/{center.capacity}
+                {center.machines !== center.operators && (
+                  <span className="ml-1 text-starved">
+                    {center.machines > center.operators
+                      ? `+${center.machines - center.operators} unstaffed`
+                      : `+${center.operators - center.machines} idle`}
+                  </span>
+                )}
               </TableCell>
               <TableCell>
                 <SlotBars slots={center.slots} />

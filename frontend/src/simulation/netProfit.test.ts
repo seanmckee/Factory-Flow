@@ -9,19 +9,29 @@ const sample = (
   operatingExpenseCents: number,
   carryingCostCents: number,
   wageCents = 0,
+  capitalSpendCents = 0,
 ): PnlSample => ({
   tick,
   throughputCents,
   operatingExpenseCents,
   carryingCostCents,
   wageCents,
+  capitalSpendCents,
 });
 
 describe("netCentsOf", () => {
   it("subtracts wages beside the other two costs", () => {
-    // the server's netCents subtracts four terms; a three-term client curve
-    // would drift above the run bar the moment anyone is paid
+    // the server's netCents subtracts five terms; a short client curve would
+    // drift above the run bar the moment anyone is paid or anything is bought
     expect(netCentsOf(sample(1, 500, 5, 1, 100))).toBe(394);
+  });
+
+  it("subtracts capital spend, so a purchase reads as a cliff", () => {
+    expect(netCentsOf(sample(1, 500, 5, 1, 100, 20_000))).toBe(-19_606);
+  });
+
+  it("adds salvage back, since a retirement is a negative spend", () => {
+    expect(netCentsOf(sample(1, 500, 5, 1, 100, -6_000))).toBe(6_394);
   });
 });
 

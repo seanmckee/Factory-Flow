@@ -26,16 +26,27 @@ import {
 import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import InlineInput from "../../components/ui/InlineInput";
-import { dollarsToCents } from "../../orders/salesOrderMath";
+import {
+  blankDraftFields,
+  changedColumns,
+  fieldText,
+  parseFields,
+  toDraftFields,
+  WORK_CENTER_FIELDS,
+  type WorkCenterField,
+} from "../../setup/workCenterFields";
 import type { WorkCenter } from "../../types/WorkCenter";
 
-/** The row being edited. Only one row is editable at a time. */
+/**
+ * The row being edited. Only one row is editable at a time, and the numeric
+ * fields live in one bag keyed by the spec in `workCenterFields.ts` — eight
+ * separately-declared fields is how a column ends up editable but never
+ * committed.
+ */
 type Draft = {
   id: number;
   name: string;
-  capacity: string;
-  standingCost: string;
-  wage: string;
+  fields: Record<string, string>;
 };
 
 export default function WorkCentersPage() {
@@ -44,9 +55,7 @@ export default function WorkCentersPage() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
-  const [capacity, setCapacity] = useState("1");
-  const [standingCost, setStandingCost] = useState("0");
-  const [wage, setWage] = useState("0");
+  const [newFields, setNewFields] = useState(blankDraftFields);
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -54,37 +63,25 @@ export default function WorkCentersPage() {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
 
-    // no strictNullChecks in this project, so guard the empty-field NaN explicitly
     const trimmed = name.trim();
-    const parsedCapacity = Number(capacity);
     if (!trimmed) return showToast("Name is required", "error");
-    if (!Number.isInteger(parsedCapacity) || parsedCapacity < 1) {
-      return showToast("Machines must be a whole number above zero", "error");
-    }
-    const parsedStandingCost = dollarsToCents(standingCost);
-    if (parsedStandingCost === null || parsedStandingCost < 0) {
-      return showToast("Standing cost must be zero or more", "error");
-    }
-    const parsedWage = dollarsToCents(wage);
-    if (parsedWage === null || parsedWage < 0) {
-      return showToast("Wage must be zero or more", "error");
-    }
+
+    const parsed = parseFields(newFields);
+    if (!parsed.ok) return showToast(parsed.message, "error");
 
     setSubmitting(true);
     try {
-      const created = await postJson<WorkCenter>("/api/work-centers", {
-        name: trimmed,
-        capacity: parsedCapacity,
-        standingCostCentsPerDay: parsedStandingCost,
-        wageCentsPerHour: parsedWage,
-      });
+      const body: Record<string, string | number> = { name: trimmed };
+      for (const field of WORK_CENTER_FIELDS) {
+        const value = parsed.values[field.key];
+        if (value !== undefined) body[field.column] = value;
+      }
+      const created = await postJson<WorkCenter>("/api/work-centers", body);
 
       await refetchWorkCenters();
       showToast(`Created ${created.name}`);
       setName("");
-      setCapacity("1");
-      setStandingCost("0");
-      setWage("0");
+      setNewFields(blankDraftFields());
       setCreateOpen(false);
     } catch (submitError) {
       showToast(
@@ -107,63 +104,47 @@ export default function WorkCentersPage() {
         : {
             id: workCenter.id,
             name: workCenter.name,
-            capacity: String(workCenter.capacity),
-            standingCost: (workCenter.standingCostCentsPerDay / 100).toString(),
-            wage: (workCenter.wageCentsPerHour / 100).toString(),
+            fields: toDraftFields(workCenter),
           },
     );
   };
 
+  const editField = (key: string, value: string) => {
+    setDraft(
+      (current) =>
+        current && { ...current, fields: { ...current.fields, [key]: value } },
+    );
+  };
+
   /**
-   * Commits on blur. Only changed fields are sent, so a capacity edit can't
-   * collide with someone else's rename. Any failure drops the draft, which
-   * reverts the inputs to the server values.
+   * Commits on blur. Only changed columns are sent, so one person's capacity
+   * edit can't collide with another's rename. Any failure drops the draft,
+   * which reverts the inputs to the server values.
    */
   const commitEdit = async (workCenter: WorkCenter) => {
     if (!draft || draft.id !== workCenter.id) return;
 
     const nextName = draft.name.trim();
-    const nextCapacity = Number(draft.capacity);
-    const nextStandingCost = dollarsToCents(draft.standingCost);
-    const nextWage = dollarsToCents(draft.wage);
     const renamed = nextName !== workCenter.name;
-    const recapped = nextCapacity !== workCenter.capacity;
-    const repriced = nextStandingCost !== workCenter.standingCostCentsPerDay;
-    const rewaged = nextWage !== workCenter.wageCentsPerHour;
 
-    if (!renamed && !recapped && !repriced && !rewaged) return setDraft(null);
-
-    if (!nextName) {
+    const parsed = parseFields(draft.fields);
+    if (!parsed.ok) {
       setDraft(null);
-      return showToast("Name is required", "error");
-    }
-    if (!Number.isInteger(nextCapacity) || nextCapacity < 1) {
-      setDraft(null);
-      return showToast("Machines must be a whole number above zero", "error");
-    }
-    if (repriced && (nextStandingCost === null || nextStandingCost < 0)) {
-      setDraft(null);
-      return showToast("Standing cost must be zero or more", "error");
-    }
-    if (rewaged && (nextWage === null || nextWage < 0)) {
-      setDraft(null);
-      return showToast("Wage must be zero or more", "error");
+      return showToast(parsed.message, "error");
     }
 
-    const updates: {
-      name?: string;
-      capacity?: number;
-      standingCostCentsPerDay?: number;
-      wageCentsPerHour?: number;
-    } = {};
-    if (renamed) updates.name = nextName;
-    if (recapped) updates.capacity = nextCapacity;
-    if (repriced && nextStandingCost !== null) {
-      updates.standingCostCentsPerDay = nextStandingCost;
+    const updates: Record<string, string | number> = changedColumns(
+      parsed.values,
+      workCenter,
+    );
+    if (renamed) {
+      if (!nextName) {
+        setDraft(null);
+        return showToast("Name is required", "error");
+      }
+      updates.name = nextName;
     }
-    if (rewaged && nextWage !== null) {
-      updates.wageCentsPerHour = nextWage;
-    }
+    if (Object.keys(updates).length === 0) return setDraft(null);
 
     setBusyId(workCenter.id);
     try {
@@ -212,14 +193,46 @@ export default function WorkCentersPage() {
     }
   };
 
+  /** One editable numeric cell, bound to the draft. */
+  const NumberCell = ({
+    field,
+    workCenter,
+  }: {
+    field: WorkCenterField;
+    workCenter: WorkCenter;
+  }) => {
+    const editing = draft?.id === workCenter.id ? draft : null;
+    return (
+      <TableCell className="text-right">
+        <InlineInput
+          type="number"
+          numeric
+          min={field.min}
+          step={field.kind === "money" ? "0.01" : 1}
+          aria-label={`${field.label} at ${workCenter.name}`}
+          disabled={busyId === workCenter.id}
+          value={
+            editing
+              ? (editing.fields[field.key] ?? "")
+              : fieldText(field, workCenter[field.column])
+          }
+          onFocus={() => beginEdit(workCenter)}
+          onChange={(event) => editField(field.key, event.target.value)}
+          onBlur={() => commitEdit(workCenter)}
+          className={field.width}
+        />
+      </TableCell>
+    );
+  };
+
   if (loading) return <p className="text-muted-foreground">Loading…</p>;
   if (error) return <p className="text-destructive">{error}</p>;
 
   return (
-    <div className="flex h-full min-h-0 max-w-5xl flex-col">
+    <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         title="Work Centers"
-        description="Machines parts queue for. More machines at a center is the lever for elevating a bottleneck."
+        description="Machines parts queue for, and the people who run them. A centre runs min(machines, operators) parts at once, so both halves are levers — and both cost money."
       >
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
@@ -246,35 +259,27 @@ export default function WorkCentersPage() {
                 />
               </Field>
 
-              <Field label="Machines">
-                <Input
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={capacity}
-                  onChange={(event) => setCapacity(event.target.value)}
-                />
-              </Field>
-
-              <Field label="Standing cost ($/day)">
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={standingCost}
-                  onChange={(event) => setStandingCost(event.target.value)}
-                />
-              </Field>
-
-              <Field label="Wage ($/hr per operator)">
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={wage}
-                  onChange={(event) => setWage(event.target.value)}
-                />
-              </Field>
+              {WORK_CENTER_FIELDS.map((field) => (
+                <Field
+                  key={field.key}
+                  label={
+                    field.unit ? `${field.label} (${field.unit})` : field.label
+                  }
+                >
+                  <Input
+                    type="number"
+                    min={field.min}
+                    step={field.kind === "money" ? "0.01" : 1}
+                    value={newFields[field.key] ?? ""}
+                    onChange={(event) =>
+                      setNewFields((current) => ({
+                        ...current,
+                        [field.key]: event.target.value,
+                      }))
+                    }
+                  />
+                </Field>
+              ))}
 
               <DialogFooter>
                 <Button type="submit" disabled={submitting}>
@@ -291,9 +296,14 @@ export default function WorkCentersPage() {
           <TableHeader className="sticky top-0 z-10 bg-card">
             <TableRow>
               <TableHead>Name</TableHead>
-              <TableHead className="text-right">Machines</TableHead>
-              <TableHead className="text-right">Standing cost ($/day)</TableHead>
-              <TableHead className="text-right">Wage ($/hr)</TableHead>
+              {WORK_CENTER_FIELDS.map((field) => (
+                <TableHead key={field.key} className="text-right">
+                  {field.label}
+                  {field.kind === "money" && (
+                    <span className="font-normal text-muted-foreground"> $</span>
+                  )}
+                </TableHead>
+              ))}
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -310,88 +320,22 @@ export default function WorkCentersPage() {
                       value={editing ? editing.name : workCenter.name}
                       onFocus={() => beginEdit(workCenter)}
                       onChange={(event) =>
-                        setDraft((current) =>
-                          current && { ...current, name: event.target.value },
+                        setDraft(
+                          (current) =>
+                            current && { ...current, name: event.target.value },
                         )
                       }
                       onBlur={() => commitEdit(workCenter)}
                       className="w-full"
                     />
                   </TableCell>
-                  <TableCell className="text-right">
-                    <InlineInput
-                      type="number"
-                      numeric
-                      min={1}
-                      step={1}
-                      aria-label={`Machines at ${workCenter.name}`}
-                      disabled={busyId === workCenter.id}
-                      value={editing ? editing.capacity : workCenter.capacity}
-                      onFocus={() => beginEdit(workCenter)}
-                      onChange={(event) =>
-                        setDraft((current) =>
-                          current && {
-                            ...current,
-                            capacity: event.target.value,
-                          },
-                        )
-                      }
-                      onBlur={() => commitEdit(workCenter)}
-                      className="w-20"
+                  {WORK_CENTER_FIELDS.map((field) => (
+                    <NumberCell
+                      key={field.key}
+                      field={field}
+                      workCenter={workCenter}
                     />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <InlineInput
-                      type="number"
-                      numeric
-                      min={0}
-                      step="0.01"
-                      aria-label={`Standing cost at ${workCenter.name}`}
-                      disabled={busyId === workCenter.id}
-                      value={
-                        editing
-                          ? editing.standingCost
-                          : (workCenter.standingCostCentsPerDay / 100).toFixed(2)
-                      }
-                      onFocus={() => beginEdit(workCenter)}
-                      onChange={(event) =>
-                        setDraft((current) =>
-                          current && {
-                            ...current,
-                            standingCost: event.target.value,
-                          },
-                        )
-                      }
-                      onBlur={() => commitEdit(workCenter)}
-                      className="w-28"
-                    />
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <InlineInput
-                      type="number"
-                      numeric
-                      min={0}
-                      step="0.01"
-                      aria-label={`Wage at ${workCenter.name}`}
-                      disabled={busyId === workCenter.id}
-                      value={
-                        editing
-                          ? editing.wage
-                          : (workCenter.wageCentsPerHour / 100).toFixed(2)
-                      }
-                      onFocus={() => beginEdit(workCenter)}
-                      onChange={(event) =>
-                        setDraft((current) =>
-                          current && {
-                            ...current,
-                            wage: event.target.value,
-                          },
-                        )
-                      }
-                      onBlur={() => commitEdit(workCenter)}
-                      className="w-24"
-                    />
-                  </TableCell>
+                  ))}
                   <TableCell className="text-right">
                     <DeleteButton
                       label={workCenter.name}

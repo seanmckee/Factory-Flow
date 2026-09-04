@@ -1344,14 +1344,48 @@ afterwards.
       parts stuck in front of a dead constraint, `utilization: 0` and
       `capacityTicks: 0` rather than a division by zero. The smoke run was
       deleted afterwards.
-- [ ] 6E.5 UI. Work-centres table gains operators and the three prices.
+- [x] 6E.5 UI. Work-centres table gains operators and the three prices.
       Simulation page gains a capital panel in the transport bar: per centre,
       buy/retire a machine and hire/fire an operator at the run's frozen
       prices, waiting out the clock's beat exactly as releasing does, since
       all three contend for the same lock. Dashboard gains a Capital card
       beside the other cost lines and the action log as a table (what, where,
       when in Day · time, what it cost); the net stat and the Trends net curve
-      subtract it.
+      subtract it (`netProfit.ts` learned the fifth column, or the curve would
+      contradict the run bar).
+      **Decided: a dialog, not more bar controls.** Buying is a whole-factory
+      question — which centre is the constraint, and which of its two halves
+      is short — so the thing that answers it is a table of every centre with
+      machines, operators, rent, wages and prices, and the short side of
+      `min(machines, operators)` in the `starved` tone. Six more controls
+      crammed into the transport bar would have shown one centre at a time.
+      **Decided: the Standing cost column goes** (the 6E.3 question). It was
+      `rate × observedTicks ÷ dayTicks` and 6E makes it wrong twice — the rate
+      is per machine and the machine count moves mid-window — so
+      `standingCost.ts` and its test are **deleted** rather than patched, and
+      the column is replaced by Machines / Operators (current config, labelled
+      as such, operators tinted when the two disagree) plus `capacityTicks`
+      beside `busyMachineTicks`: the utilization fraction's own two halves.
+      Machine-ticks as a second observation would have bought the old column
+      back honestly, and nothing yet needs it.
+      **The floor calls out the waste rather than hiding it:** a centre with
+      two machines and one operator drew "1/1" once capacity went effective,
+      so the row now appends `+1 unstaffed` (or `+1 idle` the other way) — the
+      rent-with-no-output the model started charging for in 6E.3 is exactly
+      what a floor view should show.
+      **A refactor the unit forced, and worth it:** the work-centre editor's
+      numeric columns became a spec (`src/setup/workCenterFields.ts`, pure and
+      tested, 10 cases) driving the create dialog, the draft, the parse and the
+      changed-column diff. Seven fields declared, validated and diffed by hand
+      is ~110 lines of copy per new column *and* a silent failure mode — a
+      column editable but never committed, the same class of bug the backend
+      handlers had in 6E.4. Table cells stay explicit per column, which is what
+      the tables-aren't-data-driven convention is about.
+      **Not verified in a browser:** the Chrome extension was not connected
+      this session, so the UI is typechecked, linted and unit-tested only. The
+      3.4 lesson stands — "create then read" and every other first-paint case
+      is exactly what headless checks miss — so this owes a hands-on pass,
+      and 6E.6 should not be treated as closing the track until it has had one.
 - [ ] 6E.6 Doc sweep. CLAUDE.md: four costs become five, the
       frozen-config invariant gains its first sanctioned mutation, and the
       effective-dating rule beside `accrueRate`'s. README: the capital-decision

@@ -10,16 +10,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import type { FloorWorkCenter, RunMetrics } from "../api/runs";
+import type { CapitalAction, FloorWorkCenter, RunMetrics } from "../api/runs";
 import type { SalesOrder } from "../types/SalesOrder";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
+import { CAPITAL_LABELS, formatSpend } from "../simulation/capital";
 import {
   formatDays,
   formatDurationSeconds,
   formatTickTime,
   ticksToDays,
 } from "../simulation/simTime";
-import { windowStandingCostCents } from "../simulation/standingCost";
 
 /**
  * The run dashboard — Track 5's replacement for the one-row placeholder strip.
@@ -101,14 +101,17 @@ function UtilizationBar({ utilization }: { utilization: number }) {
 function RunDashboard({
   metrics,
   centers,
+  actions,
   salesOrders,
   tickNum,
   dayTicks,
   onWindow,
 }: {
   metrics: RunMetrics;
-  /** Names, frozen capacities and frozen standing rates — `/metrics` carries ids. */
+  /** Names, machines and operators — `/metrics` carries ids and no names. */
   centers: FloorWorkCenter[];
+  /** The run's capital log, whole-run rather than windowed. */
+  actions: CapitalAction[];
   /** Live orders for names and quantities — `salesOrderDelivery` carries ids. */
   salesOrders: SalesOrder[];
   /** The run's current tick, which is what "last N" is relative to. */
@@ -134,6 +137,7 @@ function RunDashboard({
     salesOrderDelivery,
     scrap,
     wageCents,
+    capitalSpendCents,
   } = metrics;
   const salesOrderById = new Map(salesOrders.map((order) => [order.id, order]));
 
@@ -212,7 +216,7 @@ function RunDashboard({
         <StatCard
           label="Net profit"
           value={formatSignedCents(netCents)}
-          detail="throughput − opex − carrying − wages, this window"
+          detail="throughput − opex − carrying − wages − capital, this window"
           negative={netCents < 0}
         />
         <StatCard
@@ -234,6 +238,17 @@ function RunDashboard({
           label="Wages"
           value={formatCents(wageCents)}
           detail="operator pay per staffed hour, this window"
+        />
+        {/* neutral like the other cost lines, and signed: net salvage from a
+            retirement is money coming back, not a negative cost */}
+        <StatCard
+          label="Capital"
+          value={formatSignedCents(capitalSpendCents)}
+          detail={
+            capitalSpendCents === 0
+              ? "nothing bought or hired in the window"
+              : "machines and hires, charged when bought"
+          }
         />
         <StatCard
           label="Finished"
@@ -340,6 +355,48 @@ function RunDashboard({
         </div>
       )}
 
+      {/* How this run's frozen config got to where it is. Whole-run, unlike
+          every figure above it — an action is a decision you took, not a rate
+          over a window, and reading it against the window that contains it is
+          the point. */}
+      {actions.length > 0 && (
+        <div className="max-h-48 shrink-0 overflow-auto rounded-lg border bg-card">
+          <Table>
+            <TableHeader className="sticky top-0 bg-card">
+              <TableRow>
+                <TableHead>Capital actions · whole run</TableHead>
+                <TableHead>Work Center</TableHead>
+                <TableHead className="text-right">Cost</TableHead>
+                <TableHead className="text-right">After</TableHead>
+                <TableHead className="text-right">When</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {actions.map((action) => (
+                <TableRow key={action.id}>
+                  <TableCell className="font-medium">
+                    {CAPITAL_LABELS[action.kind]}
+                  </TableCell>
+                  <TableCell>
+                    {centerById.get(action.workCenterId)?.name ??
+                      `WC ${action.workCenterId}`}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatSpend(action.spendCents)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {action.machinesAfter} / {action.operatorsAfter}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {formatTickTime(action.appliedAtTick, dayTicks)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
       {/* The constraint finder. Utilization near 1 over a real window is the
           bottleneck's signature — the instantaneous figure the floor tab
           deliberately doesn't show. */}
@@ -348,10 +405,13 @@ function RunDashboard({
           <TableHeader className="sticky top-0 bg-card">
             <TableRow>
               <TableHead>Work Center</TableHead>
-              <TableHead>Machines</TableHead>
-              <TableHead className="text-right">Standing cost</TableHead>
+              {/* current config, not a window figure: a purchase mid-window
+                  means these two are where the run *ended up* */}
+              <TableHead className="text-right">Machines</TableHead>
+              <TableHead className="text-right">Operators</TableHead>
               <TableHead>Utilization</TableHead>
               <TableHead className="text-right">Busy machine-ticks</TableHead>
+              <TableHead className="text-right">Capacity-ticks</TableHead>
               <TableHead className="text-right">Queue mean</TableHead>
               <TableHead className="text-right">Queue max</TableHead>
               <TableHead className="text-right">Observed ticks</TableHead>
@@ -365,25 +425,27 @@ function RunDashboard({
                   <TableCell className="font-medium">
                     {live?.name ?? `WC ${center.workCenterId}`}
                   </TableCell>
-                  <TableCell className="tabular-nums">
-                    {live?.capacity ?? "—"}
-                  </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {live
-                      ? formatCents(
-                          windowStandingCostCents(
-                            live.standingCostCentsPerDay,
-                            center.observedTicks,
-                            dayTicks,
-                          ),
-                        )
-                      : "—"}
+                    {live?.machines ?? "—"}
+                  </TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right tabular-nums",
+                      live &&
+                        live.operators !== live.machines &&
+                        "font-medium text-starved",
+                    )}
+                  >
+                    {live?.operators ?? "—"}
                   </TableCell>
                   <TableCell>
                     <UtilizationBar utilization={center.utilization} />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {center.busyMachineTicks.toLocaleString()}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums text-muted-foreground">
+                    {center.capacityTicks.toLocaleString()}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {center.meanQueueDepth.toFixed(1)}

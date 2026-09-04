@@ -36,7 +36,16 @@ export type RunSummary = Run & {
   carryingCostCents: number;
   /** operator pay, summed from the same frozen tick column */
   wageCents: number;
-  /** throughput − expense − carrying − wages: the score, can be negative */
+  /**
+   * Capital spent on machines and hires, summed from the frozen action rows —
+   * salvage is a negative spend, so churning a machine shows as the loss it
+   * was. Charged as a lump at the tick it happened, not accrued per tick.
+   */
+  capitalSpendCents: number;
+  /**
+   * throughput − expense − carrying − wages − capital: the score, can be
+   * negative
+   */
   netCents: number;
   releasedOrders: {
     workOrderId: number;
@@ -49,12 +58,19 @@ export type RunSummary = Run & {
 export type FloorWorkCenter = {
   workCenterId: number;
   name: string;
-  /** the run's own frozen capacity, not the live table's */
+  /** effective capacity — `min(machines, operators)`, what admits a part */
   capacity: number;
-  /** frozen like capacity — what this run's centre costs per calendar day */
+  /** the two it is the lesser of: a machine nobody staffs runs nothing */
+  machines: number;
+  operators: number;
+  /** frozen, per **machine** — the centre's rent is machines × this */
   standingCostCentsPerDay: number;
-  /** frozen per-operator hourly wage; operators = machines until 6E */
+  /** frozen per-operator hourly wage */
   wageCentsPerHour: number;
+  /** the run's frozen capital prices: what an action here costs it */
+  machinePurchaseCents: number;
+  machineSalvageCents: number;
+  operatorHireCents: number;
   partsAtStation: number;
   /** one entry per machine: percent complete, or null when idle */
   slots: (number | null)[];
@@ -74,6 +90,8 @@ export type TickSample = {
   operatingExpenseCents: number;
   carryingCostCents: number;
   wageCents: number;
+  /** capital charged on this tick (or in this bucket) — a lump, not a rate */
+  capitalSpendCents: number;
 };
 
 export type AdvanceResult = {
@@ -92,9 +110,11 @@ export type AdvanceResult = {
 /** One work center's rates over a window. Utilization is in [0, 1]. */
 export type WorkCenterAggregate = {
   workCenterId: number;
-  /** Busy machine-ticks / (capacity x observed ticks). 1 is the constraint. */
+  /** Busy machine-ticks / capacity-ticks. 1 is the constraint. */
   utilization: number;
   busyMachineTicks: number;
+  /** machine-ticks available: each tick's own capacity, summed */
+  capacityTicks: number;
   meanQueueDepth: number;
   maxQueueDepth: number;
   /** Ticks that reported this center at all — utilization's denominator. */
@@ -115,6 +135,8 @@ export type RunMetrics = {
   operatingExpenseCents: number;
   carryingCostCents: number;
   wageCents: number;
+  /** capital spent in the window, windowed on the action's own tick */
+  capitalSpendCents: number;
   netCents: number;
   flow: {
     fromTick: number | null;
@@ -228,6 +250,39 @@ export const unlockRun = (runId: number) =>
 
 export const advanceRun = (runId: number, ticks: number) =>
   postJson<AdvanceResult>(`/api/runs/${runId}/advance`, { ticks });
+
+export type CapitalActionKind =
+  | "buy_machine"
+  | "retire_machine"
+  | "hire_operator"
+  | "fire_operator";
+
+export type CapitalAction = {
+  id: number;
+  kind: CapitalActionKind;
+  workCenterId: number;
+  appliedAtTick: number;
+  /** frozen; positive is money out, negative is salvage coming back */
+  spendCents: number;
+  machinesAfter: number;
+  operatorsAfter: number;
+};
+
+/**
+ * Buys, retires, hires or lets go against the run's **own** frozen config —
+ * the only thing in the API that edits it. The price is the run's frozen one,
+ * so nothing is sent but the kind and the centre. Takes the run's lock, so it
+ * 409s mid-advance exactly as a release does.
+ */
+export const applyCapitalAction = (
+  runId: number,
+  kind: CapitalActionKind,
+  workCenterId: number,
+) =>
+  postJson<CapitalAction>(`/api/runs/${runId}/actions`, { kind, workCenterId });
+
+export const listCapitalActions = (runId: number) =>
+  getJson<CapitalAction[]>(`/api/runs/${runId}/actions`);
 
 export const deleteRun = (runId: number) =>
   deleteJson<{ id: number; name: string }>(`/api/runs/${runId}`);
