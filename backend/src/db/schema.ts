@@ -81,6 +81,12 @@ export const routingSteps = pgTable(
     sequence: integer("sequence").notNull(),
     processTimeSeconds: integer("process_time_seconds").notNull(),
     setupTimeSeconds: integer("setup_time_seconds").notNull(),
+    /**
+     * Probability a unit is ruined at this step, in basis points (100 = 1%),
+     * drawn at step completion — the machine time is spent either way. Integer
+     * like the carrying rate, so the model stays exact.
+     */
+    scrapBps: integer("scrap_bps").notNull().default(0),
   },
   (table) => [unique().on(table.routingId, table.sequence)],
 );
@@ -411,10 +417,64 @@ export const runWorkOrderSteps = pgTable(
     sequence: integer("sequence").notNull(),
     workCenterId: integer("work_center_id").notNull(),
     processTimeSeconds: integer("process_time_seconds").notNull(),
+    /** pinned like the process time; pre-6C releases read 0 — no changeover */
+    setupTimeSeconds: integer("setup_time_seconds").notNull().default(0),
+    /** pinned scrap probability in basis points; pre-6C releases read 0 */
+    scrapBps: integer("scrap_bps").notNull().default(0),
+    /**
+     * When this (work order, step)'s one changeover started — null until the
+     * first unit is admitted to a machine here, then frozen. Mutable state
+     * beside pinned config, as `tick_num` and `carry_remainder` are on
+     * `simulation_runs`: whether setup has been paid must survive a batch
+     * boundary, and deriving it means consulting WIP, finished *and* scrapped
+     * rows together (the paying unit may scrap out of the very step it set up).
+     */
+    setupStartedAtTick: integer("setup_started_at_tick"),
   },
   (table) => [
     primaryKey({
       columns: [table.runId, table.workOrderId, table.sequence],
     }),
+  ],
+);
+
+/**
+ * Units ruined by a scrap draw, append-only, with the material they consumed
+ * frozen at scrap time — the same freeze-at-the-moment rule as
+ * `run_finished_parts`. Deliberately its own table rather than a flag there:
+ * every reader of the finished table — the `GROUP BY` that is the allocation
+ * cursor, cycle time, on-time delivery, the per-order deliveries, the
+ * summary's sums — depends on "finished = credited", and a flag would put a
+ * load-bearing `WHERE` in all of them. A scrapped unit consumes no allocation:
+ * the next good unit takes its sale, so a short work order under-delivers.
+ *
+ * `sequence` is the 0-based step the unit failed at; `work_center_id` is
+ * frozen at scrap time and un-keyed, like every observation of a centre.
+ */
+export const runScrappedParts = pgTable(
+  "run_scrapped_parts",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    partUuid: uuid("part_uuid").notNull(),
+    workOrderId: integer("work_order_id")
+      .references(() => workOrders.id, { onDelete: "restrict" })
+      .notNull(),
+    unitIndex: integer("unit_index").notNull(),
+    releasedAtTick: integer("released_at_tick").notNull(),
+    scrappedAtTick: integer("scrapped_at_tick").notNull(),
+    sequence: integer("sequence").notNull(),
+    workCenterId: integer("work_center_id").notNull(),
+    materialCostCents: integer("material_cost_cents").notNull(),
+  },
+  (table) => [
+    unique().on(table.runId, table.partUuid),
+    index("run_scrapped_parts_run_id_scrapped_at_tick_id_idx").on(
+      table.runId,
+      table.scrappedAtTick,
+      table.id,
+    ),
   ],
 );
