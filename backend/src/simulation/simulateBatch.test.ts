@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import type { CostRates } from "./operatingExpense.js";
 import { simulateBatch, type RunState } from "./simulateBatch.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
 
@@ -25,6 +26,14 @@ const part = (id: string, overrides: Partial<WipPart> = {}): WipPart => ({
   ...overrides,
 });
 
+/** a free factory: every rate zero, so pre-expense tests are unchanged */
+const freeCosts: CostRates = {
+  dayTicks: 10,
+  facilityOverheadCentsPerDay: 0,
+  wipCarryingBpsPerDay: 0,
+  standingCostByWorkCenter: new Map(),
+};
+
 const state = (overrides: Partial<RunState> = {}): RunState => ({
   tickNum: 0,
   rngSeed: SEED,
@@ -43,6 +52,8 @@ const state = (overrides: Partial<RunState> = {}): RunState => ({
     { id: 2, salesOrderId: 21, workOrderId: 10, quantity: 1 },
   ],
   priorCounts: new Map(),
+  costs: freeCosts,
+  carryRemainder: 0,
   ...overrides,
 });
 
@@ -273,5 +284,131 @@ describe("simulateBatch", () => {
 
   it("throws on a negative batch", () => {
     expect(() => simulateBatch(state(), -1)).toThrow(/-1 ticks/);
+  });
+});
+
+describe("simulateBatch operating expense", () => {
+  // a 10-tick day keeps the arithmetic readable; day length is data
+  const costs = (overrides: Partial<CostRates> = {}): CostRates => ({
+    ...freeCosts,
+    ...overrides,
+  });
+
+  it("charges rent for ticks where nothing happened", () => {
+    // the empty-floor test's comment made literal: time passing is expensive
+    const batch = simulateBatch(
+      state({ costs: costs({ facilityOverheadCentsPerDay: 50 }) }),
+      10,
+    );
+    expect(batch.wipParts).toEqual([]);
+    const charged = batch.ticks.reduce(
+      (sum, tick) => sum + tick.operatingExpenseCents,
+      0,
+    );
+    expect(charged).toBe(50);
+    expect(batch.ticks.every((tick) => tick.carryingCostCents === 0)).toBe(true);
+  });
+
+  it("accrues a free factory nothing", () => {
+    const batch = simulateBatch(state({ wipParts: [part("p1")] }), 10);
+    for (const tick of batch.ticks) {
+      expect(tick.operatingExpenseCents).toBe(0);
+      expect(tick.carryingCostCents).toBe(0);
+    }
+    expect(batch.carryRemainder).toBe(0);
+  });
+
+  it("charges carrying on the end-of-tick floor, so a finishing part pays no rent for its last tick", () => {
+    // 10000 bps/day of 1200c material over a 10-tick day = 120c per held tick
+    const batch = simulateBatch(
+      state({
+        wipParts: [part("p1")],
+        costs: costs({ wipCarryingBpsPerDay: 10_000 }),
+      }),
+      10,
+    );
+
+    const finishedAt = batch.finishedParts[0]?.completedAtTick;
+    expect(finishedAt).toBeDefined();
+    for (const tick of batch.ticks) {
+      expect(tick.carryingCostCents).toBe(tick.tickNum < finishedAt! ? 120 : 0);
+    }
+  });
+
+  it("is the same run whether advanced in one batch or several, at nonzero rates", () => {
+    // the zero-rate variant above can't see a dropped or double-counted
+    // remainder; 333 bps over 1200c leaves one non-zero at every boundary
+    const withRates = () =>
+      state({
+        wipParts: [part("p1"), part("p2", { unitIndex: 1 })],
+        costs: costs({
+          facilityOverheadCentsPerDay: 17,
+          wipCarryingBpsPerDay: 333,
+          standingCostByWorkCenter: new Map([
+            [10, 7],
+            [20, 5],
+          ]),
+        }),
+      });
+
+    const once = simulateBatch(withRates(), 30);
+
+    let carried = withRates();
+    const chunks = [];
+    for (let i = 0; i < 3; i++) {
+      const batch = simulateBatch(carried, 10);
+      chunks.push(batch);
+      expect(batch.carryRemainder).toBeGreaterThan(0);
+      carried = {
+        ...carried,
+        tickNum: batch.tickNum,
+        wipParts: batch.wipParts,
+        priorCounts: batch.priorCounts,
+        carryRemainder: batch.carryRemainder,
+      };
+    }
+
+    expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+    expect(chunks.flatMap((b) => b.finishedParts)).toEqual(once.finishedParts);
+    expect(chunks.at(-1)?.carryRemainder).toBe(once.carryRemainder);
+  });
+
+  it("carries the remainder out without mutating the input state", () => {
+    const input = state({
+      wipParts: [part("p1")],
+      costs: costs({ wipCarryingBpsPerDay: 333 }),
+      carryRemainder: 41,
+    });
+    const batch = simulateBatch(input, 3);
+    expect(input.carryRemainder).toBe(41);
+    // 3 ticks of 1200c at 333 bps: 41 + 3·399600 = 1198841 = 11c + 98841
+    expect(batch.carryRemainder).toBe(98_841);
+    expect(
+      batch.ticks.reduce((sum, tick) => sum + tick.carryingCostCents, 0),
+    ).toBe(11);
+  });
+
+  it("accrues exactly the day's rates over a full day", () => {
+    const batch = simulateBatch(
+      state({
+        costs: costs({
+          facilityOverheadCentsPerDay: 100,
+          standingCostByWorkCenter: new Map([
+            [10, 33],
+            [20, 9],
+          ]),
+        }),
+      }),
+      10,
+    );
+    expect(
+      batch.ticks.reduce((sum, tick) => sum + tick.operatingExpenseCents, 0),
+    ).toBe(142);
+  });
+
+  it("throws when a work order's part is missing, before any tick runs", () => {
+    expect(() =>
+      simulateBatch(state({ parts: [] }), 1),
+    ).toThrow("Work order 10 makes part 1, which was not loaded");
   });
 });

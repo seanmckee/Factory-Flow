@@ -695,7 +695,7 @@ frozen copy.
       (throws on missing records), `accrueCarrying` (remainder fold,
       `r ∈ [0, 10000·day_ticks)` — lifetime total is the exact floor of the
       ideal charge regardless of chunking).
-- [ ] 6A.3 `simulateBatch` wiring + tests — `RunState.costs` +
+- [x] 6A.3 `simulateBatch` wiring + tests — `RunState.costs` +
       `carryRemainder`, `TickRecord` expense fields, remainder carried out
       like `priorCounts`; carrying charges **end-of-tick** WIP (the set
       `wipCount` counts — a part finishing during the tick pays no rent for
