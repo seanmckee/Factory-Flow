@@ -718,7 +718,7 @@ frozen copy.
       the cumulative net curve has the same `/ticks`-suffix problem as the
       money curve, and its opening balance is **unfloored**: net before the
       window can legitimately be negative).
-- [ ] 6A.9 UI: net-profit curve **overlaid** on the cumulative-money chart
+- [x] 6A.9 UI: net-profit curve **overlaid** on the cumulative-money chart
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.

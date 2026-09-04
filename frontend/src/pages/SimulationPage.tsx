@@ -8,7 +8,9 @@ import {
   cumulativeThroughput,
   openingCents,
 } from "../simulation/cumulativeThroughput";
+import { netPerTick, openingNetCents } from "../simulation/netProfit";
 import { throughputRate } from "../simulation/throughputRate";
+import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -127,11 +129,22 @@ function ChartCard({
 }
 
 /** One figure in the run bar's readout. */
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  negative = false,
+}: {
+  label: string;
+  value: string;
+  /** money below zero reads in the destructive tone */
+  negative?: boolean;
+}) {
   return (
     <span className="flex items-baseline gap-1.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+      <span className={negative ? "font-medium text-destructive" : "font-medium"}>
+        {value}
+      </span>
     </span>
   );
 }
@@ -498,27 +511,44 @@ function SimulationPage() {
   // above it. The rate and WIP series are local by construction, so the suffix
   // needs no such correction for them.
   const runTotalCents = run?.throughputCents ?? 0;
+  const runNetTotalCents = run?.netCents ?? 0;
   const charts = useMemo(() => {
     const history = series.map((sample) => ({
       tick: sample.tickNum,
       cents: sample.throughputCents,
     }));
+    const pnlHistory = series.map((sample) => ({
+      tick: sample.tickNum,
+      throughputCents: sample.throughputCents,
+      operatingExpenseCents: sample.operatingExpenseCents,
+      carryingCostCents: sample.carryingCostCents,
+    }));
     const toPoint = ({ tick, cents }: { tick: number; cents: number }) => ({
       tick,
       value: cents,
     });
+    // both curves come off the same /ticks response, so a zip by index is
+    // exact; the net curve's opening is deliberately unfloored — see netProfit
+    const cumulative = cumulativeThroughput(
+      history,
+      openingCents(history, runTotalCents),
+    ).map(toPoint);
+    const net = cumulativeThroughput(
+      netPerTick(pnlHistory),
+      openingNetCents(pnlHistory, runNetTotalCents),
+    );
     return {
-      cumulative: cumulativeThroughput(
-        history,
-        openingCents(history, runTotalCents),
-      ).map(toPoint),
+      cumulative: cumulative.map((point, i) => ({
+        ...point,
+        secondary: net[i]?.cents,
+      })),
       rate: throughputRate(history).map(toPoint),
       wip: series.map((sample) => ({
         tick: sample.tickNum,
         value: sample.wipCount,
       })),
     };
-  }, [series, runTotalCents]);
+  }, [series, runTotalCents, runNetTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
@@ -567,8 +597,9 @@ function SimulationPage() {
               <DialogHeader>
                 <DialogTitle>New run</DialogTitle>
                 <DialogDescription>
-                  Freezes today's work centers and draws its own seed — re-creating
-                  a run with the same seed reproduces it exactly.
+                  Freezes today's work centers and cost rates, and draws its own
+                  seed — re-creating a run with the same seed reproduces it
+                  exactly.
                 </DialogDescription>
               </DialogHeader>
               <Field label="Name">
@@ -599,9 +630,11 @@ function SimulationPage() {
             <Stat label="Tick" value={run.tickNum.toLocaleString()} />
             <Stat label="WIP" value={run.wipCount.toLocaleString()} />
             <Stat label="Finished" value={run.finishedCount.toLocaleString()} />
+            <Stat label="Throughput" value={formatCents(run.throughputCents)} />
             <Stat
-              label="Throughput"
-              value={`$${(run.throughputCents / 100).toFixed(2)}`}
+              label="Net"
+              value={formatSignedCents(run.netCents)}
+              negative={run.netCents < 0}
             />
             <span className="text-xs text-muted-foreground">
               seed {run.rngSeed}
@@ -744,14 +777,16 @@ function SimulationPage() {
             <div className="grid h-full min-h-[36rem] grid-cols-2 grid-rows-[3fr_2fr] gap-3">
               <div className="col-span-2 min-h-0">
                 <ChartCard
-                  title="Cumulative throughput"
-                  hint="The score: money made through sales since the run began, as a running total. It only ever climbs, so read the slope — a flat stretch is a stall, and the rate chart below shows the same thing as a shape."
+                  title="Cumulative throughput & net profit"
+                  hint="The two scores together: money made through sales as a running total, and the same money net of operating expense and carrying cost. The gap between the lines is what the doors being open cost; net crossing the dashed zero is the run turning profitable — output can look healthy while net still falls."
                 >
                   <TickSeriesChart
                     data={charts.cumulative}
-                    yLabel="Cumulative Throughput ($)"
+                    yLabel="Cumulative ($)"
                     tooltipLabel="Throughput"
-                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}`}
+                    secondaryLabel="Net profit"
+                    zeroLine
+                    formatValue={formatSignedCents}
                     formatAxis={(cents) => (cents / 100).toFixed(0)}
                   />
                 </ChartCard>
@@ -765,7 +800,7 @@ function SimulationPage() {
                     data={charts.rate}
                     yLabel="Rate ($/min)"
                     tooltipLabel="Rate"
-                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}/min`}
+                    formatValue={(cents) => `${formatCents(cents)}/min`}
                     formatAxis={(cents) => (cents / 100).toFixed(0)}
                     stroke="var(--chart-2)"
                   />
