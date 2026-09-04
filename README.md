@@ -77,7 +77,7 @@ The server owns advancing, so the physics no longer depend on a browser being op
 - ~~Move from "one tick = one interval callback" to a clock the run owns.~~ Partly: the loop is the server's and runs in batches, but it is still a request that drives it, not time passing.
 - **Speed control — one honest speed, no multipliers.** The live clock plays one simulated minute per real second (60 ticks a beat — far inside what the server sustains), and fast-forward jumps in calendar units (+1 hour / +4 hours / +1 day) that stream in chunk by chunk. An unbounded "100×" multiplier stays unbuilt: it starts lying the moment it outruns the server. Run until idle was removed with the cost model — an idle factory burns money, so running a floor empty stopped being a question worth a button.
 - A run continues advancing correctly whether or not anyone is watching it — the tick loop shouldn't be a UI concern. **Still open**, and deliberately deferred: a background loop would be the first stateful thing in the server process, and an agent driving the run wants determinism rather than something ticking underneath it.
-- A calendar on top of the clock: shifts, working days, and idle hours. Needed for Phase 4, because cost accrues against time whether or not anything is being produced.
+- ~~A calendar on top of the clock: shifts~~ (6D: a day is `shifts × 28,800` staffed ticks, frozen per run), working days and idle hours still unmodelled — off-shift time simply isn't ticks.
 
 ### Phase 3 — Event history and snapshots — *partly delivered*
 
@@ -103,9 +103,13 @@ carrying cost, and a split order costs the constraint a second setup), and
 scrap is a per-step probability drawn at step completion through the seeded
 RNG in its own domain — a ruined unit's material is recorded but not charged,
 its money bite being the lost sale, the wasted machine time and the carrying
-already paid. Still open from the list below: wages/shifts (Track 6D),
-capital decisions (6E), rework, and the penalty halves of 6B's and 6C's
-bullets — see PROGRESS.md for the sub-track plan.
+already paid. Track 6D added shifts and wages: a run's calendar day is
+`shifts × 28,800` staffed ticks, and operators (one per machine until 6E) are
+paid per staffed hour — so a second shift doubles the day's wage bill while
+amortizing the same rent, and net profit now subtracts a fourth line. Still
+open from the list below: capital decisions (6E), overtime (an authorization,
+so it waits for 6E's mid-run actions), rework, and the penalty halves of 6B's
+and 6C's bullets — see PROGRESS.md for the sub-track plan.
 
 The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
 
@@ -114,7 +118,7 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 - **Recurring operating expense**
   - Facility overhead per simulated day — rent, utilities, the cost of the doors being open.
   - Per-work-centre standing cost — depreciation, maintenance, power, tooling.
-  - Operator wages per shift-hour, with an overtime rate for hours beyond the shift.
+  - ~~Operator wages per shift-hour~~ (6D), with an overtime rate still open — an authorization, deferred to the capital actions.
 - **Variable cost**
   - Material cost per part (already modelled).
   - ~~Setup cost per changeover, which finally makes batch-size decisions have a real trade-off.~~ Delivered as machine time (6C), not a cents charge — the cost is rent against time and lost constraint minutes.

@@ -133,6 +133,7 @@ function RunDashboard({
     onTimeDelivery,
     salesOrderDelivery,
     scrap,
+    wageCents,
   } = metrics;
   const salesOrderById = new Map(salesOrders.map((order) => [order.id, order]));
 
@@ -211,7 +212,7 @@ function RunDashboard({
         <StatCard
           label="Net profit"
           value={formatSignedCents(netCents)}
-          detail="throughput − opex − carrying, this window"
+          detail="throughput − opex − carrying − wages, this window"
           negative={netCents < 0}
         />
         <StatCard
@@ -228,6 +229,11 @@ function RunDashboard({
           label="Carrying cost"
           value={formatCents(carryingCostCents)}
           detail="WIP material value × rate, per tick"
+        />
+        <StatCard
+          label="Wages"
+          value={formatCents(wageCents)}
+          detail="operator pay per staffed hour, this window"
         />
         <StatCard
           label="Finished"

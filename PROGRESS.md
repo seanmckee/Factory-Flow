@@ -8,20 +8,19 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6C (setup and scrap) is complete** — planned and
-built 2026-09-04, units 6C.1–6C.5 below. Changeovers are machine time paid
-once per work order per step (batch size finally trades off against carrying
-cost, and a split order costs the constraint a second setup), and scrap is a
-per-step probability drawn at step completion in its own RNG domain — ruined
-units record their frozen material, consume no allocation, and feed a Scrap
-card; netCents is untouched, the 6B metric-not-money pattern. Before it, 6B
-(due dates + on-time delivery) and 6A (the P&L: the score can go down, runs
-freeze cost rates and accrue expense per tick, the day as the product-facing
-unit end to end).
+**You are here:** **Track 6D (shifts and wages) is complete** — planned and
+built 2026-09-04, units 6D.1–6D.4 below. A run's calendar day is
+`shifts × 28,800` staffed ticks (a facility setting, overridable per run), and
+operators — one per machine until 6E — are paid per staffed hour into their
+own frozen tick column, so `netCents` now subtracts a fourth line and a second
+shift doubles the day's wages while amortizing the same rent. Before it, 6C
+(setup as constraint time, scrap in its own RNG domain), 6B (due dates +
+on-time delivery) and 6A (the P&L core).
 
-**Next up:** 6D (shifts and wages) — **planned 2026-09-04**, units 6D.1–6D.4
-below — then 6E (capital actions), re-plan when reached; see the Track 6
-section for the sub-track split and the time model. Track 6A made the score able to go down, which is
+**Next up:** 6E (capital actions) — re-plan when reached; it now owes
+overtime too, deferred there because an authorization is a mid-run action on
+frozen config. See the Track 6 section for the sub-track split and the time
+model. Track 6A made the score able to go down, which is
 what makes an agent's objective non-degenerate; 6B adds the promise the agent
 can break without buying anything with it; 6C makes batch size a real decision
 and output itself unreliable.
@@ -1108,7 +1107,7 @@ balance it yet.
       same rates that accrue ~16,875c/hour at one shift, the amortization
       visible in one number; SO-2001's due tick froze at 57,600; a
       `shifts: 1` override under two-shift settings froze 28,800.
-- [ ] 6D.4 UI + doc sweep. Factory Settings gains Shifts; work-centres table
+- [x] 6D.4 UI + doc sweep. Factory Settings gains Shifts; work-centres table
       gains a Wage column; dashboard gains a Wages card and the net stat
       subtracts it (server-side already — but `netPerTick`/`netCentsOf` in
       `netProfit.ts` must learn the fourth column or the Trends net curve
