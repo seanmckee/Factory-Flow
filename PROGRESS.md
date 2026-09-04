@@ -1299,7 +1299,7 @@ afterwards.
       *not* the fix: rent is owed on machines whether or not anyone staffs
       them, so effective capacity-ticks is the wrong basis. Either the column
       goes or machine-ticks become their own observation; decided in 6E.5.
-- [ ] 6E.4 Live master data + the action API. `operators` and the three prices
+- [x] 6E.4 Live master data + the action API. `operators` and the three prices
       through work-centre POST/PATCH and the GETs;
       `POST /api/runs/:id/actions` — one endpoint with a discriminated-union
       body, because Track 8's tool layer wants one verb, not four — taking the
@@ -1310,8 +1310,40 @@ afterwards.
       everywhere it is computed; `/ticks` rows gain the spend joined per tick
       in JS, the convention, so the Trends net curve cannot contradict the run
       bar; `/floor` centres gain machines, operators and the frozen prices.
-      Exercise over HTTP, including two actions inside one staffed hour and an
-      action refused mid-advance.
+      **Decided:** the two work-centre handlers drop their column-by-column
+      copying for a `definedFields` helper — with seven optional fields the
+      copy was the only thing that could silently forget a new column, and it
+      already had (`exactOptionalPropertyTypes` is why the fields are dropped
+      rather than passed as undefined).
+      **Decided:** `retire_machine` and `fire_operator` refuse at zero with a
+      409, while retiring *down to* zero is allowed — a centre nobody staffs
+      is a legitimately terrible decision, and refusing to remove what isn't
+      there is a different thing from refusing the decision.
+      **Decided:** an action at a tick with no series row (tick 0, or outside
+      the window) is not forced into the first visible point. The chart's
+      opening balance is the total minus the window's sum, so spend before the
+      window is carried there rather than misdated — the 4.2 identity doing
+      its job again.
+      **Exercised over HTTP end to end**, and the arithmetic came out to the
+      cent: a staffed hour costs 16,875c of rent and 6,800c of wages;
+      `buy_machine` at the drill press charged its frozen 120,000c and the
+      next hour's rent rose to 20,625c — **exactly** one machine's 3,750c
+      share, nothing else re-phased; `hire_operator` charged 28,800c and took
+      wages to 8,600c, +1,800c. Summary and whole-run `/metrics` agree on all
+      five P&L lines. The action's own tick sits in the window *before* the new
+      rate: `?fromTick=1&toTick=3600` holds the 120,000c spend at the old rent
+      rate, `3601..7200` the new rent and no spend. Four actions on one tick
+      sum on that tick (−120,000c) and in its bucket; bucketed capital sums to
+      the run's total. Both directions of the lock: an action into a live
+      advance 409s, and an advance into a live action 409s too.
+      **The lesson fell out of the smoke test unasked:** buying a second drill
+      press *without hiring* left effective capacity at 1 for the whole next
+      hour — the run paid the machine's rent and bought nothing — and firing
+      both operators left 8 machines at `min(8, 0) = 0`, so 20,000 ticks
+      burned 239,580c of rent and 27,775c of wages for zero output, with 24
+      parts stuck in front of a dead constraint, `utilization: 0` and
+      `capacityTicks: 0` rather than a division by zero. The smoke run was
+      deleted afterwards.
 - [ ] 6E.5 UI. Work-centres table gains operators and the three prices.
       Simulation page gains a capital panel in the transport bar: per centre,
       buy/retire a machine and hire/fire an operator at the run's frozen

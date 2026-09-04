@@ -51,7 +51,8 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   its status and serialise. Routes
   are `POST /api/runs` (optionally overriding the facility-level cost rates it
   freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
-  frozen throughput, operating expense, carrying cost, `netCents` — the score,
+  frozen throughput, operating expense, carrying cost, wages, capital spend,
+  `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
   same P&L windowed, plus `onTimeDelivery`, its per-order breakdown
   `salesOrderDelivery`, and `scrap` — count and frozen material cents,
@@ -59,8 +60,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   any of these, since the whole-run `/metrics` already answers them),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
-  grid aligned to absolute ticks),
+  grid aligned to absolute ticks; `capitalSpendCents` is joined onto the tick
+  or bucket that contains the action, in JS),
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
+  actions — one endpoint with a discriminating `kind` of `buy_machine` /
+  `retire_machine` / `hire_operator` / `fire_operator`, rather than four
+  routes, because the agent's tool layer wants one verb it can parameterise;
+  it takes the run's lock, so it 409s mid-advance exactly as a release does,
+  and the money it charges is the run's **frozen** price, never the caller's
+  number),
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
   at roughly 500 ticks a second; a caller that wants more calls again, since a
@@ -85,11 +94,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - The nine `run_*` / `simulation_runs` tables are one run's history;
   everything above them in `schema.ts` is the shared factory definition.
   **The invariant: once a run exists, the engine reads that run's own config —
-  `run_work_centers` for capacity and standing cost, `run_work_order_steps` for
+  `run_work_centers` for machines, operators, standing cost, wages and the
+  capital prices, `run_work_order_steps` for
   steps, `simulation_runs` for the facility rates and `day_ticks` — and never
   `work_centers`, `routing_steps` or `factory_settings` again.** That is what lets two runs
   disagree about the drill press, and what makes forking a copy rather than a
-  versioning scheme. Steps are pinned per **work order** at release, so editing
+  versioning scheme. Since 6E that frozen config has exactly one **writer**:
+  a capital action, which charges the run's frozen price, re-dates the rate it
+  moved and appends a `run_capital_actions` row. It is still never re-read from
+  the live tables — buying a machine in one run leaves every other run, and the
+  factory, alone. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
   already halfway through a route.
 - History cascades from `simulation_runs`, and references out to the shared
@@ -129,7 +143,7 @@ day is `shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` ×
 run as `simulation_runs.day_ticks`. Per-day rates are entered per true 24h
 calendar day and amortized over the
 day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
-simply isn't ticks. Four costs, and the rules per kind:
+simply isn't ticks. Five costs, and the rules per kind:
 
 - **Time-based expense** (facility overhead + per-centre standing cost) is a
   pure function of the tick number — `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`
@@ -164,10 +178,25 @@ simply isn't ticks. Four costs, and the rules per kind:
   `loadRunState` pre-multiplies so the engine (`wagesAtTick`) sums per-centre
   rates without knowing about operators. Its own frozen tick column
   (`run_ticks.wage_cents`) and its own P&L line —
-  `netCents = throughput − OE − carrying − wages` — because the wages-vs-rent
+  `netCents = throughput − OE − carrying − wages − capital` — because the
+  wages-vs-rent
   split is what a shift decision is about. There is deliberately no overtime
-  yet: overtime is an *authorization*, a mid-run action on frozen config,
-  which is 6E's territory.
+  yet: overtime's whole economic identity is its **premium**, and priced at the
+  normal wage it costs what a temp's hour costs while needing no hiring, so it
+  would dominate both the shifts setting and 6E's hire/fire. It waits for 6F
+  along with mid-run shift changes, which need a non-uniform calendar day.
+- **Capital spend (6E)** is the one cost that is *not* an accrual: buying a
+  machine or hiring an operator charges a lump at the tick the action lands,
+  frozen on an append-only `run_capital_actions` row (salvage from a
+  retirement is a **negative** spend, so the line is one sum over one column).
+  Amortizing it was rejected on timescale: a realistic five-year machine life
+  is ~$11/day against a ~$1,900/day factory, so a purchase would be free
+  inside the days a run spans and "always buy" would be right every time —
+  the degenerate objective 6A exists to prevent. A lump also makes payback
+  readable straight off the net curve, and keeps amortization layerable later
+  off the frozen column, the 6B/6C pattern. There is **no cash balance**: a
+  run cannot be refused a purchase for want of funds, and net simply goes
+  further negative.
 - **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
   `carrying_cost_cents` / `wage_cents` and every P&L read sums them — never
   re-derives from

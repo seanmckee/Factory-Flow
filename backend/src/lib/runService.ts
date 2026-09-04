@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import {
   routingSteps,
   routings,
+  runCapitalActions,
   runFinishedParts,
   runReleasedOrders,
   runScrappedParts,
@@ -150,19 +151,30 @@ export async function createRun(
       .select({
         id: workCenters.id,
         capacity: workCenters.capacity,
+        operators: workCenters.operators,
         standingCostCentsPerDay: workCenters.standingCostCentsPerDay,
         wageCentsPerHour: workCenters.wageCentsPerHour,
+        machinePurchaseCents: workCenters.machinePurchaseCents,
+        machineSalvageCents: workCenters.machineSalvageCents,
+        operatorHireCents: workCenters.operatorHireCents,
       })
       .from(workCenters);
 
     if (centers.length > 0) {
+      // the prices are frozen too, not just the rates: a capital action mid-run
+      // charges what the factory cost when the run started, so a price edit
+      // cannot change what a decision already taken was worth
       await tx.insert(runWorkCenters).values(
         centers.map((center) => ({
           runId: run.id,
           workCenterId: center.id,
           capacity: center.capacity,
+          operators: center.operators,
           standingCostCentsPerDay: center.standingCostCentsPerDay,
           wageCentsPerHour: center.wageCentsPerHour,
+          machinePurchaseCents: center.machinePurchaseCents,
+          machineSalvageCents: center.machineSalvageCents,
+          operatorHireCents: center.operatorHireCents,
         })),
       );
     }
@@ -477,6 +489,152 @@ export async function advanceRun(
       wipCount: state.wipParts.length,
     };
   });
+}
+
+export type CapitalActionKind =
+  | "buy_machine"
+  | "retire_machine"
+  | "hire_operator"
+  | "fire_operator";
+
+export type CapitalActionResult = {
+  id: number;
+  kind: CapitalActionKind;
+  workCenterId: number;
+  appliedAtTick: number;
+  /** frozen; positive is money out, negative is salvage coming back */
+  spendCents: number;
+  machinesAfter: number;
+  operatorsAfter: number;
+};
+
+/**
+ * Applies a capital action to a run: the only thing that changes a run's own
+ * frozen config, and the only place money leaves at a moment rather than
+ * accruing per tick.
+ *
+ * It takes the same lock as advancing and releasing, which is what makes the
+ * effective-dating exact: a batch cannot span the change, so the engine still
+ * sees one rate per batch. The new rate is dated at the run's current tick and
+ * therefore bites the *next* one — the tick the run has already lived through
+ * belongs to the old factory.
+ *
+ * The spend comes from the run's frozen prices rather than from the caller. A
+ * decision's cost is the factory's, and freezing it is what stops a later
+ * price edit from rewriting what a finished run paid.
+ */
+export async function applyCapitalAction(
+  runId: number,
+  kind: CapitalActionKind,
+  workCenterId: number,
+): Promise<CapitalActionResult> {
+  return withRunLock(runId, (run) =>
+    db.transaction(async (tx) => {
+      const [center] = await tx
+        .select()
+        .from(runWorkCenters)
+        .where(
+          and(
+            eq(runWorkCenters.runId, runId),
+            eq(runWorkCenters.workCenterId, workCenterId),
+          ),
+        );
+      if (!center) {
+        throw new HttpError(
+          404,
+          `Run ${runId} has no work center ${workCenterId}`,
+        );
+      }
+
+      let machines = center.capacity;
+      let operators = center.operators;
+      let spendCents = 0;
+      // only the rate the action moves is re-dated: re-phasing an untouched
+      // rate would shift its sub-cent schedule for no reason
+      const updates: {
+        capacity?: number;
+        operators?: number;
+        standingCostEffectiveFromTick?: number;
+        wageEffectiveFromTick?: number;
+      } = {};
+
+      switch (kind) {
+        case "buy_machine":
+          machines += 1;
+          spendCents = center.machinePurchaseCents;
+          updates.capacity = machines;
+          updates.standingCostEffectiveFromTick = run.tickNum;
+          break;
+        case "retire_machine":
+          if (machines === 0) {
+            throw new HttpError(
+              409,
+              `Work center ${workCenterId} has no machines to retire`,
+            );
+          }
+          machines -= 1;
+          // salvage is a negative spend, so the P&L's capital line is one sum
+          spendCents = -center.machineSalvageCents;
+          updates.capacity = machines;
+          updates.standingCostEffectiveFromTick = run.tickNum;
+          break;
+        case "hire_operator":
+          operators += 1;
+          spendCents = center.operatorHireCents;
+          updates.operators = operators;
+          updates.wageEffectiveFromTick = run.tickNum;
+          break;
+        case "fire_operator":
+          if (operators === 0) {
+            throw new HttpError(
+              409,
+              `Work center ${workCenterId} has no operators to let go`,
+            );
+          }
+          operators -= 1;
+          // firing is free by design: a crew you can shed cheaply is the temp
+          // lever, and it is what gives a shift's commitment a price to beat
+          spendCents = 0;
+          updates.operators = operators;
+          updates.wageEffectiveFromTick = run.tickNum;
+          break;
+      }
+
+      await tx
+        .update(runWorkCenters)
+        .set(updates)
+        .where(
+          and(
+            eq(runWorkCenters.runId, runId),
+            eq(runWorkCenters.workCenterId, workCenterId),
+          ),
+        );
+
+      const [action] = await tx
+        .insert(runCapitalActions)
+        .values({
+          runId,
+          kind,
+          workCenterId,
+          appliedAtTick: run.tickNum,
+          spendCents,
+          machinesAfter: machines,
+          operatorsAfter: operators,
+        })
+        .returning();
+      if (!action) throw new HttpError(500, "Capital action insert failed");
+
+      return {
+        id: action.id,
+        kind,
+        workCenterId,
+        appliedAtTick: action.appliedAtTick,
+        spendCents: action.spendCents,
+        machinesAfter: action.machinesAfter,
+        operatorsAfter: action.operatorsAfter,
+      };
+    }),
+  );
 }
 
 /**

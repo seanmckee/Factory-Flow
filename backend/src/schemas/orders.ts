@@ -49,14 +49,31 @@ function workCenterName() {
     .max(255, { error: "name must be 255 characters or fewer" });
 }
 
-export const createWorkCenterSchema = z.object({
-  name: workCenterName(),
+/**
+ * The per-centre fields both create and update accept, beside the name.
+ * `capacity` is machines; `operators` is who stands at them, and effective
+ * capacity is the lesser of the two. The three prices are what a capital
+ * action costs the run that froze them — a machine can be free to buy and
+ * expensive to keep, or the reverse, so none of them is derived from another.
+ */
+const workCenterFields = {
   // omitted means "take the column default of 1"
   capacity: positiveInt("capacity").optional(),
-  // omitted means "take the column default of 0" — a free machine
+  // operators may legitimately be zero: a centre nobody staffs runs nothing
+  operators: nonNegativeInt("operators").optional(),
+  // omitted means "take the column default of 0" — a free machine. Per
+  // machine, so a centre's rent is machines × this.
   standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
   // per operator per staffed hour; omitted means the default of 0
   wageCentsPerHour: nonNegativeInt("wageCentsPerHour").optional(),
+  machinePurchaseCents: nonNegativeInt("machinePurchaseCents").optional(),
+  machineSalvageCents: nonNegativeInt("machineSalvageCents").optional(),
+  operatorHireCents: nonNegativeInt("operatorHireCents").optional(),
+};
+
+export const createWorkCenterSchema = z.object({
+  name: workCenterName(),
+  ...workCenterFields,
 });
 
 /**
@@ -66,18 +83,12 @@ export const createWorkCenterSchema = z.object({
 export const updateWorkCenterSchema = z
   .object({
     name: workCenterName().optional(),
-    capacity: positiveInt("capacity").optional(),
-    standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
-    wageCentsPerHour: nonNegativeInt("wageCentsPerHour").optional(),
+    ...workCenterFields,
   })
-  .refine(
-    (body) =>
-      body.name !== undefined ||
-      body.capacity !== undefined ||
-      body.standingCostCentsPerDay !== undefined ||
-      body.wageCentsPerHour !== undefined,
-    { error: "provide name, capacity, standingCostCentsPerDay or wageCentsPerHour" },
-  );
+  .refine((body) => Object.values(body).some((value) => value !== undefined), {
+    error:
+      "provide name, capacity, operators, standingCostCentsPerDay, wageCentsPerHour, machinePurchaseCents, machineSalvageCents or operatorHireCents",
+  });
 
 // Factory settings
 
@@ -244,6 +255,25 @@ export const createRunSchema = z.object({
 
 export const releaseWorkOrderSchema = z.object({
   workOrderId: positiveInt("workOrderId"),
+});
+
+/**
+ * A capital action against a run's own frozen config. One endpoint with a
+ * discriminating `kind` rather than four routes: Track 8's tool layer wants
+ * one verb it can parameterise, and the four share their whole shape.
+ *
+ * The action carries no money — what it costs is the run's frozen price, not
+ * the caller's opinion of it.
+ */
+export const capitalActionSchema = z.object({
+  kind: z.enum(
+    ["buy_machine", "retire_machine", "hire_operator", "fire_operator"],
+    {
+      error:
+        "kind must be buy_machine, retire_machine, hire_operator or fire_operator",
+    },
+  ),
+  workCenterId: positiveInt("workCenterId"),
 });
 
 /**

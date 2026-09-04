@@ -5,10 +5,12 @@ import {
   getRunFloor,
   getRunMetrics,
   getRunTicks,
+  listCapitalActions,
   listRuns,
 } from "../lib/runReads.js";
 import {
   advanceRun,
+  applyCapitalAction,
   createRun,
   deleteRun,
   releaseWorkOrder,
@@ -17,6 +19,7 @@ import {
 import { parseOr400 } from "../lib/validate.js";
 import {
   advanceRunSchema,
+  capitalActionSchema,
   createRunSchema,
   idParamSchema,
   metricsWindowSchema,
@@ -160,6 +163,44 @@ router.post("/:id/releases", async (req, res) => {
     res.status(201).json(await releaseWorkOrder(params.id, body.workOrderId));
   } catch (error) {
     fail(res, error, "Error releasing work order");
+  }
+});
+
+/**
+ * Capital actions: buy or retire a machine, hire or let go an operator. One
+ * endpoint with a discriminating `kind` rather than four routes — the agent's
+ * tool layer wants one verb it can parameterise, and the four share their
+ * whole shape.
+ *
+ * The only thing in the API that edits a run's own frozen config, and it takes
+ * the run's lock to do it, so it 409s mid-advance exactly as a release does.
+ * What it costs is the run's frozen price, never the caller's number.
+ */
+router.post("/:id/actions", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    const body = parseOr400(capitalActionSchema, req.body, res);
+    if (!body) return;
+
+    res
+      .status(201)
+      .json(await applyCapitalAction(params.id, body.kind, body.workCenterId));
+  } catch (error) {
+    fail(res, error, "Error applying capital action");
+  }
+});
+
+/** The action log: how this run's config got to where it is. */
+router.get("/:id/actions", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    res.json(await listCapitalActions(params.id));
+  } catch (error) {
+    fail(res, error, "Error getting capital actions");
   }
 });
 

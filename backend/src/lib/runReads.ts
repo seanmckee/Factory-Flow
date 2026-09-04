@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
+  runCapitalActions,
   runFinishedParts,
   runReleasedOrders,
   runScrappedParts,
@@ -74,7 +75,17 @@ export type RunSummary = RunRow & {
   carryingCostCents: number;
   /** operator pay, summed from the same frozen tick column */
   wageCents: number;
-  /** throughput − expense − carrying − wages: the score, and it can go negative */
+  /**
+   * Capital spent, summed from the frozen action rows — salvage is a negative
+   * spend, so a run that bought and retired the same machine shows the loss it
+   * really took. Not a per-tick accrual: capital leaves at a moment, which is
+   * what makes payback readable off the net curve.
+   */
+  capitalSpendCents: number;
+  /**
+   * throughput − expense − carrying − wages − capital: the score, and it can
+   * go negative
+   */
   netCents: number;
   releasedOrders: {
     workOrderId: number;
@@ -101,7 +112,8 @@ export async function getRun(runId: number): Promise<RunSummary> {
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const [[wip], [finished], [expense], releasedOrders] = await Promise.all([
+  const [[wip], [finished], [expense], [capital], releasedOrders] =
+    await Promise.all([
     db
       .select({ count: count() })
       .from(runWipParts)
@@ -122,6 +134,10 @@ export async function getRun(runId: number): Promise<RunSummary> {
       .from(runTicks)
       .where(eq(runTicks.runId, runId)),
     db
+      .select({ spendCents: sum(runCapitalActions.spendCents) })
+      .from(runCapitalActions)
+      .where(eq(runCapitalActions.runId, runId)),
+    db
       .select({
         workOrderId: runReleasedOrders.workOrderId,
         routingId: runReleasedOrders.routingId,
@@ -137,6 +153,7 @@ export async function getRun(runId: number): Promise<RunSummary> {
   const operatingExpenseCents = Number(expense?.operatingExpenseCents ?? 0);
   const carryingCostCents = Number(expense?.carryingCostCents ?? 0);
   const wageCents = Number(expense?.wageCents ?? 0);
+  const capitalSpendCents = Number(capital?.spendCents ?? 0);
 
   return {
     ...run,
@@ -146,8 +163,13 @@ export async function getRun(runId: number): Promise<RunSummary> {
     operatingExpenseCents,
     carryingCostCents,
     wageCents,
+    capitalSpendCents,
     netCents:
-      throughputCents - operatingExpenseCents - carryingCostCents - wageCents,
+      throughputCents -
+      operatingExpenseCents -
+      carryingCostCents -
+      wageCents -
+      capitalSpendCents,
     releasedOrders,
   };
 }
@@ -160,6 +182,8 @@ export type RunMetrics = {
   operatingExpenseCents: number;
   carryingCostCents: number;
   wageCents: number;
+  /** capital spent in the window, windowed on its own `applied_at_tick` */
+  capitalSpendCents: number;
   netCents: number;
   flow: MetricsAggregate;
   cycleTime: CycleTimeAggregate;
@@ -197,7 +221,8 @@ export async function getRunMetrics(
 
   const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
 
-  const [tickRows, centerRows, finished, scrapped, storedCenters] = await Promise.all([
+  const [tickRows, centerRows, finished, scrapped, capital, storedCenters] =
+    await Promise.all([
     db
       .select()
       .from(runTicks)
@@ -238,6 +263,16 @@ export async function getRunMetrics(
           eq(runScrappedParts.runId, runId),
           gte(runScrappedParts.scrappedAtTick, from),
           lte(runScrappedParts.scrappedAtTick, to),
+        ),
+      ),
+    db
+      .select({ spendCents: sum(runCapitalActions.spendCents) })
+      .from(runCapitalActions)
+      .where(
+        and(
+          eq(runCapitalActions.runId, runId),
+          gte(runCapitalActions.appliedAtTick, from),
+          lte(runCapitalActions.appliedAtTick, to),
         ),
       ),
     db
@@ -293,6 +328,9 @@ export async function getRunMetrics(
     0,
   );
   const wageCents = tickRows.reduce((total, row) => total + row.wageCents, 0);
+  // capital windows on its own column, like scrap: it is an event at a tick,
+  // not an accrual across them
+  const capitalSpendCents = Number(capital[0]?.spendCents ?? 0);
 
   return {
     fromTick: from,
@@ -301,8 +339,13 @@ export async function getRunMetrics(
     operatingExpenseCents,
     carryingCostCents,
     wageCents,
+    capitalSpendCents,
     netCents:
-      throughputCents - operatingExpenseCents - carryingCostCents - wageCents,
+      throughputCents -
+      operatingExpenseCents -
+      carryingCostCents -
+      wageCents -
+      capitalSpendCents,
     // the roster only: utilization's denominator now comes from each
     // observation's own capacity, not from this map
     flow: aggregateMetrics(
@@ -347,11 +390,19 @@ export type RunFloor = {
   wipCount: number;
   workCenters: (WorkCenterFloorView & {
     name: string;
+    /** effective capacity — `min(machines, operators)`, what admits a part */
     capacity: number;
-    /** frozen, like capacity — what this run's centre costs per calendar day */
+    /** the two it is the lesser of, so the UI can price an action's effect */
+    machines: number;
+    operators: number;
+    /** frozen, per **machine** — the centre's rent is machines × this */
     standingCostCentsPerDay: number;
-    /** frozen per-operator hourly wage; operators = capacity until 6E */
+    /** frozen per-operator hourly wage */
     wageCentsPerHour: number;
+    /** the run's frozen capital prices: what an action here costs it */
+    machinePurchaseCents: number;
+    machineSalvageCents: number;
+    operatorHireCents: number;
   })[];
 };
 
@@ -392,13 +443,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       .where(eq(runWorkOrderSteps.runId, run.id))
       .orderBy(runWorkOrderSteps.workOrderId, runWorkOrderSteps.sequence),
     db
-      .select({
-        workCenterId: runWorkCenters.workCenterId,
-        capacity: runWorkCenters.capacity,
-        operators: runWorkCenters.operators,
-        standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
-        wageCentsPerHour: runWorkCenters.wageCentsPerHour,
-      })
+      .select()
       .from(runWorkCenters)
       .where(eq(runWorkCenters.runId, run.id)),
     db.select({ id: workCenters.id, name: workCenters.name }).from(workCenters),
@@ -439,14 +484,8 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     ]),
   );
   const names = new Map(liveCenters.map((center) => [center.id, center.name]));
-  const standingCosts = new Map(
-    storedCenters.map((center) => [
-      center.workCenterId,
-      center.standingCostCentsPerDay,
-    ]),
-  );
-  const wageRates = new Map(
-    storedCenters.map((center) => [center.workCenterId, center.wageCentsPerHour]),
+  const frozen = new Map(
+    storedCenters.map((center) => [center.workCenterId, center]),
   );
 
   const view = deriveFloorView(
@@ -462,8 +501,17 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       ...center,
       name: names.get(center.workCenterId) ?? `Work center ${center.workCenterId}`,
       capacity: centerMap.get(center.workCenterId)?.capacity ?? 0,
-      standingCostCentsPerDay: standingCosts.get(center.workCenterId) ?? 0,
-      wageCentsPerHour: wageRates.get(center.workCenterId) ?? 0,
+      machines: frozen.get(center.workCenterId)?.capacity ?? 0,
+      operators: frozen.get(center.workCenterId)?.operators ?? 0,
+      standingCostCentsPerDay:
+        frozen.get(center.workCenterId)?.standingCostCentsPerDay ?? 0,
+      wageCentsPerHour: frozen.get(center.workCenterId)?.wageCentsPerHour ?? 0,
+      machinePurchaseCents:
+        frozen.get(center.workCenterId)?.machinePurchaseCents ?? 0,
+      machineSalvageCents:
+        frozen.get(center.workCenterId)?.machineSalvageCents ?? 0,
+      operatorHireCents:
+        frozen.get(center.workCenterId)?.operatorHireCents ?? 0,
     })),
   };
 }
@@ -475,6 +523,14 @@ export type TickSeriesRow = {
   operatingExpenseCents: number;
   carryingCostCents: number;
   wageCents: number;
+  /**
+   * Capital spent on this tick (or in this bucket) — joined from the action
+   * rows in JS, the convention, since there are a handful of them per run and
+   * no per-tick column to sum. Present so the net curve the chart draws
+   * subtracts the same five lines the run bar does; a purchase reads as a
+   * cliff, which is the point of charging it as a lump.
+   */
+  capitalSpendCents: number;
 };
 
 /**
@@ -489,6 +545,65 @@ export type TickSeriesRow = {
  * following a live run wants the end of the series.
  */
 export const MAX_TICK_SERIES_ROWS = 5000;
+
+/** The window's capital actions, summed per tick they were applied at. */
+async function capitalByTick(
+  runId: number,
+  from: number,
+  to: number,
+): Promise<Map<number, number>> {
+  const rows = await db
+    .select({
+      appliedAtTick: runCapitalActions.appliedAtTick,
+      spendCents: runCapitalActions.spendCents,
+    })
+    .from(runCapitalActions)
+    .where(
+      and(
+        eq(runCapitalActions.runId, runId),
+        gte(runCapitalActions.appliedAtTick, from),
+        lte(runCapitalActions.appliedAtTick, to),
+      ),
+    );
+
+  const byTick = new Map<number, number>();
+  for (const row of rows) {
+    byTick.set(
+      row.appliedAtTick,
+      (byTick.get(row.appliedAtTick) ?? 0) + row.spendCents,
+    );
+  }
+  return byTick;
+}
+
+/**
+ * Attaches each tick's (or bucket's) capital spend. A row's `tickNum` is the
+ * last tick it covers, so its bucket index is `floor((tickNum−1)/bucket)` —
+ * the same grid the SQL grouped on, which is what makes an action land in the
+ * bucket that contains it.
+ *
+ * An action applied at a tick with no row in the series — tick 0, or one
+ * outside the window — is deliberately not forced in: the chart's opening
+ * balance is the run's total minus the window's own sum, so spend before the
+ * window is carried there rather than misdated into the first visible point.
+ */
+function withCapitalSpend(
+  rows: Omit<TickSeriesRow, "capitalSpendCents">[],
+  byTick: Map<number, number>,
+  bucket: number,
+): TickSeriesRow[] {
+  const width = Math.max(1, bucket);
+  const byBucket = new Map<number, number>();
+  for (const [tick, cents] of byTick) {
+    const index = Math.floor((tick - 1) / width);
+    byBucket.set(index, (byBucket.get(index) ?? 0) + cents);
+  }
+
+  return rows.map((row) => ({
+    ...row,
+    capitalSpendCents: byBucket.get(Math.floor((row.tickNum - 1) / width)) ?? 0,
+  }));
+}
 
 export async function getRunTicks(
   runId: number,
@@ -525,7 +640,7 @@ export async function getRunTicks(
       .limit(MAX_TICK_SERIES_ROWS);
 
     // read newest-first to cap at the end of the window, handed back in order
-    return rows.reverse();
+    return withCapitalSpend(rows.reverse(), await capitalByTick(runId, from, to), 1);
   }
 
   // integer division on int columns — Postgres truncates, which is the floor
@@ -549,12 +664,55 @@ export async function getRunTicks(
     .orderBy(sql`${bucketGroup} desc`)
     .limit(MAX_TICK_SERIES_ROWS);
 
-  return rows.reverse().map((row) => ({
-    tickNum: Number(row.tickNum),
-    throughputCents: Number(row.throughputCents),
-    wipCount: Number(row.wipCount),
-    operatingExpenseCents: Number(row.operatingExpenseCents),
-    carryingCostCents: Number(row.carryingCostCents),
-    wageCents: Number(row.wageCents),
-  }));
+  return withCapitalSpend(
+    rows.reverse().map((row) => ({
+      tickNum: Number(row.tickNum),
+      throughputCents: Number(row.throughputCents),
+      wipCount: Number(row.wipCount),
+      operatingExpenseCents: Number(row.operatingExpenseCents),
+      carryingCostCents: Number(row.carryingCostCents),
+      wageCents: Number(row.wageCents),
+    })),
+    await capitalByTick(runId, from, to),
+    Math.floor(bucket),
+  );
+}
+
+export type CapitalActionRow = {
+  id: number;
+  kind: string;
+  workCenterId: number;
+  appliedAtTick: number;
+  spendCents: number;
+  machinesAfter: number;
+  operatorsAfter: number;
+};
+
+/**
+ * A run's capital actions, oldest first — the log that explains how its frozen
+ * config got to where it is. Names join client-side off `/floor`, as
+ * everywhere: a run keeps no copy of a work centre's name.
+ */
+export async function listCapitalActions(
+  runId: number,
+): Promise<CapitalActionRow[]> {
+  const [run] = await db
+    .select({ id: simulationRuns.id })
+    .from(simulationRuns)
+    .where(eq(simulationRuns.id, runId));
+  if (!run) throw new HttpError(404, `Run ${runId} not found`);
+
+  return db
+    .select({
+      id: runCapitalActions.id,
+      kind: runCapitalActions.kind,
+      workCenterId: runCapitalActions.workCenterId,
+      appliedAtTick: runCapitalActions.appliedAtTick,
+      spendCents: runCapitalActions.spendCents,
+      machinesAfter: runCapitalActions.machinesAfter,
+      operatorsAfter: runCapitalActions.operatorsAfter,
+    })
+    .from(runCapitalActions)
+    .where(eq(runCapitalActions.runId, runId))
+    .orderBy(runCapitalActions.appliedAtTick, runCapitalActions.id);
 }
