@@ -62,7 +62,17 @@ function tickWindow(
   if (fromTick !== undefined && toTick !== undefined && toTick < fromTick) {
     throw new HttpError(400, `toTick ${toTick} is before fromTick ${fromTick}`);
   }
-  return { from: fromTick ?? 1, to: toTick ?? tickNum };
+  // The default window is the **whole run**, and a run begins at tick 0, not at
+  // tick 1: ticks are numbered from 1, but tick 0 is a real moment at which
+  // money can be spent — a capital action applied before the first advance,
+  // which is exactly when a machine is worth buying. Defaulting to 1 dropped
+  // that spend from every whole-run `/metrics`, so the dashboard read a run
+  // better than it was while the run bar's summary told the truth (the
+  // playground playthrough disagreed by the $3,208 it opened by spending).
+  // Nothing else moves: no tick, finished part or scrapped part is ever at 0,
+  // and `/ticks` still drops a tick-0 action from the series rather than
+  // misdating it, because no row's bucket contains it.
+  return { from: fromTick ?? 0, to: toTick ?? tickNum };
 }
 
 export type RunSummary = RunRow & {

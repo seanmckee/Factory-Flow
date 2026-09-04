@@ -1440,6 +1440,35 @@ afterwards.
       out. The master-data list keeps **shift calendars** and gives up wage and
       per-centre rates; Phase 5's "buy a machine, add a shift" notes that two
       of its levers already exist and what forking actually adds.
+- [x] 6E.7 Fix: a whole-run window began at tick 1, so **tick-0 capital was
+      invisible to `/metrics`**. Found while proving 6G.1a a no-op, by
+      re-reading the 6H.1 playthrough: the summary said the run netted $42,444
+      and whole-run `/metrics` said $45,652, and the gap was exactly the $3,208
+      the run opened by spending. `tickWindow` defaulted `from` to 1 because
+      ticks are numbered from 1 — but a capital action is an **event at a
+      tick**, not an accrual across one, and tick 0 is a real moment at which
+      money is spent: it is the moment a machine is worth buying, before the
+      first advance, which is precisely what the capital dialog invites. So the
+      P&L pane read a run better than it was while the run bar beside it told
+      the truth, and the more sensibly a run was played the wider the two
+      diverged.
+      **The fix is `from: fromTick ?? 0`** — the default window is the whole
+      run, and a run begins at tick 0. Nothing else moves: no tick, finished
+      part or scrapped part is ever numbered 0, so every other query returns
+      the same rows, and `/ticks` still drops a tick-0 action from the series
+      rather than misdating it into the first visible point (its bucket index is
+      −1, which no row has) — 6E.4's decision, left standing, with the chart's
+      opening balance carrying that spend as it was designed to.
+      **Deliberately not changed:** an *explicit* `?fromTick=1` still excludes
+      tick 0, and the dashboard's post-jump window (`startTick + 1 …`) still
+      does too. That is coherent rather than a leftover — capital committed
+      before a jump is not that jump's spend — and the bug was only ever in
+      what "whole run" defaulted to.
+      Verified over HTTP against the playthrough: summary and whole-run
+      `/metrics` now agree to the cent on all five P&L lines; `[57600, 57600]`
+      still holds that tick's $792 of cutter spend and `[57601, 60000]` none of
+      it (the action's own tick sits before the rate it bought, 6E.4's
+      arithmetic intact); a backwards window still 400s.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 
