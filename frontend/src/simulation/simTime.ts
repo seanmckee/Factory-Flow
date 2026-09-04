@@ -66,3 +66,16 @@ export function formatTickShort(
   const minutes = Math.floor((rest % 3600) / 60);
   return `D${day} ${hours}:${String(minutes).padStart(2, "0")}`;
 }
+
+/**
+ * A duration in staffed seconds at reading resolution: seconds under two
+ * minutes, minutes under two staffed hours, hours above — cycle times at day
+ * scale read as "2.7h", not "163.6m". Null (nothing finished) reads as a dash;
+ * zero is a real duration and prints as one.
+ */
+export function formatDurationSeconds(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 120) return `${Math.round(seconds)}s`;
+  if (seconds < 7_200) return `${(seconds / 60).toFixed(1)}m`;
+  return `${(seconds / 3_600).toFixed(1)}h`;
+}
