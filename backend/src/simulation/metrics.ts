@@ -269,3 +269,64 @@ export function aggregateOnTimeDelivery(
   };
 }
 
+/**
+ * One sales order's finishes in the window. An overall fraction can't say
+ * which promise broke, so the dashboard also reads this per-order view.
+ */
+export type SalesOrderDelivery = {
+  salesOrderId: number;
+  /**
+   * From the order's latest-finished unit — units of one order can disagree
+   * only when the due day was edited mid-run, and the newest is what the order
+   * currently promises. Null when the order never promised.
+   */
+  dueAtTick: number | null;
+  lastCompletedAtTick: number;
+  /**
+   * Units credited to the order in the window — not `delivery.measuredCount`,
+   * which is zero for an order that never promised even as its units ship.
+   */
+  finishedCount: number;
+  delivery: OnTimeDeliveryAggregate;
+};
+
+/**
+ * Groups the window's finishes by the sales order they were credited to, and
+ * runs `aggregateOnTimeDelivery` over each group — the per-order rows and the
+ * overall aggregate agree by construction, the same rule that makes
+ * `calculateThroughput` the sum of its credits.
+ *
+ * Uncovered units (`salesOrderId` null) belong to no order and are excluded —
+ * which, via `run_finished_parts.sales_order_id`'s ON DELETE SET NULL, also
+ * drops a deleted order's units from this view while the overall aggregate
+ * (reading only `dueAtTick`) still counts them. `parts` must be in finish
+ * order, as storage returns them; windowing is the caller's job as everywhere.
+ */
+export function groupDeliveryBySalesOrder(
+  parts: (MeasurableFinishedPart & { salesOrderId: number | null })[],
+): SalesOrderDelivery[] {
+  const byOrder = new Map<
+    number,
+    (MeasurableFinishedPart & { salesOrderId: number | null })[]
+  >();
+  for (const part of parts) {
+    if (part.salesOrderId === null) continue;
+    const list = byOrder.get(part.salesOrderId);
+    if (list) list.push(part);
+    else byOrder.set(part.salesOrderId, [part]);
+  }
+
+  return [...byOrder.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([salesOrderId, orderParts]) => {
+      const last = orderParts[orderParts.length - 1];
+      if (!last) throw new Error("unreachable: groups are never empty");
+      return {
+        salesOrderId,
+        dueAtTick: last.dueAtTick,
+        lastCompletedAtTick: last.completedAtTick,
+        finishedCount: orderParts.length,
+        delivery: aggregateOnTimeDelivery(orderParts),
+      };
+    });
+}

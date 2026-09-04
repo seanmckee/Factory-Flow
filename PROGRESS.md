@@ -8,15 +8,18 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6B (due dates + on-time delivery) is in progress** —
-planned 2026-09-04, units 6B.1–6B.5 below. Track 6A landed the P&L: the score
+**You are here:** **Track 6B (due dates + on-time delivery) is complete** —
+planned and built 2026-09-04, units 6B.1–6B.5 below. Sales orders promise a
+calendar day, runs freeze each finished unit's due tick at credit time, and
+the dashboard reads on-time delivery overall and per order. Deliberately a
+metric, not money — netCents is unchanged. Track 6A landed the P&L: the score
 can go down, runs freeze cost rates and accrue expense per tick, and the day is
 the product-facing unit end to end (minute-per-second clock, +1h/+4h/+1 day
 streaming jumps with drain-stop, one Trends chart, windowed P&L dashboard,
 standing-cost column and Factory Settings page).
 
-**Next up:** finish 6B, then 6C–6E — see the Track 6 section for the sub-track
-split and the time model. Track 6A made the score able to go down, which is
+**Next up:** 6C (setup and scrap), then 6D–6E — see the Track 6 section for
+the sub-track split and the time model. Track 6A made the score able to go down, which is
 what makes an agent's objective non-degenerate; 6B adds the promise the agent
 can break without buying anything with it.
 
@@ -837,7 +840,7 @@ route for sales orders (creation-only stays the convention).
       on the sales-orders table; OTD stat card on the dashboard (— when
       nothing measured, late count + worst lateness in the detail; destructive
       styling stays reserved for money).
-- [ ] 6B.5 Per-sales-order delivery breakdown — an aggregate 78% can't say
+- [x] 6B.5 Per-sales-order delivery breakdown — an aggregate 78% can't say
       which promise broke. `groupDeliveryBySalesOrder` reuses
       `aggregateOnTimeDelivery` per order so the rows and the card agree by
       construction; `RunMetrics` gains `salesOrderDelivery`; the dashboard

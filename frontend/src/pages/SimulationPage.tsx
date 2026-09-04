@@ -30,6 +30,7 @@ import {
   type RunSummary,
   type TickSample,
 } from "../api/runs";
+import type { SalesOrder } from "../types/SalesOrder";
 import type { WorkOrder } from "../types/WorkOrder";
 import { useToast } from "../toast/ToastContext";
 import { Button } from "@/components/ui/button";
@@ -172,6 +173,9 @@ function SimulationPage() {
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
 
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
+  // the dashboard's Deliveries table joins order numbers and quantities onto
+  // /metrics ids, the way work-centre names come off /floor
+  const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [newRunName, setNewRunName] = useState("");
   const [newRunOpen, setNewRunOpen] = useState(false);
@@ -275,13 +279,15 @@ function SimulationPage() {
     let cancelled = false;
     async function load() {
       try {
-        const [runList, orders] = await Promise.all([
+        const [runList, orders, demand] = await Promise.all([
           listRuns(),
           getJson<WorkOrder[]>("/api/work-orders"),
+          getJson<SalesOrder[]>("/api/sales-orders"),
         ]);
         if (cancelled) return;
         setRuns(runList);
         setWorkOrders(orders);
+        setSalesOrders(demand);
         // the newest run is the one being worked on
         const latest = runList.at(-1);
         if (latest) setRunId(latest.id);
@@ -810,6 +816,7 @@ function SimulationPage() {
                 // `/metrics` carries work center ids and no names or capacities
                 // — the floor's frozen copy is where both come from
                 centers={floor?.workCenters ?? []}
+                salesOrders={salesOrders}
                 tickNum={run.tickNum}
                 dayTicks={run.dayTicks}
                 onWindow={(fromTick, toTick) =>

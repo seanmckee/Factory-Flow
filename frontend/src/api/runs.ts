@@ -140,6 +140,22 @@ export type RunMetrics = {
     meanLatenessSeconds: number | null;
     maxLatenessSeconds: number | null;
   };
+  /**
+   * The same finishes per covering sales order, sorted by order id. Names and
+   * quantities join client-side from the live sales orders, as work-centre
+   * names come off /floor — /metrics carries ids.
+   */
+  salesOrderDelivery: SalesOrderDelivery[];
+};
+
+export type SalesOrderDelivery = {
+  salesOrderId: number;
+  /** from the order's latest-finished unit; null = the order never promised */
+  dueAtTick: number | null;
+  lastCompletedAtTick: number;
+  /** units credited in the window — measuredCount is 0 for an undated order */
+  finishedCount: number;
+  delivery: RunMetrics["onTimeDelivery"];
 };
 
 export type ReleaseResult = {

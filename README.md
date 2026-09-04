@@ -96,9 +96,10 @@ per tick against the run's frozen rates, with `netCents` (throughput − operati
 expense − carrying) as the score on the run summary and over any window. A
 calendar day is `shifts × 28,800` one-second ticks (one 8-hour shift today);
 rates are entered per 24h day and amortized over the day's staffed ticks.
-Still open from the list below: wages/shifts (Track 6D), setup and scrap
-(6C), capital decisions (6E), and penalties (6B) — see PROGRESS.md for the
-sub-track plan.
+Track 6B added due dates and on-time delivery (a metric, deliberately not yet
+money). Still open from the list below: wages/shifts (Track 6D), setup and
+scrap (6C), capital decisions (6E), and the penalty half of 6B's bullet — see
+PROGRESS.md for the sub-track plan.
 
 The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
 
@@ -118,7 +119,7 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
   - Hire an operator: onboarding cost, then a recurring wage.
   - Add a shift, or authorise overtime for a period.
   - Sell or retire a machine.
-- **Penalties** — late-delivery penalties and lost sales, once orders carry due dates. Lateness stops being a metric and starts being a number on the P&L.
+- **Penalties** — ~~due dates~~ delivered as Track 6B: sales orders carry a due day, runs freeze each finished unit's due tick, and the dashboard reads on-time delivery overall and per order. Deliberately a metric and not money — no late penalty on the P&L yet; the frozen per-part due tick is any future penalty's basis. Lost sales still to come.
 
 **What this produces**
 
@@ -184,7 +185,7 @@ Independent of the phases above, the domain model needs:
 - Inventory management.
 - Multiple production lines.
 - Machine downtime and operator availability.
-- Due dates on orders (a prerequisite for both lateness prediction and late penalties).
+- ~~Due dates on orders~~ (landed with Track 6B — the remaining prerequisite work is the prediction itself).
 - Explicit queues. Queue *depth* is now measured per tick, per work centre, so the aggregate dynamics are no longer inferred — but queueing is still implicit in the engine (an unclaimed part simply doesn't advance), so there is nothing to reorder, prioritise, or measure a wait time from.
 - Shift calendars, wage rates, and per-work-centre cost rates as master data.
 

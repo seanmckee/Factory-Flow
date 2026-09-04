@@ -53,8 +53,9 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
   frozen throughput, operating expense, carrying cost, `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
-  same P&L windowed, plus `onTimeDelivery` — the summary deliberately carries
-  no OTD copy, since the whole-run `/metrics` already answers it),
+  same P&L windowed, plus `onTimeDelivery` and its per-order breakdown
+  `salesOrderDelivery` — the summary deliberately carries no OTD copy, since
+  the whole-run `/metrics` already answers it),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
   grid aligned to absolute ticks),
@@ -232,7 +233,8 @@ follows the same null rule twice: `onTimeFraction` is null when no finished
 unit carried a promise ("no promises" is not "100% kept"), and the lateness
 stats cover late units only, null when every measured unit was on time. It
 never throws — due-before-release is legal, an order can already be late at
-release.
+release. `groupDeliveryBySalesOrder` reuses it per covering order, so the
+per-order rows and the overall aggregate agree by construction.
 
 ## Frontend architecture
 
@@ -313,7 +315,10 @@ on — stat cards led by the window's **net profit** (signed, destructive below
 zero), then throughput, operating expense and carrying cost, ahead of finished
 count, cycle time, on-time delivery (— when no promised unit finished in the
 window; destructive styling stays reserved for money) and WIP, over a
-work-centre table ranked by **utilization descending**, the constraint on top; ranking is safe
+Deliveries table (per-order shipped/on-time/late — which promise broke; order
+numbers and quantities join client-side from the live sales orders, and Due
+reads `dueAtTick / dayTicks` back as a day) and a work-centre table ranked by
+**utilization descending**, the constraint on top; ranking is safe
 there because the pane redraws only when a window is asked for, unlike the
 floor, whose row order stays stable by name. The utilization bar shifts to the
 `saturated` token at 90%. It shows the whole run when a run is opened,
@@ -326,7 +331,8 @@ dashboard left over from an earlier window states what it covers rather than
 misleading — the ledger's own case is a centre reading 10% utilization over a
 run and 52% over the ticks it worked. Work-centre *names, frozen
 capacities and frozen standing rates* come off `/floor`, since `/metrics`
-carries ids and a run keeps no copy of the names. The table's Standing cost
+carries ids and a run keeps no copy of the names — the Deliveries table's
+client-side join to `GET /api/sales-orders` is the same pattern. The table's Standing cost
 column is derived client-side (`windowStandingCostCents`: rate × observed
 ticks ÷ `dayTicks`) — display-only, the summed tick columns are the ledger,
 and the gap between the column's sum and the opex card is facility overhead.

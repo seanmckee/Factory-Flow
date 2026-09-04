@@ -17,9 +17,11 @@ import {
 import {
   aggregateCycleTime,
   aggregateOnTimeDelivery,
+  groupDeliveryBySalesOrder,
   aggregateMetrics,
   type CycleTimeAggregate,
   type OnTimeDeliveryAggregate,
+  type SalesOrderDelivery,
   type MetricsAggregate,
 } from "../simulation/metrics.js";
 import type {
@@ -153,6 +155,8 @@ export type RunMetrics = {
    * whose ON DELETE SET NULL would silently unmeasure a deleted order's units.
    */
   onTimeDelivery: OnTimeDeliveryAggregate;
+  /** the same finishes per covering order; names join client-side, like /floor */
+  salesOrderDelivery: SalesOrderDelivery[];
 };
 
 /**
@@ -278,6 +282,13 @@ export async function getRunMetrics(
     ),
     onTimeDelivery: aggregateOnTimeDelivery(
       finished.map((part) => ({
+        completedAtTick: part.completedAtTick,
+        dueAtTick: part.dueAtTick,
+      })),
+    ),
+    salesOrderDelivery: groupDeliveryBySalesOrder(
+      finished.map((part) => ({
+        salesOrderId: part.salesOrderId,
         completedAtTick: part.completedAtTick,
         dueAtTick: part.dueAtTick,
       })),
