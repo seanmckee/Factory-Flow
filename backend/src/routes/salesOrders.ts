@@ -48,7 +48,7 @@ router.post("/", async (req, res) => {
     const body = parseOr400(createSalesOrderSchema, req.body, res);
     if (!body) return;
 
-    const { partId, quantity, unitPriceCents } = body;
+    const { partId, quantity, unitPriceCents, dueDay } = body;
 
     const [part] = await db.select().from(parts).where(eq(parts.id, partId));
     if (!part) {
@@ -70,7 +70,7 @@ router.post("/", async (req, res) => {
 
       const [inserted] = await tx
         .insert(salesOrders)
-        .values({ partId, quantity, unitPriceCents, orderNumber })
+        .values({ partId, quantity, unitPriceCents, orderNumber, dueDay: dueDay ?? null })
         .returning();
 
       return inserted;

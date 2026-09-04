@@ -9,9 +9,10 @@ const parts = [{ id: 1, materialCostCents: 1200 }];
 
 const workOrders = [{ id: 10, partId: 1 }];
 
+// SO-20 promises day 1; SO-21 made no promise, so its units are never measured
 const salesOrders = [
-  { id: 20, unitPriceCents: 5000 },
-  { id: 21, unitPriceCents: 5500 },
+  { id: 20, unitPriceCents: 5000, dueAtTick: 28800 },
+  { id: 21, unitPriceCents: 5500, dueAtTick: null },
 ];
 
 // SO-20 takes the first two units of the work order, SO-21 the next three
@@ -145,7 +146,7 @@ describe("calculateThroughput", () => {
         new Map(),
         workOrders,
         parts,
-        [{ id: 20, unitPriceCents: 5000 }],
+        [{ id: 20, unitPriceCents: 5000, dueAtTick: 28800 }],
         allocations,
       ),
     ).toBe(3800);
@@ -177,6 +178,7 @@ describe("creditFinishedParts", () => {
         salesOrderId: 20,
         unitPriceCents: 5000,
         materialCostCents: 1200,
+        dueAtTick: 28800,
       },
     ]);
   });
@@ -193,6 +195,7 @@ describe("creditFinishedParts", () => {
         salesOrderId: null,
         unitPriceCents: null,
         materialCostCents: 1200,
+        dueAtTick: null,
       },
     ]);
   });
@@ -210,6 +213,18 @@ describe("creditFinishedParts", () => {
     expect(credits.map((c) => c.salesOrderId)).toEqual([20, 21]);
     expect(credits.map((c) => c.unitPriceCents)).toEqual([5000, 5500]);
     expect(credits.map((c) => c.throughputCents)).toEqual([3800, 4300]);
+    // the due tick follows the covering order exactly as the price does
+    expect(credits.map((c) => c.dueAtTick)).toEqual([28800, null]);
+  });
+
+  it("nulls the due tick of a covered unit whose order made no promise", () => {
+    // unlike unitPriceCents, dueAtTick is NOT null exactly when salesOrderId
+    // is — a covered unit of an undated order keeps its price and stays
+    // unmeasured for on-time delivery
+    const [c] = credit([finished(10)], priorCounts(2));
+    expect(c?.salesOrderId).toBe(21);
+    expect(c?.unitPriceCents).toBe(5500);
+    expect(c?.dueAtTick).toBeNull();
   });
 
   it("returns one credit per finished part, in finish order", () => {

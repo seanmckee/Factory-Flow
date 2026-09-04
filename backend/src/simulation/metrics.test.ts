@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { aggregateCycleTime, aggregateMetrics } from "./metrics.js";
+import {
+  aggregateCycleTime,
+  aggregateMetrics,
+  aggregateOnTimeDelivery,
+  groupDeliveryBySalesOrder,
+} from "./metrics.js";
 import { simulateTick } from "./simulationTick.js";
 import type { TickMetrics } from "./simulationTick.js";
 import type { FinishedPart, Routing, WipPart, WorkCenter } from "./types.js";
@@ -314,5 +319,163 @@ describe("aggregateCycleTime", () => {
     expect(() => aggregateCycleTime([finished(30, 12)])).toThrow(
       /before it was released/,
     );
+  });
+});
+
+describe("aggregateOnTimeDelivery", () => {
+  const measured = (completedAtTick: number, dueAtTick: number | null) => ({
+    completedAtTick,
+    dueAtTick,
+  });
+
+  it("returns nulls, not zeroes, when nothing finished", () => {
+    expect(aggregateOnTimeDelivery([])).toEqual({
+      measuredCount: 0,
+      onTimeCount: 0,
+      lateCount: 0,
+      onTimeFraction: null,
+      meanLatenessSeconds: null,
+      maxLatenessSeconds: null,
+    });
+  });
+
+  it("measures nothing when no finished unit carried a promise", () => {
+    // "no promises" is not "100% kept" - a window of uncovered or undated
+    // units reads exactly like an empty one
+    const result = aggregateOnTimeDelivery([
+      measured(100, null),
+      measured(200, null),
+    ]);
+    expect(result.measuredCount).toBe(0);
+    expect(result.onTimeFraction).toBeNull();
+  });
+
+  it("counts a unit finishing exactly on the due tick as on time", () => {
+    const result = aggregateOnTimeDelivery([measured(28800, 28800)]);
+    expect(result.onTimeCount).toBe(1);
+    expect(result.lateCount).toBe(0);
+    expect(result.onTimeFraction).toBe(1);
+  });
+
+  it("counts one tick past the due tick as late, by one second", () => {
+    const result = aggregateOnTimeDelivery([measured(28801, 28800)]);
+    expect(result.lateCount).toBe(1);
+    expect(result.onTimeFraction).toBe(0);
+    expect(result.meanLatenessSeconds).toBe(1);
+    expect(result.maxLatenessSeconds).toBe(1);
+  });
+
+  it("partitions a mixed window and averages lateness over late units only", () => {
+    const result = aggregateOnTimeDelivery([
+      measured(100, 200), // on time
+      measured(300, 200), // 100 late
+      measured(500, 200), // 300 late
+      measured(999, null), // unmeasured
+    ]);
+    expect(result.measuredCount).toBe(3);
+    expect(result.onTimeCount).toBe(1);
+    expect(result.lateCount).toBe(2);
+    expect(result.onTimeFraction).toBeCloseTo(1 / 3);
+    expect(result.meanLatenessSeconds).toBe(200);
+    expect(result.maxLatenessSeconds).toBe(300);
+  });
+
+  it("reports all-on-time as fraction 1 with null lateness, not zero", () => {
+    // null keeps "every promise kept" distinguishable from "nothing promised"
+    // on the lateness side too
+    const result = aggregateOnTimeDelivery([
+      measured(100, 200),
+      measured(150, 200),
+    ]);
+    expect(result.onTimeFraction).toBe(1);
+    expect(result.meanLatenessSeconds).toBeNull();
+    expect(result.maxLatenessSeconds).toBeNull();
+  });
+
+  it("does not throw for a unit due before it could have started", () => {
+    // legal, unlike a negative cycle time: an order can already be late when
+    // its work order is released
+    const result = aggregateOnTimeDelivery([measured(50, 10)]);
+    expect(result.lateCount).toBe(1);
+    expect(result.maxLatenessSeconds).toBe(40);
+  });
+});
+
+describe("groupDeliveryBySalesOrder", () => {
+  const sold = (
+    salesOrderId: number | null,
+    completedAtTick: number,
+    dueAtTick: number | null,
+  ) => ({ salesOrderId, completedAtTick, dueAtTick });
+
+  it("returns nothing for an empty window", () => {
+    expect(groupDeliveryBySalesOrder([])).toEqual([]);
+  });
+
+  it("excludes uncovered units, which belong to no order", () => {
+    expect(groupDeliveryBySalesOrder([sold(null, 100, null)])).toEqual([]);
+  });
+
+  it("partitions finishes by order, sorted by order id", () => {
+    const rows = groupDeliveryBySalesOrder([
+      sold(21, 100, 200), // on time
+      sold(20, 150, 100), // 50 late
+      sold(21, 300, 200), // 100 late
+    ]);
+
+    expect(rows.map((r) => r.salesOrderId)).toEqual([20, 21]);
+    expect(rows[0]?.delivery).toMatchObject({
+      measuredCount: 1,
+      lateCount: 1,
+      maxLatenessSeconds: 50,
+    });
+    expect(rows[1]?.delivery).toMatchObject({
+      measuredCount: 2,
+      onTimeCount: 1,
+      lateCount: 1,
+      onTimeFraction: 0.5,
+    });
+  });
+
+  it("sums per-order counts to the overall aggregate's", () => {
+    // the rows and the card must agree by construction, like the tick total
+    // and its per-part credits
+    const parts = [
+      sold(20, 100, 50),
+      sold(21, 200, 300),
+      sold(null, 250, null),
+      sold(20, 400, 50),
+      sold(22, 500, null), // covered, but the order never promised
+    ];
+    const overall = aggregateOnTimeDelivery(parts);
+    const rows = groupDeliveryBySalesOrder(parts);
+
+    const sum = (pick: (r: (typeof rows)[number]) => number) =>
+      rows.reduce((total, row) => total + pick(row), 0);
+    expect(sum((r) => r.delivery.measuredCount)).toBe(overall.measuredCount);
+    expect(sum((r) => r.delivery.onTimeCount)).toBe(overall.onTimeCount);
+    expect(sum((r) => r.delivery.lateCount)).toBe(overall.lateCount);
+  });
+
+  it("reports the due tick and finish of the latest unit, in finish order", () => {
+    // units of one order can disagree about the due tick only via a mid-run
+    // edit; the newest is what the order currently promises
+    const rows = groupDeliveryBySalesOrder([
+      sold(20, 100, 200),
+      sold(20, 300, 250),
+    ]);
+    expect(rows[0]?.dueAtTick).toBe(250);
+    expect(rows[0]?.lastCompletedAtTick).toBe(300);
+  });
+
+  it("counts every shipped unit, promised or not", () => {
+    // an undated order measures nothing but still ships - finishedCount is the
+    // group size, not measuredCount
+    const rows = groupDeliveryBySalesOrder([
+      sold(22, 100, null),
+      sold(22, 200, null),
+    ]);
+    expect(rows[0]?.finishedCount).toBe(2);
+    expect(rows[0]?.delivery.measuredCount).toBe(0);
   });
 });

@@ -64,6 +64,7 @@ export default function SalesOrdersPage() {
   const [partId, setPartId] = useState("");
   const [quantity, setQuantity] = useState("");
   const [unitPrice, setUnitPrice] = useState("");
+  const [dueDay, setDueDay] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
@@ -75,6 +76,8 @@ export default function SalesOrdersPage() {
   const priceCents = dollarsToCents(unitPrice);
   const parsedQuantity = Number(quantity);
   const hasQuantity = Number.isInteger(parsedQuantity) && parsedQuantity > 0;
+  const parsedDueDay = Number(dueDay);
+  const hasDueDay = Number.isInteger(parsedDueDay) && parsedDueDay > 0;
 
   const perUnitCents =
     selectedPart && priceCents !== null
@@ -94,6 +97,9 @@ export default function SalesOrdersPage() {
     if (priceCents === null || priceCents < 1) {
       return showToast("Unit price must be greater than zero", "error");
     }
+    if (dueDay !== "" && !hasDueDay) {
+      return showToast("Due day must be a whole day, 1 or later", "error");
+    }
 
     setSubmitting(true);
     try {
@@ -101,6 +107,7 @@ export default function SalesOrdersPage() {
         partId: Number(partId),
         quantity: parsedQuantity,
         unitPriceCents: priceCents,
+        dueDay: hasDueDay ? parsedDueDay : null,
       });
 
       await refetchSalesOrders();
@@ -108,6 +115,7 @@ export default function SalesOrdersPage() {
       setPartId("");
       setQuantity("");
       setUnitPrice("");
+      setDueDay("");
       setCreateOpen(false);
     } catch (submitError) {
       showToast(
@@ -231,6 +239,20 @@ export default function SalesOrdersPage() {
                 />
               </Field>
 
+              <Field label="Due day (optional)">
+                <Input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={dueDay}
+                  onChange={(event) => setDueDay(event.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Day N of a run — on time means finished by the end of that
+                  staffed day.
+                </p>
+              </Field>
+
               {/* Shown as soon as a part is picked - the most useful moment is
                   "part chosen, price blank", when you need to know what to beat. */}
               {selectedPart && (
@@ -300,6 +322,7 @@ export default function SalesOrdersPage() {
               <TableHead className="text-right">Ordered</TableHead>
               <TableHead className="text-right">Allocated</TableHead>
               <TableHead className="text-right">Remaining</TableHead>
+              <TableHead className="text-right">Due</TableHead>
               <TableHead className="text-right">Unit price</TableHead>
               <TableHead className="text-right">Throughput/unit</TableHead>
               <TableHead />
@@ -336,6 +359,15 @@ export default function SalesOrdersPage() {
                     }`}
                   >
                     {remaining}
+                  </TableCell>
+                  <TableCell
+                    className={`text-right tabular-nums ${
+                      salesOrder.dueDay === null ? "text-muted-foreground/60" : ""
+                    }`}
+                  >
+                    {salesOrder.dueDay === null
+                      ? "—"
+                      : `Day ${salesOrder.dueDay}`}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatCents(salesOrder.unitPriceCents)}

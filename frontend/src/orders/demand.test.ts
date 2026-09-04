@@ -14,6 +14,7 @@ const salesOrder = (
   quantity,
   unitPriceCents: 5000,
   orderNumber: `SO-${2000 + id}`,
+  dueDay: null,
   allocations: allocated
     ? [{ id, salesOrderId: id, workOrderId: 99, quantity: allocated }]
     : [],

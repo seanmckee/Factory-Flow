@@ -16,8 +16,12 @@ import {
 } from "../simulation/floorView.js";
 import {
   aggregateCycleTime,
+  aggregateOnTimeDelivery,
+  groupDeliveryBySalesOrder,
   aggregateMetrics,
   type CycleTimeAggregate,
+  type OnTimeDeliveryAggregate,
+  type SalesOrderDelivery,
   type MetricsAggregate,
 } from "../simulation/metrics.js";
 import type {
@@ -145,6 +149,14 @@ export type RunMetrics = {
   netCents: number;
   flow: MetricsAggregate;
   cycleTime: CycleTimeAggregate;
+  /**
+   * The window's finishes against their promises, over the same rows cycle
+   * time windows. Reads only the frozen `due_at_tick` — never `sales_order_id`,
+   * whose ON DELETE SET NULL would silently unmeasure a deleted order's units.
+   */
+  onTimeDelivery: OnTimeDeliveryAggregate;
+  /** the same finishes per covering order; names join client-side, like /floor */
+  salesOrderDelivery: SalesOrderDelivery[];
 };
 
 /**
@@ -266,6 +278,19 @@ export async function getRunMetrics(
         workOrderId: part.workOrderId,
         releasedAtTick: part.releasedAtTick,
         completedAtTick: part.completedAtTick,
+      })),
+    ),
+    onTimeDelivery: aggregateOnTimeDelivery(
+      finished.map((part) => ({
+        completedAtTick: part.completedAtTick,
+        dueAtTick: part.dueAtTick,
+      })),
+    ),
+    salesOrderDelivery: groupDeliveryBySalesOrder(
+      finished.map((part) => ({
+        salesOrderId: part.salesOrderId,
+        completedAtTick: part.completedAtTick,
+        dueAtTick: part.dueAtTick,
       })),
     ),
   };

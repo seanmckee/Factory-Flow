@@ -11,8 +11,14 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { FloorWorkCenter, RunMetrics } from "../api/runs";
+import type { SalesOrder } from "../types/SalesOrder";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
-import { formatDays, formatDurationSeconds, ticksToDays } from "../simulation/simTime";
+import {
+  formatDays,
+  formatDurationSeconds,
+  formatTickTime,
+  ticksToDays,
+} from "../simulation/simTime";
 import { windowStandingCostCents } from "../simulation/standingCost";
 
 /**
@@ -95,6 +101,7 @@ function UtilizationBar({ utilization }: { utilization: number }) {
 function RunDashboard({
   metrics,
   centers,
+  salesOrders,
   tickNum,
   dayTicks,
   onWindow,
@@ -102,6 +109,8 @@ function RunDashboard({
   metrics: RunMetrics;
   /** Names, frozen capacities and frozen standing rates — `/metrics` carries ids. */
   centers: FloorWorkCenter[];
+  /** Live orders for names and quantities — `salesOrderDelivery` carries ids. */
+  salesOrders: SalesOrder[];
   /** The run's current tick, which is what "last N" is relative to. */
   tickNum: number;
   /** The run's frozen day length — what its per-day rates accrue over. */
@@ -121,7 +130,10 @@ function RunDashboard({
     netCents,
     flow,
     cycleTime,
+    onTimeDelivery,
+    salesOrderDelivery,
   } = metrics;
+  const salesOrderById = new Map(salesOrders.map((order) => [order.id, order]));
 
   const centerById = new Map(centers.map((center) => [center.workCenterId, center]));
   // utilization descending: the constraint on top is the point of the table.
@@ -231,11 +243,84 @@ function RunDashboard({
           )}–${formatDurationSeconds(cycleTime.maxSeconds)}`}
         />
         <StatCard
+          label="On-time delivery"
+          value={
+            onTimeDelivery.onTimeFraction === null
+              ? "—"
+              : `${Math.round(onTimeDelivery.onTimeFraction * 100)}%`
+          }
+          detail={
+            onTimeDelivery.measuredCount === 0
+              ? "no promised units finished in the window"
+              : `${onTimeDelivery.onTimeCount}/${onTimeDelivery.measuredCount} promised on time` +
+                (onTimeDelivery.lateCount > 0
+                  ? ` · worst ${formatDurationSeconds(onTimeDelivery.maxLatenessSeconds)} late`
+                  : "")
+          }
+        />
+        <StatCard
           label="WIP mean / peak"
           value={`${flow.meanWip.toFixed(1)} / ${flow.maxWip.toLocaleString()}`}
           detail={`${flow.finalWip.toLocaleString()} on the floor at window end`}
         />
       </div>
+
+      {/* Which promise broke: the same finishes as the card above, per order.
+          Names and quantities are the live order book's; a deleted order's
+          units leave this table (SET NULL) but stay in the card. */}
+      {salesOrderDelivery.length > 0 && (
+        <div className="max-h-64 shrink-0 overflow-auto rounded-lg border bg-card">
+          <Table>
+            <TableHeader className="sticky top-0 bg-card">
+              <TableRow>
+                <TableHead>Deliveries</TableHead>
+                <TableHead className="text-right">Due</TableHead>
+                <TableHead className="text-right">Shipped</TableHead>
+                <TableHead className="text-right">On time</TableHead>
+                <TableHead className="text-right">Late</TableHead>
+                <TableHead className="text-right">Last finish</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {salesOrderDelivery.map((row) => {
+                const order = salesOrderById.get(row.salesOrderId);
+                const unmeasured = row.delivery.measuredCount === 0;
+                return (
+                  <TableRow key={row.salesOrderId}>
+                    <TableCell className="font-medium">
+                      {order?.orderNumber ?? `SO #${row.salesOrderId}`}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.dueAtTick === null
+                        ? "—"
+                        : `Day ${Math.round(row.dueAtTick / dayTicks)}`}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {order
+                        ? `${row.finishedCount} / ${order.quantity}`
+                        : row.finishedCount}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {unmeasured ? "—" : row.delivery.onTimeCount}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "text-right tabular-nums",
+                        row.delivery.lateCount > 0 && "font-medium text-destructive",
+                      )}
+                    >
+                      {unmeasured ? "—" : row.delivery.lateCount}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {formatTickTime(row.lastCompletedAtTick, dayTicks)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       {/* The constraint finder. Utilization near 1 over a real window is the
           bottleneck's signature — the instantaneous figure the floor tab

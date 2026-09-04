@@ -26,6 +26,9 @@ export const createSalesOrderSchema = z.object({
   partId: positiveInt("partId"),
   quantity: positiveInt("quantity"),
   unitPriceCents: positiveInt("unitPriceCents"),
+  // calendar day the order is promised by; >= 1, since day 0 ends at tick 0,
+  // before anything can finish. Absent or null = no promise.
+  dueDay: positiveInt("dueDay").nullish(),
 });
 
 export const createWorkOrderSchema = z.object({

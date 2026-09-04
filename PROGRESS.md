@@ -8,22 +8,20 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6A (operating expense / P&L core) is complete and
-hardened by a hands-on pass** (units 6A.10a–e came out of driving it). The
-score can go down: runs freeze cost rates and accrue expense per tick, the
-summary and every window report net profit, and the day is the product-facing
-unit end to end — the clock plays a simulated minute per real second and reads
-"Day 1 · 5:19:00", fast-forward jumps +1h/+4h/+1 day, streams in per committed
-hour and stops itself when the floor drains, a day advances in ~8s, Trends is
-one chart (throughput, net, trailing-hour rate, WIP — hideable lines, Day·time
-axis), the dashboard leads with the windowed P&L and reads durations in
-hours, and setup gained a standing-cost column and a Factory Settings page.
-Next: 6B (due dates + lateness) — see the Track 6 section.
+**You are here:** **Track 6B (due dates + on-time delivery) is complete** —
+planned and built 2026-09-04, units 6B.1–6B.5 below. Sales orders promise a
+calendar day, runs freeze each finished unit's due tick at credit time, and
+the dashboard reads on-time delivery overall and per order. Deliberately a
+metric, not money — netCents is unchanged. Track 6A landed the P&L: the score
+can go down, runs freeze cost rates and accrue expense per tick, and the day is
+the product-facing unit end to end (minute-per-second clock, +1h/+4h/+1 day
+streaming jumps with drain-stop, one Trends chart, windowed P&L dashboard,
+standing-cost column and Factory Settings page).
 
-**Next up:** Track 6B (due dates in calendar days + late penalties), then
-6C–6E — see the Track 6 section for the sub-track split and the time model.
-Track 6A made the score able to go down, which is what makes an agent's
-objective non-degenerate.
+**Next up:** 6C (setup and scrap), then 6D–6E — see the Track 6 section for
+the sub-track split and the time model. Track 6A made the score able to go down, which is
+what makes an agent's objective non-degenerate; 6B adds the promise the agent
+can break without buying anything with it.
 
 **One refactor unit first — done** (decided and landed 2026-09-03): the read
 side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,
@@ -792,11 +790,62 @@ frozen copy.
       (display-only; deliberately not served — 6E invalidates the
       derivation); window label gains ≈ days. Doc sweep.
 
-### Track 6B — Due dates and lateness (`feat/due-dates`) — re-plan when reached
+### Track 6B — Due dates and on-time delivery (`feat/due-dates`)
 
-Sales orders gain a due date in **calendar days** (`due day N` = tick
-`N × day_ticks`); a unit finishing late books a penalty as frozen per-part
-money on `run_finished_parts`, like every other credit. Lost sales deferred.
+Planned 2026-09-04. Sales orders gain a due date in **calendar days**: `due day
+N` means "by the end of staffed day N", so on time ⇔
+`completedAtTick <= dueDay × day_ticks` — the due tick itself is on time.
+Days rather than ticks, converted against the run's own frozen `day_ticks` at
+the load boundary (`loadRunState`), so a two-shift run (6D) reads the same
+promise as more staffed seconds; the promise is relative to the run's own
+clock, there being no calendar epoch. **Decided: no money penalty** — the
+original stub booked lateness as frozen per-part money, but the user cut that:
+lateness feeds an **OTD metric** only and `netCents` is unchanged. A penalty
+can be layered later precisely because the due tick is frozen per part —
+`run_finished_parts.due_at_tick`, frozen at credit time exactly as
+`unit_price_cents` is, is any future penalty's basis. Note the null semantics
+diverge from price: `due_at_tick` is null for an uncovered unit *or* a covered
+unit whose order had no due date, so it is **not** "null exactly when
+`sales_order_id` is" — and `sales_order_id`'s ON DELETE SET NULL nulls the
+reference while the due tick stays frozen, which is why the metric reads only
+`due_at_tick` (a deleted order's units drop out of the per-order table but
+stay in the overall aggregate). Sales orders stay read-live-per-advance, so a
+due-day edit lands between advances and touches only units not yet finished —
+the same caveat as price, kept deliberately. Lost sales deferred; no PATCH
+route for sales orders (creation-only stays the convention).
+
+- [x] 6B.1 Schema + migration + seed + this ledger rewrite. Nullable
+      `sales_orders.due_day`; nullable frozen `run_finished_parts.due_at_tick`
+      (no default, no backfill — pre-6B rows read "not measured", the right
+      retroactive semantics). Seed: SO-2001 due day 1 (makeable only if
+      brackets release immediately and run first), SO-2002 day 2 (comfortable
+      brackets-first, late flanges-first — the due date agrees with the price
+      signal), SO-2003 day 3 (on time iff the drill press never starves, in
+      tension with carrying cost rewarding a late WO-1002 release).
+- [x] 6B.2 Engine + tests. Structural `SalesOrder` gains `dueAtTick:
+      number | null` (required-nullable — optional would leak `| undefined`
+      through every credit under `exactOptionalPropertyTypes`); the credit and
+      `FinishedPartRecord` carry it through; `aggregateOnTimeDelivery` in
+      `metrics.ts` (empty/unmeasured → nulls like cycle time — "no promises"
+      is not "100%"; lateness stats over late units only, null when none; no
+      throws — due-before-release is legal, an order can already be late at
+      release). Windowing stays the caller's job, on `completedAtTick`.
+- [x] 6B.3 API. `dueDay` nullish in the create schema and POST; `loadRunState`
+      converts day → tick (the one place); `runService` writes the frozen
+      column (`chunkFor(10)`); `RunMetrics` gains `onTimeDelivery` over the
+      same windowed finished rows as cycle time. `RunSummary` deliberately
+      unchanged — whole-run `/metrics` already answers it, and a summary copy
+      would be a second code path for the same number.
+- [x] 6B.4 UI + doc sweep. Due-day field in the create dialog and a Due column
+      on the sales-orders table; OTD stat card on the dashboard (— when
+      nothing measured, late count + worst lateness in the detail; destructive
+      styling stays reserved for money).
+- [x] 6B.5 Per-sales-order delivery breakdown — an aggregate 78% can't say
+      which promise broke. `groupDeliveryBySalesOrder` reuses
+      `aggregateOnTimeDelivery` per order so the rows and the card agree by
+      construction; `RunMetrics` gains `salesOrderDelivery`; the dashboard
+      gains a Deliveries table (order number and quantity joined client-side
+      from live sales orders, like work-centre names off `/floor`).
 
 ### Track 6C — Setup and scrap (`feat/setup-scrap`) — re-plan when reached
 

@@ -97,6 +97,16 @@ export type Part = {
 export type SalesOrder = {
   id: number;
   unitPriceCents: number;
+  /**
+   * The promise in the run's own ticks — `due_day × the run's day_ticks`,
+   * converted at the load boundary (`loadRunState`), so the engine never sees
+   * calendar days. Null = no due date; units credited to such an order are
+   * never measured for on-time delivery. Required-nullable rather than
+   * optional: an optional field would leak `| undefined` into every credit
+   * under `exactOptionalPropertyTypes`, and `undefined` has no business in a
+   * frozen row shape.
+   */
+  dueAtTick: number | null;
 };
 
 /**

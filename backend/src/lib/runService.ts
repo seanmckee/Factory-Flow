@@ -346,7 +346,7 @@ export async function advanceRun(
           );
         }
 
-        for (const slice of chunked(batch.finishedParts, chunkFor(9))) {
+        for (const slice of chunked(batch.finishedParts, chunkFor(10))) {
           await tx.insert(runFinishedParts).values(
             slice.map((part) => ({
               runId,
@@ -358,6 +358,7 @@ export async function advanceRun(
               salesOrderId: part.salesOrderId,
               unitPriceCents: part.unitPriceCents,
               materialCostCents: part.materialCostCents,
+              dueAtTick: part.dueAtTick,
             })),
           );
         }

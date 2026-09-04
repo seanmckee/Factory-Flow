@@ -112,6 +112,15 @@ export const salesOrders = pgTable("sales_orders", {
   quantity: integer("quantity").notNull(),
   unitPriceCents: integer("unit_price_cents").notNull(),
   orderNumber: varchar("order_number", { length: 255 }).notNull().unique(),
+  /**
+   * Calendar day the order is promised by: on time ⇔
+   * `completedAtTick <= dueDay × day_ticks`, against the run's own frozen
+   * `day_ticks` and its own clock (every run starts at tick 0). Days rather
+   * than ticks deliberately — a two-shift run (6D) reads the same promise as
+   * more staffed seconds, because a due date is a calendar fact, not a
+   * staffing fact. Null = no promise; such units are never measured.
+   */
+  dueDay: integer("due_day"),
 });
 
 export const allocations = pgTable(
@@ -250,6 +259,14 @@ export const runFinishedParts = pgTable(
     /** null exactly when `sales_order_id` is */
     unitPriceCents: integer("unit_price_cents"),
     materialCostCents: integer("material_cost_cents").notNull(),
+    /**
+     * The covering sales order's `due_day × the run's day_ticks`, frozen at
+     * credit time like `unit_price_cents`. NOT null exactly when
+     * `sales_order_id` is: also null when the covering order simply had no due
+     * date — and `sales_order_id`'s ON DELETE SET NULL nulls the reference
+     * while this stays frozen, so the OTD metric reads only this column.
+     */
+    dueAtTick: integer("due_at_tick"),
   },
   (table) => [
     unique().on(table.runId, table.partUuid),
