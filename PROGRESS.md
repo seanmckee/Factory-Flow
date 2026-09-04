@@ -25,12 +25,24 @@ shift changes. Both make a run's calendar day non-uniform, which is the one
 place `day_ticks` is a single frozen integer, and overtime without a wage
 premium strictly dominates every other labour lever. See the 6F section.
 
-**Next up:** a hands-on pass over 6E's UI, then **Track 7 (forking)**, whose
-comparison is what all of Track 6 exists to make meaningful — and which 6E
-just gave its sharpest question: fork at a checkpoint, buy the second drill
-press in one branch only, and read the payback off the two net curves.
-Track 6F (overtime, shift calendar) is scoped below and can wait behind it:
+**Next up: 6G then 6H, and both before Track 7** — added 2026-09-04 after
+driving 6E, and they are prerequisites rather than polish. **6G (simulator
+throughput):** an *empty* floor costs 8.2 s per 20,000 ticks because 140,000
+observation rows go to the database whatever happens, so per-minute buckets
+are finally worth the schema change; the O(WIP) tick loop is a second,
+independent curve that bites past ~500 parts. **6H (demand depth):** buying
+capacity always loses today, and the measured reason is the book, not the
+prices — 172 units is 1.4 drill-days at two presses, after which an idle
+factory burns 189,400c a day, so there is no horizon for a machine to pay back
+over. 6G comes first because 6H makes every run ten times longer.
+
+Then **Track 7 (forking)**, whose comparison is what all of Track 6 exists to
+make meaningful — and which 6E just gave its sharpest question: fork at a
+checkpoint, buy the second drill press in one branch only, and read the payback
+off the two net curves. That question needs 6H to have an answer at all.
+Track 6F (overtime, shift calendar) is scoped below and waits behind all of it:
 forking is load-bearing for the agent, overtime is one more lever.
+A hands-on pass over 6E's UI is owed before any of them.
 
 **Why Track 6 was worth it, in one line each.** Track 6A made the score able
 to go down,
@@ -1447,6 +1459,134 @@ owes the accrual rework, because rent is a per-day rate amortized across the
 day's staffed ticks and stretching a day already in progress charges that day
 more than one day's rent. Scheduling ahead is the cheap version and stays the
 fallback if the rework proves out of proportion.
+
+### Track 6G — Simulator throughput (`perf/observation-buckets`)
+
+Planned 2026-09-04, from driving 6E: fast-forwarding is slow, and slow enough
+that a horizon long enough to pay back a machine (6H) is not playable. Both
+halves were **measured before planning**, because 6A.10b's lesson was that the
+obvious culprit was the wrong one.
+
+**Measured** (dev database, seeded factory of six centres, 20,000 ticks per
+advance):
+
+| floor | pure simulation | wall clock | rows written |
+| --- | --- | --- | --- |
+| empty | 43 ms | **8.2 s** | 140,000 |
+| 172 WIP | 295 ms | **9.4 s** | 140,000 |
+| 500 WIP | 901 ms | — | 140,000 |
+| 2,000 WIP | 4,177 ms | — | 140,000 |
+
+**The diagnosis, and it is not what it looked like.** An *empty* floor costs
+8.2 s per 20,000 ticks, so the cost is **per tick, not per part**: 140,000
+observation rows go to Neon whatever is happening, and at today's book the
+database is ~97% of the wall clock. WIP is a second, independent curve — the
+pure tick loop is O(WIP) and reads 465k ticks/s empty, 68k at 172, 22k at 500
+and 4.8k at 2,000 — so it only becomes comparable past ~500 parts, which is
+exactly where 6H's deeper book would put it. Reads are fine and stay fine:
+`/floor` 124 ms, summary 92 ms, whole-run `/metrics` 460 ms over 20,000 ticks,
+`/ticks?bucket=60` 133 ms.
+
+- [ ] 6G.1 Per-minute observation buckets — the lever 6A.10b named and
+      deferred. `run_ticks` and `run_tick_work_centers` become one row per
+      **simulated minute**: 60× fewer rows, so a day of writes goes from
+      ~200k rows to ~3.5k and ~12 s to well under a second.
+      **Every aggregate stays exact**, which is what makes this safe rather
+      than a resolution compromise: a bucket stores *sums* (throughput,
+      expense, carrying, wages; per centre, busy machine-ticks, capacity-ticks
+      and queued part-ticks), a *max* (worst queue depth) and one *level* (WIP
+      at bucket end) — and every figure `aggregateMetrics` reports is built
+      from precisely those, so utilization, mean and worst queue and mean WIP
+      come out identical. What actually coarsens is **window resolution**: a
+      window whose bounds fall mid-minute covers the containing minutes, and
+      the label already comes from the response, which is the rule that makes
+      that honest. Also gone is the per-*second* series, which
+      `chartBucket` already stops asking for past 5,000 ticks.
+      Open when this is built: whether `run_ticks` keeps its name (the row is
+      no longer a tick), and whether the bucket width is a constant or frozen
+      per run like `day_ticks` — a fork comparing two runs must bucket both
+      the same way.
+- [ ] 6G.2 Clone on write in the tick loop. Every tick copies **every** WIP
+      part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
+      20,000 ticks is 40 million object clones — and a part that sits queued
+      changes nothing, so its clone is pure waste. Pass unchanged parts through
+      by reference and clone only what a tick actually advances; the
+      no-mutation contract holds either way, since nothing mutates a `WipPart`
+      in place.
+      **A characterization test comes first**, written against the current
+      implementation and pinned: a heavy-WIP batch's finished ticks, scrap and
+      money, so the optimization is provably byte-identical rather than
+      probably. The one-batch-vs-several test is the other half.
+- [ ] 6G.3 Refresh cadence during a jump. The jump loop calls `refresh` after
+      every committed hour — `GET /:id` plus `GET /:id/floor`, ~216 ms
+      together — which is ~1.7 s of a simulated day and ~17 s of a ten-day
+      jump spent on reads nobody is looking at mid-flight. The advance result
+      already carries the tick number, WIP count, all five money lines and the
+      scrap count, so the transport bar can be driven from it and the floor
+      refreshed on a slower cadence (and always at the end). Cheap, and it cuts
+      server load on exactly the operation that is already heaviest.
+
+### Track 6H — Demand deep enough to pay back a decision (`feat/demand-depth`)
+
+Planned 2026-09-04, from driving 6E: **buying capacity always loses**, and the
+reason is the order book, not the prices.
+
+**The arithmetic, since "the pricing might be off" deserves a number rather
+than a nudge.** A fed one-press factory earns 60 brackets × 4,800c = 288,000c
+of margin a day against 189,400c of cost (135,000c rent and overhead, 54,400c
+wages) — **+98,600c/day**. A second press plus its operator costs 44,400c/day
+more and doubles the constraint, so a fed two-press factory earns
+576,000c − 233,800c = **+342,200c/day**, and the 148,800c it costs to buy and
+staff pays back in **0.6 of a fed day**. The prices are not the problem.
+
+**The problem is that "fed" runs out.** The seeded book is 172 units ≈ 2.9
+drill-days at one press and 1.4 at two, and a factory with an empty floor
+still burns 189,400c a day — so every tick past the drain is loss, and a run
+long enough to *look* like a payback horizon spends most of it bleeding. Two
+presses reach the drain sooner and then bleed faster. That is a real result,
+and it is also unplayable as the only result.
+
+**Three things this is not.** Not a pricing bug (above). Not a reason to
+cheapen capital: a machine priced to pay back inside a 3-day book makes the
+decision trivial, and 6E rejected the same move in amortised form. And not
+entirely a bug at all — *retiring machines and firing operators to stop the
+bleed is now a legal and correct answer*, which 6E made possible without
+anyone planning it as demand management.
+
+**One trap found while driving it, worth fixing separately:** adding a *new
+work centre* charges rent and wages from the next run's creation while no
+routing visits it, so it can never produce — and `operators` defaults to 1, so
+it draws a wage immediately. Buying capacity anywhere but the constraint has
+the same shape. The model is right; the UI gives no signal at all.
+
+- [ ] 6H.1 A book that spans a horizon — seed only, no engine change, so it
+      lands before the harder half. Roughly ten staffed days of demand with
+      due days spread across it, keeping 6B's and 6C's tuned stories intact as
+      the first days of it (SO-2001 day 1 tight, SO-2003 day 3 contingent on
+      the drill never starving) and adding depth behind them. Verifies what
+      6E.1 could only assert on paper: a second drill press bought early pays
+      back and keeps earning, bought late does not, and releasing the whole
+      book at once buries the floor in carrying cost. **Depends on 6G**: this
+      makes runs ten times longer and WIP an order of magnitude heavier, which
+      is precisely the region where both measured costs bite.
+- [ ] 6H.2 Buy at the constraint, not at random — the affordances that make
+      the decision legible. The capital dialog gains each centre's
+      **utilization over the run so far** (it already fetches `/metrics` for
+      the dashboard), so the constraint is visible where the money is spent;
+      a centre no routing step visits is marked as such in setup and in the
+      dialog, since capacity there can never produce; and a new work centre
+      defaults to **zero operators**, so adding one to the factory does not
+      silently start a wage.
+- [ ] 6H.3 Rolling demand — re-plan when reached, and the actual fix. Orders
+      that *arrive* over time from a seeded arrival process rather than a book
+      fixed at seed time, so a run has an indefinite horizon, capacity has
+      time to earn, and "release less" trades against "miss the next order".
+      It is also what a Track 8 agent should face: a stream of decisions, not
+      one shot at a static book. New randomness, so it needs a draw domain of
+      its own (the 6C pattern) and must stay reproducible from `rng_seed`
+      alone. Deliberately behind Track 7: forking is load-bearing for the
+      agent, and a deep static book is enough to make a fork comparison mean
+      something.
 
 ## Track 7 onward — re-plan when reached
 
