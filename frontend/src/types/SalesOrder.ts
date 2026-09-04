@@ -11,5 +11,7 @@ export type Allocation = {
     quantity: number;
     unitPriceCents: number;
     orderNumber: string;
+    /** calendar day the order is promised by; null = no promise */
+    dueDay: number | null;
     allocations: Allocation[];
   };

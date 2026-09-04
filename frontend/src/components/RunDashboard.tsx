@@ -12,7 +12,11 @@ import {
 import { cn } from "@/lib/utils";
 import type { FloorWorkCenter, RunMetrics } from "../api/runs";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
-import { formatDays, formatDurationSeconds, ticksToDays } from "../simulation/simTime";
+import {
+  formatDays,
+  formatDurationSeconds,
+  ticksToDays,
+} from "../simulation/simTime";
 import { windowStandingCostCents } from "../simulation/standingCost";
 
 /**
@@ -121,6 +125,7 @@ function RunDashboard({
     netCents,
     flow,
     cycleTime,
+    onTimeDelivery,
   } = metrics;
 
   const centerById = new Map(centers.map((center) => [center.workCenterId, center]));
@@ -229,6 +234,22 @@ function RunDashboard({
           detail={`mean ${formatDurationSeconds(cycleTime.meanSeconds)} · range ${formatDurationSeconds(
             cycleTime.minSeconds,
           )}–${formatDurationSeconds(cycleTime.maxSeconds)}`}
+        />
+        <StatCard
+          label="On-time delivery"
+          value={
+            onTimeDelivery.onTimeFraction === null
+              ? "—"
+              : `${Math.round(onTimeDelivery.onTimeFraction * 100)}%`
+          }
+          detail={
+            onTimeDelivery.measuredCount === 0
+              ? "no promised units finished in the window"
+              : `${onTimeDelivery.onTimeCount}/${onTimeDelivery.measuredCount} promised on time` +
+                (onTimeDelivery.lateCount > 0
+                  ? ` · worst ${formatDurationSeconds(onTimeDelivery.maxLatenessSeconds)} late`
+                  : "")
+          }
         />
         <StatCard
           label="WIP mean / peak"

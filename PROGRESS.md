@@ -833,7 +833,7 @@ route for sales orders (creation-only stays the convention).
       same windowed finished rows as cycle time. `RunSummary` deliberately
       unchanged — whole-run `/metrics` already answers it, and a summary copy
       would be a second code path for the same number.
-- [ ] 6B.4 UI + doc sweep. Due-day field in the create dialog and a Due column
+- [x] 6B.4 UI + doc sweep. Due-day field in the create dialog and a Due column
       on the sales-orders table; OTD stat card on the dashboard (— when
       nothing measured, late count + worst lateness in the detail; destructive
       styling stays reserved for money).

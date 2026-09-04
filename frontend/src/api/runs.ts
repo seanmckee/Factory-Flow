@@ -126,6 +126,20 @@ export type RunMetrics = {
     medianSeconds: number | null;
     p95Seconds: number | null;
   };
+  /**
+   * The window's finishes against their promises. Only units credited to an
+   * order with a due date are measured, so `onTimeFraction` is null when no
+   * promise was measured — "no promises" is not "100% kept" — and the lateness
+   * stats cover late units only, null when every measured unit was on time.
+   */
+  onTimeDelivery: {
+    measuredCount: number;
+    onTimeCount: number;
+    lateCount: number;
+    onTimeFraction: number | null;
+    meanLatenessSeconds: number | null;
+    maxLatenessSeconds: number | null;
+  };
 };
 
 export type ReleaseResult = {

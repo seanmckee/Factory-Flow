@@ -311,8 +311,9 @@ clearing the lock lets two writers rewrite the same WIP rows.
 `RunDashboard` (the Dashboard tab, Track 5, P&L'd in 6A) is what a jump lands
 on — stat cards led by the window's **net profit** (signed, destructive below
 zero), then throughput, operating expense and carrying cost, ahead of finished
-count, cycle time and WIP, over a work-centre table ranked by **utilization
-descending**, the constraint on top; ranking is safe
+count, cycle time, on-time delivery (— when no promised unit finished in the
+window; destructive styling stays reserved for money) and WIP, over a
+work-centre table ranked by **utilization descending**, the constraint on top; ranking is safe
 there because the pane redraws only when a window is asked for, unlike the
 floor, whose row order stays stable by name. The utilization bar shifts to the
 `saturated` token at 90%. It shows the whole run when a run is opened,
