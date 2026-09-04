@@ -96,6 +96,8 @@ export type RunBatch = {
   wipParts: WipPart[];
   /** append-only */
   finishedParts: FinishedPartRecord[];
+  /** append-only, like the finished — a ruined unit is history, not WIP */
+  scrappedParts: ScrappedPartRecord[];
   ticks: TickRecord[];
   /**
    * `priorCounts` advanced by what finished, so a long advance can run as
@@ -119,6 +121,22 @@ export type SetupStartRecord = {
   workOrderId: number;
   stepIndex: number;
   atTick: number;
+};
+
+/**
+ * A ruined unit as it is stored: the tick's `ScrappedPart` plus the material
+ * it consumed, frozen at scrap time exactly as a finished unit's money is —
+ * deleting the part or its order later must not rewrite what a run wasted.
+ */
+export type ScrappedPartRecord = {
+  partId: string;
+  workOrderId: number;
+  unitIndex: number;
+  releasedAtTick: number;
+  scrappedAtTick: number;
+  stepIndex: number;
+  workCenterId: number;
+  materialCostCents: number;
 };
 
 /**
@@ -146,6 +164,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
   const setupDone = new Set(state.setupDone);
   const setupsStarted: SetupStartRecord[] = [];
   const finishedParts: FinishedPartRecord[] = [];
+  const scrappedParts: ScrappedPartRecord[] = [];
   const tickRecords: TickRecord[] = [];
   let wipParts = state.wipParts;
   let carryRemainder = state.carryRemainder;
@@ -166,6 +185,25 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     for (const started of result.setupsStarted) {
       setupDone.add(setupKey(started.workOrderId, started.stepIndex));
       setupsStarted.push({ ...started, atTick: tickNum });
+    }
+
+    for (const scrapped of result.scrappedParts) {
+      const materialCostCents = costByWorkOrder.get(scrapped.workOrderId);
+      if (materialCostCents === undefined) {
+        throw new Error(
+          `Scrapped part ${scrapped.id} belongs to work order ${scrapped.workOrderId}, which was not loaded`,
+        );
+      }
+      scrappedParts.push({
+        partId: scrapped.id,
+        workOrderId: scrapped.workOrderId,
+        unitIndex: scrapped.unitIndex,
+        releasedAtTick: scrapped.releasedAtTick,
+        scrappedAtTick: scrapped.scrappedAtTick,
+        stepIndex: scrapped.stepIndex,
+        workCenterId: scrapped.workCenterId,
+        materialCostCents,
+      });
     }
 
     const credits = creditFinishedParts(
@@ -235,6 +273,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     tickNum: state.tickNum + ticks,
     wipParts,
     finishedParts,
+    scrappedParts,
     ticks: tickRecords,
     priorCounts,
     carryRemainder,

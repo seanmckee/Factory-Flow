@@ -44,6 +44,7 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
           workCenterId: runWorkOrderSteps.workCenterId,
           processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
           setupTimeSeconds: runWorkOrderSteps.setupTimeSeconds,
+          scrapBps: runWorkOrderSteps.scrapBps,
           setupStartedAtTick: runWorkOrderSteps.setupStartedAtTick,
         })
         .from(runWorkOrderSteps)
@@ -135,6 +136,7 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
       workCenterId: step.workCenterId,
       processTimeSeconds: step.processTimeSeconds,
       setupTimeSeconds: step.setupTimeSeconds,
+      scrapBps: step.scrapBps,
     };
     if (routing) routing.steps.push(stored);
     else routingByWorkOrder.set(step.workOrderId, { steps: [stored] });

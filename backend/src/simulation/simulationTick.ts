@@ -1,4 +1,8 @@
-import { PROCESS_TIME_DEVIATION, sampleProcessTime } from "./sampleProcessTime.js";
+import {
+  PROCESS_TIME_DEVIATION,
+  sampleProcessTime,
+  unitDraw,
+} from "./sampleProcessTime.js";
 import type {
   FinishedPart,
   Routing,
@@ -72,11 +76,32 @@ export function setupKey(workOrderId: number, stepIndex: number): string {
   return `${workOrderId}:${stepIndex}`;
 }
 
+/**
+ * A unit ruined by its scrap draw on completing a step. It held its machine
+ * for the whole of the step — `busy` counted it — and leaves the floor this
+ * tick; it never reaches the credit path, so the next good unit of its work
+ * order takes the sales order it would have had. `stepIndex` and
+ * `workCenterId` say where the loss happened, frozen here because the pinned
+ * steps are the run's own and observations must outlive nothing — but a
+ * reader of the stored row shouldn't need the join.
+ */
+export type ScrappedPart = {
+  id: string;
+  workOrderId: number;
+  unitIndex: number;
+  releasedAtTick: number;
+  scrappedAtTick: number;
+  stepIndex: number;
+  workCenterId: number;
+};
+
 export type SimulationTickResult = {
   /** the parts still on the floor, as of the end of the tick */
   wipParts: WipPart[];
   /** only those that completed during *this* tick, not the run's history */
   finishedParts: FinishedPart[];
+  /** units ruined this tick; gone from `wipParts`, never in `finishedParts` */
+  scrappedParts: ScrappedPart[];
   /** changeovers that began this tick; empty on most ticks */
   setupsStarted: SetupStart[];
   /** what the floor was doing while it happened */
@@ -142,6 +167,7 @@ export function simulateTick(
   setupDone: ReadonlySet<string> = new Set(),
 ): SimulationTickResult {
   const finishedParts: FinishedPart[] = [];
+  const scrappedParts: ScrappedPart[] = [];
   const setupsStarted: SetupStart[] = [];
   const claims: Claim[] = [];
 
@@ -191,11 +217,42 @@ export function simulateTick(
   }
 
   const finishedIds = new Set<string>();
-  for (const { part, routing } of claims) {
+  const scrappedIds = new Set<string>();
+  for (const { part, routing, step } of claims) {
     if (!inService.has(part.id)) continue;
 
     part.progressSeconds += 1;
     if (part.progressSeconds < part.actualProcessTimeSeconds) continue;
+
+    // The quality gate sits at step completion, before anything moves: the
+    // machine time is already spent — `busy` counted it — and a failed draw
+    // ruins the unit whether or not this was its last step. Drawn in the
+    // scrap domain, so a unit's fate is independent of its process time.
+    if (
+      step.scrapBps > 0 &&
+      unitDraw(
+        {
+          seed: rngSeed,
+          workOrderId: part.workOrderId,
+          unitIndex: part.unitIndex,
+          stepIndex: part.stepIndex,
+        },
+        "scrap",
+      ) <
+        step.scrapBps / 10_000
+    ) {
+      scrappedParts.push({
+        id: part.id,
+        workOrderId: part.workOrderId,
+        unitIndex: part.unitIndex,
+        releasedAtTick: part.releasedAtTick,
+        scrappedAtTick: tickNum,
+        stepIndex: part.stepIndex,
+        workCenterId: step.workCenterId,
+      });
+      scrappedIds.add(part.id);
+      continue;
+    }
 
     part.progressSeconds = 0;
     const nextIndex = part.stepIndex + 1;
@@ -220,11 +277,12 @@ export function simulateTick(
 
   const remaining = claims
     .map((c) => c.part)
-    .filter((part) => !finishedIds.has(part.id));
+    .filter((part) => !finishedIds.has(part.id) && !scrappedIds.has(part.id));
 
   return {
     wipParts: remaining,
     finishedParts,
+    scrappedParts,
     setupsStarted,
     metrics: collectMetrics(
       claims,

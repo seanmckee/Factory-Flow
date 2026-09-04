@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { unitDraw } from "./sampleProcessTime.js";
 import { setupKey, simulateTick } from "./simulationTick.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
 
@@ -6,8 +7,8 @@ const SEED = 42;
 
 const testRouting: Routing = {
   steps: [
-    { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
-    { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
+    { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+    { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
   ],
 };
 
@@ -141,8 +142,8 @@ describe("simulateTick", () => {
         1,
         {
           steps: [
-            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
-            { workCenterId: 20, processTimeSeconds: 1000, setupTimeSeconds: 0 },
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+            { workCenterId: 20, processTimeSeconds: 1000, setupTimeSeconds: 0, scrapBps: 0 },
           ],
         },
       ],
@@ -170,7 +171,7 @@ describe("simulateTick", () => {
 
   describe("when a routing has been shortened under an in-flight part", () => {
     const shortened = new Map<number, Routing>([
-      [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] }],
+      [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 }] }],
     ]);
 
     it("finishes the stranded part at the current tick", () => {
@@ -216,11 +217,11 @@ describe("simulateTick", () => {
     const pinned = new Map<number, Routing>([
       [
         1,
-        { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] },
+        { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 }] },
       ],
       [
         2,
-        { steps: [{ workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 }] },
+        { steps: [{ workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 }] },
       ],
     ]);
     const before = makeWipPart("part-before", { workOrderId: 1 });
@@ -269,8 +270,8 @@ describe("simulateTick", () => {
         1,
         {
           steps: [
-            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 },
-            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3, scrapBps: 0 },
+            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
           ],
         },
       ],
@@ -335,8 +336,8 @@ describe("simulateTick", () => {
 
     it("charges each work order its own changeover at a shared center", () => {
       const pinned = new Map<number, Routing>([
-        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 }] }],
-        [2, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 }] }],
+        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3, scrapBps: 0 }] }],
+        [2, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3, scrapBps: 0 }] }],
       ]);
       const result = simulateTick(
         [makeWipPart("part-1"), makeWipPart("part-2", { workOrderId: 2 })],
@@ -377,8 +378,8 @@ describe("simulateTick", () => {
           1,
           {
             steps: [
-              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
-              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 3 },
+              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 3, scrapBps: 0 },
             ],
           },
         ],
@@ -405,6 +406,135 @@ describe("simulateTick", () => {
       );
       expect(second.setupsStarted).toEqual([{ workOrderId: 1, stepIndex: 1 }]);
       expect(second.wipParts[0]?.actualProcessTimeSeconds).toBe(drawn + 3);
+    });
+  });
+
+  describe("scrap", () => {
+    // step 0 ruins everything it completes; step 1 is clean
+    const scrapAll = new Map<number, Routing>([
+      [
+        1,
+        {
+          steps: [
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 10000 },
+            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+          ],
+        },
+      ],
+    ]);
+
+    it("a unit failing its draw leaves as scrap, never as a finished part", () => {
+      const result = simulateTick(
+        [makeWipPart("part-1", { progressSeconds: 4 })],
+        scrapAll,
+        9,
+        testWorkCenters,
+        SEED,
+      );
+
+      expect(result.finishedParts).toEqual([]);
+      expect(result.wipParts).toEqual([]);
+      expect(result.scrappedParts).toEqual([
+        {
+          id: "part-1",
+          workOrderId: 1,
+          unitIndex: 0,
+          releasedAtTick: 0,
+          scrappedAtTick: 9,
+          stepIndex: 0,
+          workCenterId: 10,
+        },
+      ]);
+    });
+
+    it("scraps at the last step rather than finishing", () => {
+      const lastStepScraps = new Map<number, Routing>([
+        [
+          1,
+          {
+            steps: [
+              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 10000 },
+            ],
+          },
+        ],
+      ]);
+      const result = simulateTick(
+        [makeWipPart("part-1", { stepIndex: 1, progressSeconds: 4 })],
+        lastStepScraps,
+        1,
+        testWorkCenters,
+        SEED,
+      );
+
+      expect(result.finishedParts).toEqual([]);
+      expect(result.scrappedParts).toHaveLength(1);
+      expect(result.scrappedParts[0]?.stepIndex).toBe(1);
+      expect(result.scrappedParts[0]?.workCenterId).toBe(20);
+    });
+
+    it("counts the machine the unit died on as busy, and the unit as no WIP", () => {
+      const result = simulateTick(
+        [makeWipPart("part-1", { progressSeconds: 4 })],
+        scrapAll,
+        1,
+        testWorkCenters,
+        SEED,
+      );
+
+      // the whole tick was worked — the exact undercount a snapshot makes
+      const wc10 = result.metrics.workCenters.find((wc) => wc.workCenterId === 10);
+      expect(wc10?.busy).toBe(1);
+      expect(result.metrics.wipCount).toBe(0);
+    });
+
+    it("a unit mid-step is not drawn against until it completes", () => {
+      const result = simulateTick(
+        [makeWipPart("part-1", { progressSeconds: 1 })],
+        scrapAll,
+        1,
+        testWorkCenters,
+        SEED,
+      );
+
+      expect(result.scrappedParts).toEqual([]);
+      expect(result.wipParts).toHaveLength(1);
+    });
+
+    it("ruins exactly the units whose draws fall under the step's rate", () => {
+      // rig the rate between the two units' own scrap draws, so which unit
+      // dies is forced by the seeded RNG rather than by 0%/100% edge cases
+      const d0 = unitDraw({ seed: SEED, workOrderId: 1, unitIndex: 0, stepIndex: 0 }, "scrap");
+      const d1 = unitDraw({ seed: SEED, workOrderId: 1, unitIndex: 1, stepIndex: 0 }, "scrap");
+      const bps = Math.floor(Math.min(d0, d1) * 10000) + 1;
+      expect(Math.max(d0, d1)).toBeGreaterThanOrEqual(bps / 10000);
+
+      const rigged = new Map<number, Routing>([
+        [
+          1,
+          {
+            steps: [
+              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: bps },
+              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+            ],
+          },
+        ],
+      ]);
+      const result = simulateTick(
+        [
+          makeWipPart("part-1", { unitIndex: 0, progressSeconds: 4 }),
+          makeWipPart("part-2", { unitIndex: 1, progressSeconds: 4 }),
+        ],
+        rigged,
+        1,
+        makeWorkCenters(2),
+        SEED,
+      );
+
+      expect(result.scrappedParts).toHaveLength(1);
+      expect(result.scrappedParts[0]?.unitIndex).toBe(d0 < d1 ? 0 : 1);
+      expect(result.wipParts).toHaveLength(1);
+      expect(result.wipParts[0]?.stepIndex).toBe(1);
     });
   });
 
@@ -461,7 +591,7 @@ describe("simulateTick", () => {
 
     it("counts a part stranded by a shortened routing as neither", () => {
       const shortened = new Map<number, Routing>([
-        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] }],
+        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 }] }],
       ]);
       const result = simulateTick(
         [makeWipPart("stranded", { stepIndex: 1, progressSeconds: 3 })],

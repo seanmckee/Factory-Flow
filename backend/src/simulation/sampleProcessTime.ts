@@ -63,15 +63,26 @@ function avalanche(hash: number): number {
   return h >>> 0;
 }
 
+/**
+ * A second stream of randomness over the same key, for draws that must be
+ * independent of the process time — without it, a unit's scrap fate would be
+ * the *same uniform* as its process time, and "slow units always scrap" is
+ * aliasing, not noise. Keyed RNG has no stream to shift, so adding a domain's
+ * draws never disturbs another's; the process domain is the unmarked legacy
+ * key, byte for byte, so a pre-6C run still re-creates exactly.
+ */
+export type DrawDomain = "process" | "scrap";
+
 /** Uniform in [0, 1), the drop-in replacement for `Math.random()`. */
-export function unitDraw({
-  seed,
-  workOrderId,
-  unitIndex,
-  stepIndex,
-}: DrawKey): number {
+export function unitDraw(
+  { seed, workOrderId, unitIndex, stepIndex }: DrawKey,
+  domain: DrawDomain = "process",
+): number {
+  // the mark sits where it cannot collide: the process key's second field is
+  // always numeric, so no process key is any scrap key
+  const mark = domain === "process" ? "" : `${domain}:`;
   return (
-    avalanche(fnv1a(`${seed}:${workOrderId}:${unitIndex}:${stepIndex}`)) /
+    avalanche(fnv1a(`${seed}:${mark}${workOrderId}:${unitIndex}:${stepIndex}`)) /
     2 ** 32
   );
 }

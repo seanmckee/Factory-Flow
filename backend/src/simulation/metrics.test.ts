@@ -3,6 +3,7 @@ import {
   aggregateCycleTime,
   aggregateMetrics,
   aggregateOnTimeDelivery,
+  aggregateScrap,
   groupDeliveryBySalesOrder,
 } from "./metrics.js";
 import { simulateTick } from "./simulationTick.js";
@@ -202,8 +203,8 @@ describe("aggregateMetrics", () => {
         1,
         {
           steps: [
-            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
-            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
           ],
         },
       ],
@@ -477,5 +478,26 @@ describe("groupDeliveryBySalesOrder", () => {
     ]);
     expect(rows[0]?.finishedCount).toBe(2);
     expect(rows[0]?.delivery.measuredCount).toBe(0);
+  });
+});
+
+describe("aggregateScrap", () => {
+  it("answers a clean window with zeroes, not nulls", () => {
+    // unlike "no parts finished", zero scrap over observed ticks is a real
+    // observation: the factory ran clean
+    expect(aggregateScrap([])).toEqual({
+      scrappedCount: 0,
+      scrappedMaterialCents: 0,
+    });
+  });
+
+  it("counts the window's ruined units and sums their frozen material", () => {
+    expect(
+      aggregateScrap([
+        { materialCostCents: 1200 },
+        { materialCostCents: 800 },
+        { materialCostCents: 1200 },
+      ]),
+    ).toEqual({ scrappedCount: 3, scrappedMaterialCents: 3200 });
   });
 });

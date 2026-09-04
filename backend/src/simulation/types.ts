@@ -73,6 +73,13 @@ export type RoutingStep = {
    * changeover, and is never recorded as one.
    */
   setupTimeSeconds: number;
+  /**
+   * Probability a unit is ruined on completing this step, in basis points
+   * (100 = 1%). Drawn in the RNG's scrap domain, so a unit's fate is
+   * independent of its process time; the machine time is spent either way,
+   * which is what makes scrap at the constraint the expensive kind.
+   */
+  scrapBps: number;
 };
 
 /**

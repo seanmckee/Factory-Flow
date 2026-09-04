@@ -102,3 +102,24 @@ describe("sampleProcessTime", () => {
     expect(unit(10, 3)).not.toEqual(unit(11, 3));
   });
 });
+
+describe("draw domains", () => {
+  const pinned: DrawKey = { seed: 42, workOrderId: 7, unitIndex: 3, stepIndex: 2 };
+
+  it("keeps the process draw byte-identical to the pre-domain key", () => {
+    // pinned before domains existed: re-creating a pre-6C run from its seed
+    // must still reproduce it exactly, so the process key never changes shape
+    expect(unitDraw(pinned)).toBe(0.08393415343016386);
+    expect(unitDraw(pinned, "process")).toBe(0.08393415343016386);
+  });
+
+  it("draws the scrap domain independently of the process domain", () => {
+    // without the separator a unit's scrap fate would be the same uniform as
+    // its process time — "slow units always scrap" is aliasing, not noise
+    expect(unitDraw(pinned, "scrap")).not.toBe(unitDraw(pinned));
+  });
+
+  it("is deterministic within the scrap domain", () => {
+    expect(unitDraw(pinned, "scrap")).toBe(unitDraw(pinned, "scrap"));
+  });
+});

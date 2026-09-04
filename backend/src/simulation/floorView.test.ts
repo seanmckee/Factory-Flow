@@ -4,8 +4,8 @@ import type { Routing, WipPart, WorkCenter } from "./types.js";
 
 const twoStep: Routing = {
   steps: [
-    { workCenterId: 10, processTimeSeconds: 10, setupTimeSeconds: 0 },
-    { workCenterId: 20, processTimeSeconds: 10, setupTimeSeconds: 0 },
+    { workCenterId: 10, processTimeSeconds: 10, setupTimeSeconds: 0, scrapBps: 0 },
+    { workCenterId: 20, processTimeSeconds: 10, setupTimeSeconds: 0, scrapBps: 0 },
   ],
 };
 

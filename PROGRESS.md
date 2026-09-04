@@ -972,16 +972,24 @@ the material cents are frozen per scrapped unit — the same argument that made
       `setup_started_at_tick` write-back are 6C.4, which is safe to stage
       because until release pins them every stored setup time is 0 and the
       engine provably no-ops.
-- [ ] 6C.3 Engine: scrap + tests. `unitDraw` gains the domain (process keys
-      byte-for-byte unchanged — assert that in a test); `RoutingStep.scrapBps`
-      required; the completion path draws, and a failed unit exits as a
+- [x] 6C.3 Engine: scrap + tests. `unitDraw` gains a `DrawDomain` — the
+      process domain is the unmarked legacy key, asserted byte-identical
+      against a value pinned before domains existed, so a pre-6C run still
+      re-creates exactly; scrap draws under a `scrap:` mark that cannot
+      collide, the process key's second field being always numeric.
+      `RoutingStep.scrapBps` required; the quality gate sits at step
+      completion, after the progress check and before anything moves, so the
+      machine time is spent and `busy` counted it; a failed unit exits as a
       `ScrappedPartRecord` (material frozen off the `costByWorkOrder` map the
       batch already builds) instead of reaching `creditFinishedParts` — the
-      allocation cursor never sees it, and a test pins the next good unit
-      taking the scrapped unit's sales order. `aggregateScrap` in `metrics.ts`
+      allocation cursor never sees it, and a test rigs the rate between two
+      units' own draws to pin the next good unit taking the scrapped unit's
+      sales order. `aggregateScrap` in `metrics.ts`
       (count + material cents; windowed by the caller on `scrappedAtTick`;
       empty window → zeroes, since zero scrap is a real observation, unlike
-      cycle time's nulls). Scrap at the last step scraps, never credits.
+      cycle time's nulls). Scrap at the last step scraps, never credits; a
+      50%-per-step route chunked four ways scraps identical units to one
+      batch of 40.
 - [ ] 6C.4 API. `scrapBps` through the step schemas, POST/PUT and GETs;
       release pins both new columns; `loadRunState` loads them + the
       setup-done set (floor's step reads gain the columns too — the engine
