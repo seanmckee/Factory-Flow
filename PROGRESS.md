@@ -9,10 +9,10 @@ that completes it.
 ---
 
 **You are here:** **Track 6E (capital actions) is done** — planned and built
-2026-09-04, units 6E.1–6E.9 below, and **closed by 6E.8's hands-on browser
-pass**, which found the dashboard sitting stale after a capital action, two
-legibility defects, one unordered query and a released-order list that
-crowded the floor, and fixed all of them. It is the
+2026-09-04, units 6E.1–6E.10 below, and **closed by 6E.8's hands-on browser
+pass**, which found the dashboard sitting stale after a capital action, three
+legibility defects, one unordered query and a dropdown that opened off the
+top of the window, and fixed all of them. It is the
 first thing in the project that
 changes a run's **own frozen config** while the run is alive: buy or retire a
 machine, hire or fire an operator, each a lump capital spend frozen on an
@@ -62,7 +62,8 @@ forking is load-bearing for the agent, overtime is one more lever.
 problems it found — the capital dialog too narrow to show a name beside its
 buttons, its rows jumping after an action, and the Trends rate series flat on
 the cumulative-money axis — are fixed, along with the floor's released-order
-wall (6E.9).
+wall (6E.9), and the run picker that
+opened off the top of the window (6E.10).
 
 **Why Track 6 was worth it, in one line each.** Track 6A made the score able
 to go down,
@@ -1552,6 +1553,20 @@ afterwards.
       away rather than permanently on screen. Units are summed **only** when
       every released order resolves against the loaded work orders — a partial
       sum stated as a total would be a quietly wrong number.
+- [x] 6E.10 The run picker opened off the top of the window. Radix's
+      `item-aligned` positioning — shadcn's default in our `select.tsx`, and
+      the default this repo had never overridden — centres the **selected**
+      item over the trigger, so a picker whose selected run is last in the list
+      opens upward and puts the earlier runs above the viewport, unreachable
+      without scrolling inside a menu that gives no sign it has more above it.
+      Hit twice while driving 6E.8. The default is `position="popper"` now,
+      which anchors to the trigger and flips or shrinks to stay on screen.
+      **Changed in `select.tsx` rather than at the call site** because all
+      eight `<SelectContent>` in the app take the default and every one of them
+      has a list that can outgrow its space — the work-order picker holds a
+      release's worth of orders, the setup pickers every part and routing. The
+      file already carried the `position === "popper"` styling branches, so
+      this turns on a path that was written and never used.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 

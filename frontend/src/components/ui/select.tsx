@@ -53,7 +53,15 @@ function SelectTrigger({
 function SelectContent({
   className,
   children,
-  position = "item-aligned",
+  // "popper" rather than Radix's "item-aligned" default. Item-aligned centres
+  // the *selected* item over the trigger, so a run picker whose selected run
+  // is last in the list opens upward and puts the earlier runs off the top of
+  // the window — unreachable without scrolling inside a menu that gives no
+  // sign it has more above. Popper anchors to the trigger and flips or shrinks
+  // to stay on screen, which is what every list here wants: the work-order
+  // picker holds a release's worth of orders, and the setup pickers hold every
+  // part and routing.
+  position = "popper",
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
