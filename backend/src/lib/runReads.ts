@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lte, sum } from "drizzle-orm";
+import { and, count, desc, eq, gte, lte, sql, sum } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   runFinishedParts,
@@ -333,10 +333,15 @@ export type TickSeriesRow = {
 };
 
 /**
- * The raw per-tick series, for charting. Capped rather than paged: a chart
- * reads a window, and `MAX_TICK_SERIES_ROWS` of them is already more points
- * than a screen has pixels. Returns the most recent rows in the window when it
- * overflows, since a chart following a live run wants the end of the series.
+ * The per-tick series, for charting, optionally **bucketed**: `bucket = 60`
+ * groups the window into simulated minutes — money summed (so the cumulative
+ * and opening-balance identities hold exactly), WIP read at bucket end (a
+ * level, not a flow). Buckets align to the absolute tick grid
+ * (`floor((tick−1)/bucket)`), so two windows over one run agree bucket for
+ * bucket. Capped rather than paged: a chart reads a window, and
+ * `MAX_TICK_SERIES_ROWS` points is already more than a screen has pixels.
+ * Returns the most recent rows in the window when it overflows, since a chart
+ * following a live run wants the end of the series.
  */
 export const MAX_TICK_SERIES_ROWS = 5000;
 
@@ -344,6 +349,7 @@ export async function getRunTicks(
   runId: number,
   fromTick?: number,
   toTick?: number,
+  bucket = 1,
 ): Promise<TickSeriesRow[]> {
   const [run] = await db
     .select({ id: simulationRuns.id, tickNum: simulationRuns.tickNum })
@@ -352,26 +358,55 @@ export async function getRunTicks(
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
   const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
+  const inWindow = and(
+    eq(runTicks.runId, runId),
+    gte(runTicks.tickNum, from),
+    lte(runTicks.tickNum, to),
+  );
 
+  if (bucket <= 1) {
+    const rows = await db
+      .select({
+        tickNum: runTicks.tickNum,
+        throughputCents: runTicks.throughputCents,
+        wipCount: runTicks.wipCount,
+        operatingExpenseCents: runTicks.operatingExpenseCents,
+        carryingCostCents: runTicks.carryingCostCents,
+      })
+      .from(runTicks)
+      .where(inWindow)
+      .orderBy(desc(runTicks.tickNum))
+      .limit(MAX_TICK_SERIES_ROWS);
+
+    // read newest-first to cap at the end of the window, handed back in order
+    return rows.reverse();
+  }
+
+  // integer division on int columns — Postgres truncates, which is the floor
+  // for the non-negative tick numbers involved. The bucket is inlined rather
+  // than bound: GROUP BY and ORDER BY must be the *same expression*, and two
+  // occurrences of a bind parameter are two expressions to Postgres. Safe —
+  // zod has already proven it a positive integer, and the floor re-proves it.
+  const bucketGroup = sql`(${runTicks.tickNum} - 1) / ${sql.raw(String(Math.floor(bucket)))}`;
   const rows = await db
     .select({
-      tickNum: runTicks.tickNum,
-      throughputCents: runTicks.throughputCents,
-      wipCount: runTicks.wipCount,
-      operatingExpenseCents: runTicks.operatingExpenseCents,
-      carryingCostCents: runTicks.carryingCostCents,
+      tickNum: sql<number>`max(${runTicks.tickNum})`,
+      throughputCents: sql<number>`sum(${runTicks.throughputCents})::int`,
+      wipCount: sql<number>`(array_agg(${runTicks.wipCount} order by ${runTicks.tickNum} desc))[1]`,
+      operatingExpenseCents: sql<number>`sum(${runTicks.operatingExpenseCents})::int`,
+      carryingCostCents: sql<number>`sum(${runTicks.carryingCostCents})::int`,
     })
     .from(runTicks)
-    .where(
-      and(
-        eq(runTicks.runId, runId),
-        gte(runTicks.tickNum, from),
-        lte(runTicks.tickNum, to),
-      ),
-    )
-    .orderBy(desc(runTicks.tickNum))
+    .where(inWindow)
+    .groupBy(bucketGroup)
+    .orderBy(sql`${bucketGroup} desc`)
     .limit(MAX_TICK_SERIES_ROWS);
 
-  // read newest-first to cap at the end of the window, handed back in order
-  return rows.reverse();
+  return rows.reverse().map((row) => ({
+    tickNum: Number(row.tickNum),
+    throughputCents: Number(row.throughputCents),
+    wipCount: Number(row.wipCount),
+    operatingExpenseCents: Number(row.operatingExpenseCents),
+    carryingCostCents: Number(row.carryingCostCents),
+  }));
 }
