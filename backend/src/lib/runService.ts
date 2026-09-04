@@ -32,22 +32,29 @@ import { loadRunState, type RunRow } from "./runState.js";
  */
 
 /**
- * How many ticks are simulated per transaction. The point of advancing in
- * memory is that a fast-forward isn't a round trip per simulated second, but a
- * single unbounded transaction would hold a Neon connection for as long as the
- * whole run and lose everything on a failure — so a long advance is several
- * batches and a crash costs at most one of them.
+ * How many ticks are simulated per transaction — one staffed hour. The point
+ * of advancing in memory is that a fast-forward isn't a round trip per
+ * simulated second, but a single unbounded transaction would hold a Neon
+ * connection for as long as the whole run and lose everything on a failure —
+ * so a long advance is several batches and a crash costs at most one of them.
+ * Raised from 500 when the seed moved to day scale: the pure simulation runs
+ * ~116k ticks/s, so the wall time of a day is almost entirely write round
+ * trips, and per-batch fixed cost (BEGIN, the WIP replace, COMMIT) was most
+ * of them.
  */
-const TICKS_PER_BATCH = 500;
+const TICKS_PER_BATCH = 3600;
 
 /**
- * Rows per insert statement. Postgres caps a statement's bind parameters near
- * 65535, and 500 ticks of a factory with twenty work centers is ten thousand
- * per-center rows, so the wide inserts have to be split.
+ * Rows per insert statement, sized per table to Postgres's ~65,535
+ * bind-parameter cap with headroom. The flat 1,000-row chunk this replaces
+ * made the Neon round trip the bottleneck rather than the parameter cap: a
+ * simulated day is ~211k rows, and every chunk is a round trip.
  */
-const ROWS_PER_INSERT = 1000;
+function chunkFor(paramsPerRow: number): number {
+  return Math.floor(60_000 / paramsPerRow);
+}
 
-function chunked<T>(rows: T[], size = ROWS_PER_INSERT): T[][] {
+function chunked<T>(rows: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
   return out;
@@ -265,7 +272,7 @@ export async function releaseWorkOrder(
         }),
       );
 
-      for (const slice of chunked(newParts)) {
+      for (const slice of chunked(newParts, chunkFor(8))) {
         await tx.insert(runWipParts).values(slice);
       }
 
@@ -324,7 +331,7 @@ export async function advanceRun(
         // the survivors replace the stored set: after a batch nearly every
         // part has moved, and no row references a WIP part by id
         await tx.delete(runWipParts).where(eq(runWipParts.runId, runId));
-        for (const slice of chunked(batch.wipParts)) {
+        for (const slice of chunked(batch.wipParts, chunkFor(8))) {
           await tx.insert(runWipParts).values(
             slice.map((part) => ({
               runId,
@@ -339,7 +346,7 @@ export async function advanceRun(
           );
         }
 
-        for (const slice of chunked(batch.finishedParts)) {
+        for (const slice of chunked(batch.finishedParts, chunkFor(9))) {
           await tx.insert(runFinishedParts).values(
             slice.map((part) => ({
               runId,
@@ -355,7 +362,7 @@ export async function advanceRun(
           );
         }
 
-        for (const slice of chunked(batch.ticks)) {
+        for (const slice of chunked(batch.ticks, chunkFor(6))) {
           await tx.insert(runTicks).values(
             slice.map((tick) => ({
               runId,
@@ -378,7 +385,7 @@ export async function advanceRun(
             queued: center.queued,
           })),
         );
-        for (const slice of chunked(centerRows)) {
+        for (const slice of chunked(centerRows, chunkFor(5))) {
           await tx.insert(runTickWorkCenters).values(slice);
         }
 
