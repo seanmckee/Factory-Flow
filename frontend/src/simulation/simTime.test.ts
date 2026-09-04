@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartBucket, formatDays, formatTickShort, formatTickTime, ticksToDays, MAX_CHART_POINTS, TICKS_PER_DAY } from "./simTime";
+import { chartBucket, formatDays, formatDurationSeconds, formatTickShort, formatTickTime, ticksToDays, MAX_CHART_POINTS, TICKS_PER_DAY } from "./simTime";
 
 describe("ticksToDays", () => {
   it("converts a whole day exactly", () => {
@@ -65,5 +65,18 @@ describe("formatTickShort", () => {
     expect(formatTickShort(0)).toBe("D1 0:00");
     expect(formatTickShort(19_140)).toBe("D1 5:19");
     expect(formatTickShort(TICKS_PER_DAY + 3_660)).toBe("D2 1:01");
+  });
+});
+
+describe("formatDurationSeconds", () => {
+  it("grades seconds, minutes, hours", () => {
+    expect(formatDurationSeconds(45)).toBe("45s");
+    expect(formatDurationSeconds(950)).toBe("15.8m");
+    expect(formatDurationSeconds(9_816)).toBe("2.7h");
+  });
+
+  it("reads null as a dash and zero as a duration", () => {
+    expect(formatDurationSeconds(null)).toBe("—");
+    expect(formatDurationSeconds(0)).toBe("0s");
   });
 });

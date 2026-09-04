@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { FloorWorkCenter, RunMetrics } from "../api/runs";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
-import { formatDays, ticksToDays } from "../simulation/simTime";
+import { formatDays, formatDurationSeconds, ticksToDays } from "../simulation/simTime";
 import { windowStandingCostCents } from "../simulation/standingCost";
 
 /**
@@ -34,13 +34,6 @@ const WINDOW_PRESETS = [1000, 5000];
 
 /** Utilization at which a centre reads as the constraint at a glance. */
 const SATURATED_UTILIZATION = 0.9;
-
-function formatSeconds(seconds: number | null) {
-  if (seconds === null) return "—";
-  return seconds < 120
-    ? `${Math.round(seconds)}s`
-    : `${(seconds / 60).toFixed(1)}m`;
-}
 
 function StatCard({
   label,
@@ -230,12 +223,12 @@ function RunDashboard({
         />
         <StatCard
           label="Cycle time med / p95"
-          value={`${formatSeconds(cycleTime.medianSeconds)} / ${formatSeconds(
+          value={`${formatDurationSeconds(cycleTime.medianSeconds)} / ${formatDurationSeconds(
             cycleTime.p95Seconds,
           )}`}
-          detail={`mean ${formatSeconds(cycleTime.meanSeconds)} · range ${formatSeconds(
+          detail={`mean ${formatDurationSeconds(cycleTime.meanSeconds)} · range ${formatDurationSeconds(
             cycleTime.minSeconds,
-          )}–${formatSeconds(cycleTime.maxSeconds)}`}
+          )}–${formatDurationSeconds(cycleTime.maxSeconds)}`}
         />
         <StatCard
           label="WIP mean / peak"
