@@ -8,9 +8,10 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6E (capital actions) is built** — planned and built
-2026-09-04, units 6E.1–6E.6 below, **one thing outstanding: nobody has driven
-the UI in a browser** (the extension was not connected; see 6E.5). It is the
+**You are here:** **Track 6E (capital actions) is done** — planned and built
+2026-09-04, units 6E.1–6E.8 below, and **closed by 6E.8's hands-on browser
+pass**, which found the dashboard sitting stale after a capital action, two
+legibility defects and one unordered query, and fixed all of them. It is the
 first thing in the project that
 changes a run's **own frozen config** while the run is alive: buy or retire a
 machine, hire or fire an operator, each a lump capital spend frozen on an
@@ -56,7 +57,10 @@ checkpoint, buy the second drill press in one branch only, and read the payback
 off the two net curves. That question needs 6H to have an answer at all.
 Track 6F (overtime, shift calendar) is scoped below and waits behind all of it:
 forking is load-bearing for the agent, overtime is one more lever.
-A hands-on pass over 6E's UI is owed before any of them.
+6E's UI has now had its hands-on pass (6E.8), and the three legibility
+problems it found — the capital dialog too narrow to show a name beside its
+buttons, its rows jumping after an action, and the Trends rate series flat on
+the cumulative-money axis — are fixed.
 
 **Why Track 6 was worth it, in one line each.** Track 6A made the score able
 to go down,
@@ -1476,6 +1480,64 @@ afterwards.
       still holds that tick's $792 of cutter spend and `[57601, 60000]` none of
       it (the action's own tick sits before the rate it bought, 6E.4's
       arithmetic intact); a backwards window still 400s.
+- [x] 6E.8 The hands-on pass 6E.5 owed, driven 2026-09-04 once the Chrome
+      extension connected. It closes the track — and it earned its keep, which
+      is the 3.4 lesson twice over.
+      **The bug it found: a capital action left the dashboard stale.**
+      `onCapitalAction` refreshed the summary and the floor and reloaded the
+      capital **log**, but never the metrics pane — so on a fresh run the cards
+      read Net $0.00 / Capital $0.00 while the run bar above them read
+      −$1,200.00 and the log *directly beneath them* read "$1200.00 out". Three
+      figures on one screen, two of them right, and only clicking a window
+      button fixed it. Reloading the log but not the cards is what turns lag
+      into a contradiction, so the fix belongs next to it.
+      **The fix: `loadMetrics` records the window it asked for** in a
+      `metricsWindow` ref (null until the dashboard is first opened, cleared by
+      `selectRun`), and a capital action re-reads *that* window. Recording the
+      request rather than reusing the response's `fromTick..toTick` is
+      load-bearing: whole-run means undefined bounds and must stay undefined,
+      since a run still at tick 0 answers `1..0`, and echoing that back is a
+      backwards window and a 400. A pane never opened has nothing to
+      invalidate; `changeTab` still loads it fresh.
+      **Verified in the browser, both halves:** buying at the Drill Press
+      without hiring left the floor reading `0/1 +1 unstaffed` in the starved
+      tone (the machine called out, not hidden behind a smaller number) and the
+      dashboard stale; after the fix, hiring the operator moved Net to
+      −$1,488.00 in the cards *as the action landed*, the floor to `0/2` with
+      the callout gone, and every figure agreed. The whole-run reads on the
+      15-day playthrough are right too — dashboard and run bar to the cent,
+      Drill Press 83% on 2/2, deliveries all on time, the four Day 1 actions in
+      the log, and the Trends chart drawing net crossing zero around Day 4 with
+      the tooltip speaking Day · time.
+      **Three legibility fixes, all found by looking** (user call: fix them
+      here rather than book them):
+      (a) the **capital dialog was too narrow for its own argument** — at no
+      horizontal scroll position were a centre's *name* and its *buttons* both
+      visible, so the buy was made blind. Two causes, both fixed. The width was
+      `max-w-4xl` *unprefixed* against shadcn's own `sm:max-w-lg`, and a
+      responsive variant beats a bare utility at every width the dialog is ever
+      seen at — so it had been rendering at 512px, not 896. It is
+      `sm:max-w-6xl` now, which fits all seven columns with no horizontal
+      scroll at all, and the name cell is `sticky left-0` so a genuinely narrow
+      viewport still keeps the name beside its price. And the rows now sort by
+      name, as `WorkCenterTable` already did.
+      (b) **the row you just acted on jumped to the bottom.** `getRunFloor`'s
+      `run_work_centers` select had no `ORDER BY`, and a capital action
+      *updates* one of those rows — so Postgres was free to return the updated
+      row last, in the one dialog where the row being read and the buttons
+      being pressed have to be the same row. Ordered by `work_center_id` at the
+      source; the dialog's sort is the second belt.
+      (c) the **Trends rate series was unreadable**: `$/hr` shared the left
+      axis with *cumulative* money, so $900/hr against a $135,000 scale was a
+      flat line on zero and the tooltip was the only place the number existed.
+      The premise in the old comment — that cumulative and per-hour money "sit
+      within a decade of each other" — holds for about a day and then doesn't,
+      so the axis went rather than the series. Rate now has its own right-hand
+      axis, and the two single-series axes are drawn in their own line's
+      colour, which is what makes three axes readable rather than three times
+      the clutter; an axis hides with its series. The rate turns out to carry
+      real signal — on the playthrough it swings $0–$2,000/hr and collapses to
+      zero around Day 8 as the floor drains, which was invisible before.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 

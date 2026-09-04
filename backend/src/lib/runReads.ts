@@ -477,7 +477,13 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     db
       .select()
       .from(runWorkCenters)
-      .where(eq(runWorkCenters.runId, run.id)),
+      .where(eq(runWorkCenters.runId, run.id))
+      // Ordered because a capital action *updates* one of these rows, and an
+      // unordered select is free to hand the updated row back last — which
+      // moved the centre you just acted on to the bottom of every consumer's
+      // list, in the one dialog where the row you are reading and the buttons
+      // you are pressing have to be the same row.
+      .orderBy(runWorkCenters.workCenterId),
     db.select({ id: workCenters.id, name: workCenters.name }).from(workCenters),
   ]);
 

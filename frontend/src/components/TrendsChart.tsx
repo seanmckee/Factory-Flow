@@ -27,19 +27,31 @@ export type TrendsPoint = {
 };
 
 type SeriesKey = "throughput" | "net" | "rate" | "wip";
+type AxisId = "money" | "rate" | "parts";
 
 /**
- * The relationships are the point, so the four series share one clock: money
- * on the left axis (cumulative and per-hour magnitudes sit within a decade of
- * each other in practice), parts on the right. What doesn't share is hidden by
- * clicking its legend entry — WIP rising against a flat rate, or net sagging
- * under a climbing throughput, is exactly the read three separate cards made
- * the viewer assemble by eye.
+ * The relationships are the point, so the four series share one clock — but not
+ * one scale. **Cumulative** money (throughput, net) holds the left axis; the
+ * per-hour **rate** and the parts count each get their own axis on the right.
+ *
+ * The rate used to share the left axis on the premise that cumulative and
+ * per-hour money sit within a decade of each other. They do for about a day,
+ * and then they don't: by day 15 of the playground run it is $900/hr against a
+ * $135,000 scale, a flat line pinned to zero, with the tooltip the only place
+ * the number existed at all. A series whose shape a chart cannot draw is not
+ * being charted, so the axis assumption went rather than the series.
+ *
+ * The two single-series axes are drawn in their own line's colour, which is
+ * what keeps three axes readable: the reader never has to guess which scale a
+ * line is measured against. What doesn't belong is hidden by clicking its
+ * legend entry, and its axis goes with it — WIP rising against a flat rate, or
+ * net sagging under a climbing throughput, is exactly the read three separate
+ * cards made the viewer assemble by eye.
  */
 const SERIES: {
   key: SeriesKey;
   label: string;
-  axis: "money" | "parts";
+  axis: AxisId;
   stroke: string;
   /** stepAfter for integer series — parts don't move fractionally */
   type: "monotone" | "stepAfter";
@@ -64,7 +76,7 @@ const SERIES: {
   {
     key: "rate",
     label: "Rate ($/hr)",
-    axis: "money",
+    axis: "rate",
     stroke: "var(--chart-2)",
     type: "monotone",
     format: (value) => `${formatCents(value)}/hr`,
@@ -111,19 +123,32 @@ export default function TrendsChart({
           tickFormatter={(tick) => formatTickShort(Number(tick), dayTicks)}
           minTickGap={48}
         />
+        {/* Two cumulative series share this one, so it stays neutral — a
+            colour here would claim one of them. */}
         <YAxis
           yAxisId="money"
           width={64}
+          hide={hidden.has("throughput") && hidden.has("net")}
           stroke="var(--muted-foreground)"
           tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
           tickFormatter={(cents) => `$${Math.round(Number(cents) / 100).toLocaleString()}`}
         />
         <YAxis
+          yAxisId="rate"
+          orientation="right"
+          width={64}
+          hide={hidden.has("rate")}
+          stroke="var(--chart-2)"
+          tick={{ fill: "var(--chart-2)", fontSize: 12 }}
+          tickFormatter={(cents) => `$${Math.round(Number(cents) / 100).toLocaleString()}/h`}
+        />
+        <YAxis
           yAxisId="parts"
           orientation="right"
           width={48}
-          stroke="var(--muted-foreground)"
-          tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
+          hide={hidden.has("wip")}
+          stroke="var(--chart-3)"
+          tick={{ fill: "var(--chart-3)", fontSize: 12 }}
           tickFormatter={(parts) => Number(parts).toLocaleString()}
         />
         <Tooltip

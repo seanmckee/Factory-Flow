@@ -83,6 +83,17 @@ export function useSimulationPage() {
   const [stopping, setStopping] = useState(false);
   const stopJumpRef = useRef(false);
   const advancing = useRef(false);
+  /**
+   * The window `loadMetrics` last asked for, or null while the dashboard has
+   * never been opened for this run. It is what makes a capital action able to
+   * re-read the pane on the window the pane itself claims to cover: undefined
+   * bounds mean the whole run and stay that way, rather than being frozen into
+   * the explicit `fromTick..toTick` the response came back with — which for a
+   * run still at tick 0 would be the backwards `1..0` and a 400.
+   */
+  const metricsWindow = useRef<{ from: number | undefined; to: number | undefined } | null>(
+    null,
+  );
 
   const report = useCallback(
     (error: unknown, fallback: string) => {
@@ -142,6 +153,7 @@ export function useSimulationPage() {
 
   const loadMetrics = useCallback(
     async (id: number, fromTick?: number, toTick?: number) => {
+      metricsWindow.current = { from: fromTick, to: toTick };
       setMetricsLoading(true);
       try {
         setMetrics(await getRunMetrics(id, fromTick, toTick));
@@ -209,6 +221,7 @@ export function useSimulationPage() {
     setFloor(null);
     setSeries([]);
     setMetrics(null);
+    metricsWindow.current = null;
     setActions([]);
     setActiveTab("floor");
   }, []);
@@ -385,6 +398,14 @@ export function useSimulationPage() {
         const applied = await applyCapitalAction(runId, kind, workCenterId);
         await refresh(runId);
         await loadActions(runId);
+        // An action is money spent, so every figure the dashboard is showing is
+        // now wrong — and the capital log directly beneath those figures has
+        // just been reloaded, which is what makes a stale pane read as a
+        // contradiction rather than as lag. Re-read the window it states; a
+        // pane that was never opened has nothing to invalidate, and `changeTab`
+        // loads it fresh.
+        const shown = metricsWindow.current;
+        if (shown) await loadMetrics(runId, shown.from, shown.to);
         const name =
           floor?.workCenters.find((center) => center.workCenterId === workCenterId)
             ?.name ?? `WC ${workCenterId}`;
@@ -400,7 +421,10 @@ export function useSimulationPage() {
         setPendingAction(null);
       }
     },
-    [runId, jump, awaitIdleClock, refresh, loadActions, floor, report, showToast],
+    [
+      runId, jump, awaitIdleClock, refresh, loadActions, loadMetrics, floor, report,
+      showToast,
+    ],
   );
 
   const trend = useMemo(() => {
