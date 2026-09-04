@@ -52,8 +52,15 @@ router.post("/", async (req, res) => {
 
     // capacity is omitted rather than set to undefined: exactOptionalPropertyTypes
     // rejects the latter, and omitting it takes the column default of 1
-    const values: { name: string; capacity?: number } = { name: body.name };
+    const values: {
+      name: string;
+      capacity?: number;
+      standingCostCentsPerDay?: number;
+    } = { name: body.name };
     if (body.capacity !== undefined) values.capacity = body.capacity;
+    if (body.standingCostCentsPerDay !== undefined) {
+      values.standingCostCentsPerDay = body.standingCostCentsPerDay;
+    }
 
     const [created] = await db.insert(workCenters).values(values).returning();
 
@@ -82,9 +89,16 @@ router.patch("/:id", async (req, res) => {
         .json({ message: `A work center named "${body.name}" already exists` });
     }
 
-    const updates: { name?: string; capacity?: number } = {};
+    const updates: {
+      name?: string;
+      capacity?: number;
+      standingCostCentsPerDay?: number;
+    } = {};
     if (body.name !== undefined) updates.name = body.name;
     if (body.capacity !== undefined) updates.capacity = body.capacity;
+    if (body.standingCostCentsPerDay !== undefined) {
+      updates.standingCostCentsPerDay = body.standingCostCentsPerDay;
+    }
 
     const [updated] = await db
       .update(workCenters)

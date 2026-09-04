@@ -50,20 +50,44 @@ export const createWorkCenterSchema = z.object({
   name: workCenterName(),
   // omitted means "take the column default of 1"
   capacity: positiveInt("capacity").optional(),
+  // omitted means "take the column default of 0" — a free machine
+  standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
 });
 
 /**
- * Both fields optional so a rename and a capacity change can arrive separately.
+ * All fields optional so a rename and a capacity change can arrive separately.
  * The refine keeps an empty body a 400 rather than a no-op 200.
  */
 export const updateWorkCenterSchema = z
   .object({
     name: workCenterName().optional(),
     capacity: positiveInt("capacity").optional(),
+    standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
   })
-  .refine((body) => body.name !== undefined || body.capacity !== undefined, {
-    error: "provide name or capacity",
-  });
+  .refine(
+    (body) =>
+      body.name !== undefined ||
+      body.capacity !== undefined ||
+      body.standingCostCentsPerDay !== undefined,
+    { error: "provide name, capacity or standingCostCentsPerDay" },
+  );
+
+// Factory settings
+
+/** Both facility-level rates a run freezes at creation; see factory_settings. */
+export const updateFactorySettingsSchema = z
+  .object({
+    facilityOverheadCentsPerDay: nonNegativeInt(
+      "facilityOverheadCentsPerDay",
+    ).optional(),
+    wipCarryingBpsPerDay: nonNegativeInt("wipCarryingBpsPerDay").optional(),
+  })
+  .refine(
+    (body) =>
+      body.facilityOverheadCentsPerDay !== undefined ||
+      body.wipCarryingBpsPerDay !== undefined,
+    { error: "provide facilityOverheadCentsPerDay or wipCarryingBpsPerDay" },
+  );
 
 // Parts
 

@@ -700,7 +700,7 @@ frozen copy.
       like `priorCounts`; carrying charges **end-of-tick** WIP (the set
       `wipCount` counts — a part finishing during the tick pays no rent for
       it). The one-batch-vs-several test re-run at nonzero rates.
-- [ ] 6A.4 Live-rate API — standing cost through work-centre POST/PATCH;
+- [x] 6A.4 Live-rate API — standing cost through work-centre POST/PATCH;
       `GET/PATCH /api/settings` over the id=1 upsert helper.
 - [ ] 6A.5 Freeze at create, accrue on advance — `createRun` copies rates
       (optional facility-level overrides in the POST body), `advanceRun`
