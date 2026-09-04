@@ -28,68 +28,61 @@ export type RunRow = typeof simulationRuns.$inferSelect;
  * than either of theirs.
  */
 export async function loadRunState(run: RunRow): Promise<RunState> {
-  const storedParts = await db
-    .select()
-    .from(runWipParts)
-    .where(eq(runWipParts.runId, run.id))
-    .orderBy(runWipParts.id);
-
-  const storedSteps = await db
-    .select({
-      workOrderId: runWorkOrderSteps.workOrderId,
-      workCenterId: runWorkOrderSteps.workCenterId,
-      processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
-    })
-    .from(runWorkOrderSteps)
-    .where(eq(runWorkOrderSteps.runId, run.id))
-    .orderBy(runWorkOrderSteps.workOrderId, runWorkOrderSteps.sequence);
-
-  const storedCenters = await db
-    .select({
-      workCenterId: runWorkCenters.workCenterId,
-      capacity: runWorkCenters.capacity,
-      standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
-    })
-    .from(runWorkCenters)
-    .where(eq(runWorkCenters.runId, run.id));
-
-  const released = await db
-    .select({ workOrderId: runReleasedOrders.workOrderId })
-    .from(runReleasedOrders)
-    .where(eq(runReleasedOrders.runId, run.id));
-
-  const finishedCounts = await db
-    .select({
-      workOrderId: runFinishedParts.workOrderId,
-      finished: count(),
-    })
-    .from(runFinishedParts)
-    .where(eq(runFinishedParts.runId, run.id))
-    .groupBy(runFinishedParts.workOrderId);
+  // These five reads share only the run id. Issuing them together matters on
+  // Neon, where serial network latency can otherwise dominate a small batch.
+  const [storedParts, storedSteps, storedCenters, released, finishedCounts] =
+    await Promise.all([
+      db
+        .select()
+        .from(runWipParts)
+        .where(eq(runWipParts.runId, run.id))
+        .orderBy(runWipParts.id),
+      db
+        .select({
+          workOrderId: runWorkOrderSteps.workOrderId,
+          workCenterId: runWorkOrderSteps.workCenterId,
+          processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
+        })
+        .from(runWorkOrderSteps)
+        .where(eq(runWorkOrderSteps.runId, run.id))
+        .orderBy(runWorkOrderSteps.workOrderId, runWorkOrderSteps.sequence),
+      db
+        .select({
+          workCenterId: runWorkCenters.workCenterId,
+          capacity: runWorkCenters.capacity,
+          standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
+        })
+        .from(runWorkCenters)
+        .where(eq(runWorkCenters.runId, run.id)),
+      db
+        .select({ workOrderId: runReleasedOrders.workOrderId })
+        .from(runReleasedOrders)
+        .where(eq(runReleasedOrders.runId, run.id)),
+      db
+        .select({
+          workOrderId: runFinishedParts.workOrderId,
+          finished: count(),
+        })
+        .from(runFinishedParts)
+        .where(eq(runFinishedParts.runId, run.id))
+        .groupBy(runFinishedParts.workOrderId),
+    ]);
 
   const releasedIds = released.map((row) => row.workOrderId);
-  const runWorkOrders = releasedIds.length
-    ? await db
-        .select({ id: workOrders.id, partId: workOrders.partId })
-        .from(workOrders)
-        .where(inArray(workOrders.id, releasedIds))
-    : [];
+  const [runWorkOrders, runAllocations] = releasedIds.length
+    ? await Promise.all([
+        db
+          .select({ id: workOrders.id, partId: workOrders.partId })
+          .from(workOrders)
+          .where(inArray(workOrders.id, releasedIds)),
+        db
+          .select()
+          .from(allocations)
+          .where(inArray(allocations.workOrderId, releasedIds)),
+      ])
+    : [[], []];
 
   const partIds = [...new Set(runWorkOrders.map((wo) => wo.partId))];
-  const runParts = partIds.length
-    ? await db
-        .select({ id: parts.id, materialCostCents: parts.materialCostCents })
-        .from(parts)
-        .where(inArray(parts.id, partIds))
-    : [];
-
-  const runAllocations = releasedIds.length
-    ? await db
-        .select()
-        .from(allocations)
-        .where(inArray(allocations.workOrderId, releasedIds))
-    : [];
-
   const salesOrderIds = [
     ...new Set(runAllocations.map((allocation) => allocation.salesOrderId)),
   ];
@@ -100,16 +93,24 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
   // place calendar days become ticks: the engine speaks ticks only, and the
   // run's frozen dayTicks is what makes "day N" mean the same promise however
   // a run is staffed.
-  const storedSalesOrders = salesOrderIds.length
-    ? await db
-        .select({
-          id: salesOrders.id,
-          unitPriceCents: salesOrders.unitPriceCents,
-          dueDay: salesOrders.dueDay,
-        })
-        .from(salesOrders)
-        .where(inArray(salesOrders.id, salesOrderIds))
-    : [];
+  const [runParts, storedSalesOrders] = await Promise.all([
+    partIds.length
+      ? db
+          .select({ id: parts.id, materialCostCents: parts.materialCostCents })
+          .from(parts)
+          .where(inArray(parts.id, partIds))
+      : Promise.resolve([]),
+    salesOrderIds.length
+      ? db
+          .select({
+            id: salesOrders.id,
+            unitPriceCents: salesOrders.unitPriceCents,
+            dueDay: salesOrders.dueDay,
+          })
+          .from(salesOrders)
+          .where(inArray(salesOrders.id, salesOrderIds))
+      : Promise.resolve([]),
+  ]);
   const runSalesOrders = storedSalesOrders.map((so) => ({
     id: so.id,
     unitPriceCents: so.unitPriceCents,

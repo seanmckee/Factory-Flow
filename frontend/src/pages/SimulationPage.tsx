@@ -1,9 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Info, Play, Plus, Square, Trash2 } from "lucide-react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { Info, LoaderCircle, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
 import { Progress } from "@/components/ui/progress";
 import RunDashboard from "../components/RunDashboard";
-import TrendsChart from "../components/TrendsChart";
+const TrendsChart = lazy(() => import("../components/TrendsChart"));
 import {
   cumulativeThroughput,
   openingCents,
@@ -99,6 +107,9 @@ type JumpProgress = {
   tickNum: number | null;
 };
 
+type ActiveTab = "floor" | "trends" | "dashboard";
+type PendingAction = "create" | "delete" | "release" | null;
+
 /**
  * A chart in a card, titled, with a hover hint saying what the chart answers.
  * The y-axis label says what is plotted; the hint says why you'd look at it.
@@ -182,6 +193,11 @@ function SimulationPage() {
 
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRunLoading, setIsRunLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>("floor");
+  const [seriesLoading, setSeriesLoading] = useState(false);
+  const [metricsLoading, setMetricsLoading] = useState(false);
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const [jump, setJump] = useState<JumpProgress | null>(null);
   const [stopping, setStopping] = useState(false);
@@ -226,24 +242,15 @@ function SimulationPage() {
   );
 
   /**
-   * Everything the page draws, in one place, so a tick refreshes it together.
-   * The summary lands first because its tick number picks the chart bucket —
-   * raw seconds while the run fits on screen, then minutes, then hours — so
-   * the Trends tab always holds the whole run at chart resolution instead of
-   * the newest-5000-tick suffix that once hid a drained floor entirely.
+   * Refreshes only the live snapshot. Trends and aggregate metrics are loaded
+   * on demand by their tabs; rebuilding an off-screen 5,000-point chart on
+   * every one-second clock beat made otherwise quick controls feel sticky.
    */
   const refresh = useCallback(
     async (id: number) => {
-      const summary = await getRun(id);
-      const bucket = chartBucket(summary.tickNum);
-      const [runFloor, ticks] = await Promise.all([
-        getRunFloor(id),
-        getRunTicks(id, bucket),
-      ]);
+      const [summary, runFloor] = await Promise.all([getRun(id), getRunFloor(id)]);
       setRun(summary);
       setFloor(runFloor);
-      setSeries(ticks);
-      setSeriesBucket(bucket);
       // keep the picker's tick number honest as the run advances
       setRuns((prev) =>
         prev.map((option) =>
@@ -256,6 +263,22 @@ function SimulationPage() {
     [],
   );
 
+  const loadSeries = useCallback(
+    async (id: number, tickNum: number) => {
+      setSeriesLoading(true);
+      try {
+        const bucket = chartBucket(tickNum);
+        setSeries(await getRunTicks(id, bucket));
+        setSeriesBucket(bucket);
+      } catch (error) {
+        report(error, "Failed to load trends");
+      } finally {
+        setSeriesLoading(false);
+      }
+    },
+    [report],
+  );
+
   /**
    * The strip's window: the whole run when one is opened, the jump's own ticks
    * after a jump. Deliberately *not* on the clock's beat — `/metrics` reads
@@ -264,10 +287,13 @@ function SimulationPage() {
    */
   const loadMetrics = useCallback(
     async (id: number, fromTick?: number, toTick?: number) => {
+      setMetricsLoading(true);
       try {
         setMetrics(await getRunMetrics(id, fromTick, toTick));
       } catch (error) {
         report(error, "Failed to load run metrics");
+      } finally {
+        setMetricsLoading(false);
       }
     },
     [report],
@@ -290,7 +316,10 @@ function SimulationPage() {
         setSalesOrders(demand);
         // the newest run is the one being worked on
         const latest = runList.at(-1);
-        if (latest) setRunId(latest.id);
+        if (latest) {
+          setIsRunLoading(true);
+          setRunId(latest.id);
+        }
       } catch (error) {
         if (!cancelled) report(error, "Failed to load runs");
       } finally {
@@ -311,6 +340,7 @@ function SimulationPage() {
   const selectRun = useCallback((id: number | null) => {
     setIsRunning(false);
     setRunId(id);
+    setIsRunLoading(id !== null);
     // the picker filters against the *selected* run's releases, so a selection
     // carried across runs could name an order the new run already released
     setSelectedOrderId(null);
@@ -318,6 +348,7 @@ function SimulationPage() {
     setFloor(null);
     setSeries([]);
     setMetrics(null);
+    setActiveTab("floor");
   }, []);
 
   useEffect(() => {
@@ -328,15 +359,15 @@ function SimulationPage() {
         await refresh(id);
       } catch (error) {
         if (!cancelled) report(error, "Failed to load run");
-        return;
+      } finally {
+        if (!cancelled) setIsRunLoading(false);
       }
-      if (!cancelled) await loadMetrics(id);
     }
     load(runId);
     return () => {
       cancelled = true;
     };
-  }, [runId, refresh, report, loadMetrics]);
+  }, [runId, refresh, report]);
 
   /**
    * Advancing is synchronous on the server and holds a lock, so a second call
@@ -447,6 +478,9 @@ function SimulationPage() {
       // the dashboard re-windows onto exactly what the jump covered, which is
       // the question a jump asks: what happened over *those* ticks
       if (done > 0) await loadMetrics(runId, startTick + 1, startTick + done);
+      if (done > 0 && activeTab === "trends") {
+        await loadSeries(runId, startTick + done);
+      }
     },
     [
       runId,
@@ -455,6 +489,8 @@ function SimulationPage() {
       awaitIdleClock,
       refresh,
       loadMetrics,
+      loadSeries,
+      activeTab,
       report,
       reportAdvance,
       showToast,
@@ -464,6 +500,7 @@ function SimulationPage() {
   const onCreateRun = async () => {
     const name = newRunName.trim();
     if (!name) return showToast("Name the run", "error");
+    setPendingAction("create");
     try {
       const created = await createRun(name);
       setRuns((prev) => [...prev, created]);
@@ -473,11 +510,14 @@ function SimulationPage() {
       showToast(`Run "${created.name}" created with seed ${created.rngSeed}`);
     } catch (error) {
       report(error, "Failed to create the run");
+    } finally {
+      setPendingAction(null);
     }
   };
 
   const onDeleteRun = async () => {
     if (runId === null) return;
+    setPendingAction("delete");
     try {
       const deleted = await deleteRun(runId);
       const remaining = runs.filter((option) => option.id !== deleted.id);
@@ -486,6 +526,8 @@ function SimulationPage() {
       showToast(`Deleted run "${deleted.name}"`);
     } catch (error) {
       report(error, "Failed to delete the run");
+    } finally {
+      setPendingAction(null);
     }
   };
 
@@ -494,10 +536,12 @@ function SimulationPage() {
     if (selectedOrderId === null) {
       return showToast("Select a work order to release", "error");
     }
+    setPendingAction("release");
     // releasing takes the same server-side lock as advancing, so wait out a
     // beat in flight and hold the guard — otherwise Release racing the 1x
     // clock is a spurious 409, indistinguishable from a stale lock
     if (!(await awaitIdleClock())) {
+      setPendingAction(null);
       return showToast("The run is still advancing — try again", "error");
     }
     advancing.current = true;
@@ -512,6 +556,7 @@ function SimulationPage() {
       report(error, "Failed to release the work order");
     } finally {
       advancing.current = false;
+      setPendingAction(null);
     }
   };
 
@@ -553,14 +598,21 @@ function SimulationPage() {
       wip: sample.wipCount,
     }));
   }, [series, seriesBucket, runTotalCents, runNetTotalCents]);
-  const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
+  const workOrderById = useMemo(
+    () => new Map(workOrders.map((wo) => [wo.id, wo])),
+    [workOrders],
+  );
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
   // instead of surfacing the server's 409 as a toast
-  const releasedIds = new Set(
-    (run?.releasedOrders ?? []).map((released) => released.workOrderId),
+  const releasedIds = useMemo(
+    () => new Set((run?.releasedOrders ?? []).map((item) => item.workOrderId)),
+    [run?.releasedOrders],
   );
-  const releasableOrders = workOrders.filter((wo) => !releasedIds.has(wo.id));
+  const releasableOrders = useMemo(
+    () => workOrders.filter((wo) => !releasedIds.has(wo.id)),
+    [workOrders, releasedIds],
+  );
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-6">
@@ -614,7 +666,12 @@ function SimulationPage() {
                 />
               </Field>
               <DialogFooter>
-                <Button type="submit">Create Run</Button>
+                <Button type="submit" disabled={pendingAction === "create"}>
+                  {pendingAction === "create" && (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  )}
+                  {pendingAction === "create" ? "Creating…" : "Create Run"}
+                </Button>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -623,10 +680,15 @@ function SimulationPage() {
         <Button
           variant="ghost"
           onClick={onDeleteRun}
-          disabled={runId === null || jump !== null}
+          disabled={runId === null || jump !== null || pendingAction !== null}
           className="text-destructive hover:bg-destructive/10 hover:text-destructive"
         >
-          <Trash2 className="size-4" /> Delete Run
+          {pendingAction === "delete" ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Trash2 className="size-4" />
+          )}
+          {pendingAction === "delete" ? "Deleting…" : "Delete Run"}
         </Button>
 
         {run && (
@@ -695,9 +757,17 @@ function SimulationPage() {
           size="sm"
           variant="secondary"
           onClick={onRelease}
-          disabled={runId === null || jump !== null}
+          disabled={
+            runId === null ||
+            selectedOrderId === null ||
+            jump !== null ||
+            pendingAction !== null
+          }
         >
-          Release Order
+          {pendingAction === "release" && (
+            <LoaderCircle className="size-4 animate-spin" />
+          )}
+          {pendingAction === "release" ? "Releasing…" : "Release Order"}
         </Button>
 
         <div className="h-6 w-px bg-border" />
@@ -749,7 +819,19 @@ function SimulationPage() {
       </div>
 
       {run ? (
-        <Tabs defaultValue="floor" className="flex min-h-0 flex-1 flex-col gap-3">
+        <Tabs
+          value={activeTab}
+          onValueChange={(value) => {
+            const next = value as ActiveTab;
+            setActiveTab(next);
+            if (next === "trends" && runId !== null && run) {
+              void loadSeries(runId, run.tickNum);
+            } else if (next === "dashboard" && runId !== null && !metrics) {
+              void loadMetrics(runId);
+            }
+          }}
+          className="flex min-h-0 flex-1 flex-col gap-3"
+        >
           {/* Three view shapes, named by shape rather than by one metric:
               Floor is a snapshot of now, Trends are series over time, and
               Dashboard is an aggregate over a window. ("Throughput" stopped
@@ -804,13 +886,31 @@ function SimulationPage() {
                 title="Trends"
                 hint="The run's vitals on one clock — cumulative throughput, the same money net of operating expense and carrying cost (the dashed zero is break-even), the trailing-hour earning rate, and WIP on the right axis. Click a legend entry to hide a line; the shapes against each other are the story: WIP climbing while the rate is flat means parts are piling at a constraint, and net falling while throughput climbs means the doors cost more than the flow earns."
               >
-                <TrendsChart data={trend} dayTicks={run.dayTicks} />
+                {seriesLoading ? (
+                  <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+                    <LoaderCircle className="size-4 animate-spin" /> Loading trends…
+                  </div>
+                ) : (
+                  <Suspense
+                    fallback={
+                      <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+                        <LoaderCircle className="size-4 animate-spin" /> Loading chart…
+                      </div>
+                    }
+                  >
+                    <TrendsChart data={trend} dayTicks={run.dayTicks} />
+                  </Suspense>
+                )}
               </ChartCard>
             </div>
           </TabsContent>
 
           <TabsContent value="dashboard" className="flex min-h-0 flex-1 flex-col">
-            {metrics ? (
+            {metricsLoading ? (
+              <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
+                <LoaderCircle className="size-4 animate-spin" /> Loading dashboard…
+              </div>
+            ) : metrics ? (
               <RunDashboard
                 metrics={metrics}
                 // `/metrics` carries work center ids and no names or capacities
@@ -833,7 +933,7 @@ function SimulationPage() {
       ) : (
         <div className="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-dashed">
           <p className="text-sm text-muted-foreground">
-            {isLoading
+            {isLoading || isRunLoading
               ? "Loading…"
               : "Create a run to put this factory to work."}
           </p>
