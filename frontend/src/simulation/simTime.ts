@@ -18,3 +18,21 @@ export function formatDays(days: number): string {
   const rounded = Math.round(days * 10) / 10;
   return `${rounded} day${rounded === 1 ? "" : "s"}`;
 }
+
+/**
+ * A tick as calendar time — "Day 2 · 3:41:05". Days are 1-based and roll at
+ * `ticksPerDay`, so tick 0 is Day 1 · 0:00:00: the clock reads staffed time,
+ * which is the only time the run simulates.
+ */
+export function formatTickTime(
+  tick: number,
+  ticksPerDay: number = TICKS_PER_DAY,
+): string {
+  const day = Math.floor(tick / ticksPerDay) + 1;
+  const rest = tick % ticksPerDay;
+  const hours = Math.floor(rest / 3600);
+  const minutes = Math.floor((rest % 3600) / 60);
+  const seconds = rest % 60;
+  const pad = (figure: number) => String(figure).padStart(2, "0");
+  return `Day ${day} · ${hours}:${pad(minutes)}:${pad(seconds)}`;
+}

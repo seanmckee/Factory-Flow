@@ -9,6 +9,7 @@ import {
   openingCents,
 } from "../simulation/cumulativeThroughput";
 import { netPerTick, openingNetCents } from "../simulation/netProfit";
+import { formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
 import { throughputRate } from "../simulation/throughputRate";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
@@ -58,8 +59,17 @@ import {
 } from "@/components/ui/tooltip";
 import { Field } from "../components/ui/Field";
 
-/** One tick is one simulated second, so ticking once a second runs real-time. */
+/**
+ * One tick is one simulated second, but the live clock plays **one simulated
+ * minute per real second** — `CLOCK_TICKS_PER_BEAT` ticks per beat. Track 4
+ * rejected a speed multiplier because a "100×" button lies the moment it
+ * outruns the server's ~500 ticks a second; 60 a beat is one small request,
+ * nowhere near that, and it restores the visible pace the 6A seed's
+ * minute-scale process times took away — an 8-minute drill step completes in
+ * 8 real seconds, the way an 8-second step used to at 1×.
+ */
 const TICK_INTERVAL_MS = 1000;
+const CLOCK_TICKS_PER_BEAT = 60;
 
 /**
  * A jump advances in chunks of one server transaction (`TICKS_PER_BATCH`), so
@@ -68,8 +78,16 @@ const TICK_INTERVAL_MS = 1000;
  */
 const CHUNK_TICKS = 500;
 
-/** The preset jumps. Anything longer is what running until idle is for. */
-const JUMP_TICKS = [100, 500, 1000];
+/**
+ * The preset jumps, in calendar units now that rates accrue per day — a day is
+ * `TICKS_PER_DAY` staffed seconds (the run's own frozen `dayTicks` equals it
+ * for every 6A run). Anything longer is what running until idle is for.
+ */
+const JUMP_PRESETS = [
+  { label: "+1 hour", ticks: 3_600 },
+  { label: "+4 hours", ticks: 4 * 3_600 },
+  { label: "+1 day", ticks: TICKS_PER_DAY },
+];
 
 /**
  * Where running until idle gives up. A floor that never empties — a routing
@@ -334,7 +352,7 @@ function SimulationPage() {
       if (advancing.current) return;
       advancing.current = true;
       try {
-        await advanceRun(runId, 1);
+        await advanceRun(runId, CLOCK_TICKS_PER_BEAT);
         await refresh(runId);
       } catch (error) {
         setIsRunning(false);
@@ -350,9 +368,9 @@ function SimulationPage() {
   /**
    * A beat in flight holds the run's lock, and a jump landing on top of it
    * would be the 409 the unlock affordance exists for — raised by normal use
-   * rather than by a dead process. A beat is one tick, so waiting it out is a
-   * fraction of a second; the bound is there so a hung request can't hang the
-   * button too.
+   * rather than by a dead process. A beat is one simulated minute, still a
+   * fraction of a second of server work; the bound is there so a hung request
+   * can't hang the button too.
    */
   const awaitIdleClock = useCallback(async () => {
     for (let attempt = 0; advancing.current && attempt < 40; attempt++) {
@@ -373,7 +391,7 @@ function SimulationPage() {
    * the same server lock and the jump is the one that matters.
    */
   const runJump = useCallback(
-    async (target: number | "idle") => {
+    async (target: number | "idle", jumpLabel?: string) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
 
@@ -389,7 +407,7 @@ function SimulationPage() {
 
       const label = untilIdle
         ? "Running until the floor is empty"
-        : `Advancing ${target.toLocaleString()} ticks`;
+        : `Advancing ${jumpLabel ?? `${target.toLocaleString()} ticks`}`;
       const ticksTotal = untilIdle ? null : target;
 
       const startTick = run?.tickNum ?? 0;
@@ -627,6 +645,7 @@ function SimulationPage() {
 
         {run && (
           <div className="ml-auto flex flex-wrap items-center gap-4 tabular-nums">
+            <Stat label="Time" value={formatTickTime(run.tickNum, run.dayTicks)} />
             <Stat label="Tick" value={run.tickNum.toLocaleString()} />
             <Stat label="WIP" value={run.wipCount.toLocaleString()} />
             <Stat label="Finished" value={run.finishedCount.toLocaleString()} />
@@ -700,16 +719,16 @@ function SimulationPage() {
         {/* Fast-forward. The clock is for watching; these are for seeing where
             a run ends up, which is what the presets and until-idle answer. */}
         <span className="text-xs text-muted-foreground">Fast-forward</span>
-        {JUMP_TICKS.map((ticks) => (
+        {JUMP_PRESETS.map((preset) => (
           <Button
-            key={ticks}
+            key={preset.label}
             size="sm"
             variant="outline"
             className="tabular-nums"
-            onClick={() => runJump(ticks)}
+            onClick={() => runJump(preset.ticks, preset.label.slice(1))}
             disabled={runId === null || jump !== null}
           >
-            +{ticks.toLocaleString()}
+            {preset.label}
           </Button>
         ))}
         <Button

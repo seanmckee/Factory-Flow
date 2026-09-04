@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDays, ticksToDays, TICKS_PER_DAY } from "./simTime";
+import { formatDays, formatTickTime, ticksToDays, TICKS_PER_DAY } from "./simTime";
 
 describe("ticksToDays", () => {
   it("converts a whole day exactly", () => {
@@ -25,5 +25,20 @@ describe("formatDays", () => {
   it("uses the singular only for exactly one day after rounding", () => {
     expect(formatDays(1.04)).toBe("1 day");
     expect(formatDays(1.06)).toBe("1.1 days");
+  });
+});
+
+describe("formatTickTime", () => {
+  it("starts the run at Day 1 · 0:00:00", () => {
+    expect(formatTickTime(0)).toBe("Day 1 · 0:00:00");
+  });
+
+  it("reads staffed hours, minutes and seconds within the day", () => {
+    expect(formatTickTime(3_600 + 62)).toBe("Day 1 · 1:01:02");
+  });
+
+  it("rolls to the next day at ticksPerDay", () => {
+    expect(formatTickTime(TICKS_PER_DAY)).toBe("Day 2 · 0:00:00");
+    expect(formatTickTime(25, 10)).toBe("Day 3 · 0:00:05");
   });
 });

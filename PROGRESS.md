@@ -724,6 +724,15 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
+- [x] 6A.10a UI: transport catches up with the day scale (added after the
+      first hands-on: minute-scale process times made the 1× clock unwatchable
+      and +100/+500/+1000 ticks meaningless). **Decided:** the live clock plays
+      one simulated **minute** per real second — 60 ticks a beat, one small
+      request, nowhere near the ~500 ticks/sec that made Track 4 reject a
+      multiplier, and it restores exactly the pace the old seconds-scale seed
+      had at 1×. Presets become **+1 hour / +4 hours / +1 day**, and the run
+      bar gains a calendar readout (`formatTickTime`: "Day 2 · 3:41:05" —
+      staffed time, the only time a run simulates).
 - [x] 6A.10 UI: dashboard P&L — stat row led by net profit (destructive when
       negative), OE and carrying cards; per-centre "Standing cost" column
       derived client-side from the `/floor` frozen rate × observed ticks
