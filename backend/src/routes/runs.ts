@@ -1,14 +1,16 @@
 import { Router, type Response } from "express";
 import { isHttpError } from "../lib/httpError.js";
 import {
-  advanceRun,
-  createRun,
-  deleteRun,
   getRun,
   getRunFloor,
   getRunMetrics,
   getRunTicks,
   listRuns,
+} from "../lib/runReads.js";
+import {
+  advanceRun,
+  createRun,
+  deleteRun,
   releaseWorkOrder,
   unlockRun,
 } from "../lib/runService.js";
@@ -26,7 +28,8 @@ const router = Router();
 /**
  * A run is where the simulation actually lives: the factory tables above
  * describe a shop, a run is one experiment on it. Everything here delegates to
- * `runService`, which owns the loading, the lock and the batched writes — the
+ * the service layer — `runService` owns the lock and the batched writes,
+ * `runReads` the summaries and series, `runState` the shared loader — and the
  * routes only validate, map an `HttpError` onto its status, and serialise.
  */
 
