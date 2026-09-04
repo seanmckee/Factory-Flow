@@ -23,7 +23,12 @@ whole-run `/metrics` on the 15-day playthrough 7.4 s → 1.13 s; every reported
 figure byte-identical across the migration). The playground seed gives a book
 with a horizon: 10 centres, 10 parts, 29 orders / 3,600 units, due days 2–18.
 
-**Next: 6G.2 → 6G.3 → 6H.2 → 6H.3 → Track 7 → Track 8.**
+**Next: Track 7 (forking) → Track 8 (the agent).** The remaining sim units —
+6G.2, 6G.3, 6H.2, 6H.3 — are **deferred behind both** (user call, 2026-09-04).
+The sim is done: it has a five-line P&L, a book with a horizon, and an API an
+agent can already drive. What is left there is polish and perf, and playing the
+sim kept generating more of it — 6F, 6G and 6H were all invented while driving
+6E. Pick them up after the agent, if its behaviour shows they are needed.
 
 ---
 
@@ -115,17 +120,26 @@ Scheduling ahead is the cheap fallback if the rework proves out of proportion.
 Design invariants live in `CLAUDE.md`. These are the ones about *sequence and
 scope* that would otherwise be re-argued:
 
-- **6G and 6H come before Track 7**, and are prerequisites rather than polish.
-  A fork comparison is only meaningful if a run is cheap enough to play twice
-  and the book is deep enough for capacity to earn back its cost.
+- **Track 7 comes before Track 8, and forking *is* load-bearing** (user call,
+  2026-09-04, reversing the note below). Comparison is the agent's whole
+  mechanism: it is how the agent tells a decision that paid from one that did
+  not. An agent that can only play forward has no control to measure against.
+- **The remaining sim units are deferred behind the agent.** 6G.2 (clone on
+  write) is the only one the agent itself benefits from, and it is a bounded
+  perf fix rather than a prerequisite; 6G.3 is a UI cadence an agent never
+  triggers, 6H.2 an affordance for a human reading the dialog when the agent
+  reads `/metrics` directly, and 6H.3 changes the shape of the task rather than
+  enabling it.
 - **Track 6F waits behind Track 7.** See above.
 - **Shortest path to an agent** (asked 2026-09-03): 3.2a → 3.2 → 3.3 gets an
   HTTP API an agent can drive. Track 6 is what makes driving it *mean*
   something, because without it money only goes up and "release everything"
   wins by default. Skippable until after the agent: 3.4, 3.5, Track 5 and most
-  of Track 4. Track 7 forking is **not** load-bearing either — two runs from the
-  same seed and config with different policies is a valid comparison, which is
-  true only because of 3.2b.
+  of Track 4. It also held that Track 7 forking was not load-bearing, since two
+  runs from the same seed and config with different policies is already a valid
+  comparison (true only because of 3.2b) — **superseded above**: a fork from a
+  checkpoint compares two policies over a shared history, which is the question
+  the agent is actually asking.
 - **Deeper carving of `runService`, and the `SimulationPage` hooks
   (`useRunClock`, `useRunJump`), wait until after Track 7.** Boundaries invented
   ahead of the code that uses them are the ones you end up fighting.
