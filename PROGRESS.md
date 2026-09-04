@@ -713,7 +713,7 @@ frozen copy.
 - [x] 6A.7 UI: cost setup — standing-cost column on the work-centres table;
       `/setup/settings` Factory Settings page (overhead, carrying %/day);
       settings join `SetupDataProvider`'s load.
-- [ ] 6A.8 UI: pure transforms — `simTime.ts` (`ticksToDays`, `formatDays`),
+- [x] 6A.8 UI: pure transforms — `simTime.ts` (`ticksToDays`, `formatDays`),
       `standingCost.ts`, `netProfit.ts` (`netPerTick`, `openingNetCents` —
       the cumulative net curve has the same `/ticks`-suffix problem as the
       money curve, and its opening balance is **unfloored**: net before the
