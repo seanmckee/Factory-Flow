@@ -212,6 +212,13 @@ const seedInt = z
 export const createRunSchema = z.object({
   name: boundedText("name"),
   rngSeed: seedInt.optional(),
+  // facility-level rate overrides; omitted means "freeze the live settings".
+  // Per-centre standing costs are deliberately not overridable here — editing
+  // a run's own frozen config is 6E's capital-actions mechanism.
+  facilityOverheadCentsPerDay: nonNegativeInt(
+    "facilityOverheadCentsPerDay",
+  ).optional(),
+  wipCarryingBpsPerDay: nonNegativeInt("wipCarryingBpsPerDay").optional(),
 });
 
 export const releaseWorkOrderSchema = z.object({

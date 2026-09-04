@@ -702,7 +702,7 @@ frozen copy.
       it). The one-batch-vs-several test re-run at nonzero rates.
 - [x] 6A.4 Live-rate API — standing cost through work-centre POST/PATCH;
       `GET/PATCH /api/settings` over the id=1 upsert helper.
-- [ ] 6A.5 Freeze at create, accrue on advance — `createRun` copies rates
+- [x] 6A.5 Freeze at create, accrue on advance — `createRun` copies rates
       (optional facility-level overrides in the POST body), `advanceRun`
       writes the tick expense columns and persists `carry_remainder`;
       `AdvanceResult` gains the two expense sums.
