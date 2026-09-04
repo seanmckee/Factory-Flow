@@ -54,8 +54,12 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
         .select({
           workCenterId: runWorkCenters.workCenterId,
           capacity: runWorkCenters.capacity,
+          operators: runWorkCenters.operators,
           standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
           wageCentsPerHour: runWorkCenters.wageCentsPerHour,
+          standingCostEffectiveFromTick:
+            runWorkCenters.standingCostEffectiveFromTick,
+          wageEffectiveFromTick: runWorkCenters.wageEffectiveFromTick,
         })
         .from(runWorkCenters)
         .where(eq(runWorkCenters.runId, run.id)),
@@ -158,10 +162,17 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     rngSeed: run.rngSeed,
     wipParts,
     routingByWorkOrder,
+    // effective capacity, not the machine count: a machine with nobody on it
+    // runs nothing, and an operator with no machine runs nothing either. The
+    // min is taken here so the engine never learns what an operator is — the
+    // same boundary the pre-multiplied wage rates sit on.
     workCenters: new Map(
       storedCenters.map((center) => [
         center.workCenterId,
-        { id: center.workCenterId, capacity: center.capacity },
+        {
+          id: center.workCenterId,
+          capacity: Math.min(center.capacity, center.operators),
+        },
       ]),
     ),
     workOrders: runWorkOrders,
@@ -176,18 +187,29 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
       dayTicks: run.dayTicks,
       facilityOverheadCentsPerDay: run.facilityOverheadCentsPerDay,
       wipCarryingBpsPerDay: run.wipCarryingBpsPerDay,
+      // the centre's whole daily rent: the frozen rate is per **machine**
+      // since 6E, and pre-multiplying here keeps the engine ignorant of what a
+      // machine is. The dates are what make a mid-run purchase exact — each
+      // rate accrues from the tick it took effect, and a rate no action has
+      // touched still reads 0, which is the pre-6E arithmetic exactly.
       standingCostByWorkCenter: new Map(
         storedCenters.map((center) => [
           center.workCenterId,
-          center.standingCostCentsPerDay,
+          {
+            cents: center.capacity * center.standingCostCentsPerDay,
+            sinceTick: center.standingCostEffectiveFromTick,
+          },
         ]),
       ),
-      // the centre's whole hourly bill: operators = capacity until 6E, and
-      // pre-multiplying here keeps the engine ignorant of operators entirely
+      // the centre's whole hourly bill, pre-multiplied by its operators for
+      // the same reason — hiring moves this rate and nothing else's
       wageCentsPerHourByWorkCenter: new Map(
         storedCenters.map((center) => [
           center.workCenterId,
-          center.capacity * center.wageCentsPerHour,
+          {
+            cents: center.operators * center.wageCentsPerHour,
+            sinceTick: center.wageEffectiveFromTick,
+          },
         ]),
       ),
     },

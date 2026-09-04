@@ -8,6 +8,13 @@ export type PnlSample = {
   carryingCostCents: number;
   /** operator pay (6D); the server's netCents subtracts it, so this must too */
   wageCents: number;
+  /**
+   * Capital charged on this tick (6E) — a lump at the moment of purchase, not
+   * an accrual, which is exactly why the curve steps down: payback is where it
+   * climbs back out. The server subtracts it, so this must too, or the net
+   * curve contradicts the net in the run bar.
+   */
+  capitalSpendCents: number;
 };
 
 export function netCentsOf(sample: PnlSample): number {
@@ -15,7 +22,8 @@ export function netCentsOf(sample: PnlSample): number {
     sample.throughputCents -
     sample.operatingExpenseCents -
     sample.carryingCostCents -
-    sample.wageCents
+    sample.wageCents -
+    sample.capitalSpendCents
   );
 }
 

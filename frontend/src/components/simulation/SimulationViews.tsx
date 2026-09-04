@@ -26,12 +26,12 @@ function ChartCard({ children }: { children: React.ReactNode }) {
 }
 
 type Props = Pick<SimulationPageController,
-  "activeTab" | "changeTab" | "floor" | "loadMetrics" | "metrics" |
+  "actions" | "activeTab" | "changeTab" | "floor" | "loadMetrics" | "metrics" |
   "metricsLoading" | "run" | "salesOrders" | "seriesLoading" | "trend" | "workOrderById"
 >;
 
 export function SimulationViews(props: Props) {
-  const { activeTab, changeTab, floor, loadMetrics, metrics, metricsLoading, run, salesOrders, seriesLoading, trend, workOrderById } = props;
+  const { actions, activeTab, changeTab, floor, loadMetrics, metrics, metricsLoading, run, salesOrders, seriesLoading, trend, workOrderById } = props;
   if (!run) return null;
   return (
     <Tabs value={activeTab} onValueChange={(value) => changeTab(value as ActiveTab)} className="flex min-h-0 flex-1 flex-col gap-3">
@@ -53,7 +53,7 @@ export function SimulationViews(props: Props) {
       </TabsContent>
       <TabsContent value="dashboard" className="flex min-h-0 flex-1 flex-col">
         {metricsLoading ? <Loading label="Loading dashboard…" /> : metrics ? (
-          <RunDashboard metrics={metrics} centers={floor?.workCenters ?? []} salesOrders={salesOrders} tickNum={run.tickNum} dayTicks={run.dayTicks} onWindow={(fromTick, toTick) => loadMetrics(run.id, fromTick, toTick)} />
+          <RunDashboard metrics={metrics} centers={floor?.workCenters ?? []} actions={actions} salesOrders={salesOrders} tickNum={run.tickNum} dayTicks={run.dayTicks} onWindow={(fromTick, toTick) => loadMetrics(run.id, fromTick, toTick)} />
         ) : <p className="text-sm text-muted-foreground">No metrics yet — advance the run to observe some ticks.</p>}
       </TabsContent>
     </Tabs>

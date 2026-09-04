@@ -3,16 +3,22 @@ import {
   accrueCarrying,
   accrueRate,
   materialCostByWorkOrder,
-  rateWindowCents,
   timeExpenseAtTick,
   wagesAtTick,
   wipMaterialValueCents,
   type CostRates,
+  type DatedRate,
 } from "./operatingExpense.js";
 import type { WipPart } from "./types.js";
 
 /** day length is data, so tests use a tiny day and readable numbers */
 const DAY = 10;
+
+/** a rate as it reads for a centre no capital action has touched */
+const dated = (cents: number, sinceTick = 0): DatedRate => ({
+  cents,
+  sinceTick,
+});
 
 const rates = (overrides: Partial<CostRates> = {}): CostRates => ({
   dayTicks: DAY,
@@ -61,22 +67,42 @@ describe("accrueRate", () => {
   it("throws on a negative rate and a zero-length day", () => {
     expect(() => accrueRate(-1, 1, DAY)).toThrow(/negative rate/);
     expect(() => accrueRate(10, 1, 0)).toThrow(/not a day/);
-  });
-});
-
-describe("rateWindowCents", () => {
-  it("equals the loop-sum of per-tick accruals over the window", () => {
-    let loop = 0;
-    for (let t = 4; t <= 27; t++) loop += accrueRate(17, t, DAY);
-    expect(rateWindowCents(17, 4, 27, DAY)).toBe(loop);
+    expect(() => accrueRate(10, 1, DAY, -1)).toThrow(/cannot take effect/);
   });
 
-  it("covers a whole day exactly", () => {
-    expect(rateWindowCents(17, 11, 20, DAY)).toBe(17);
+  it("charges nothing at or before the tick it takes effect", () => {
+    // the run was at tick 40 when the rate changed, so tick 40 belongs to the
+    // old rate and 41 is the new one's first — a naive floor diff would charge
+    // a spurious cent at 40, `Math.floor` rounding a negative share away from
+    // zero
+    expect(accrueRate(17, 40, DAY, 40)).toBe(0);
+    expect(accrueRate(17, 39, DAY, 40)).toBe(0);
+    expect(accrueRate(17, 41, DAY, 40)).toBe(accrueRate(17, 1, DAY));
   });
 
-  it("throws on a backwards window", () => {
-    expect(() => rateWindowCents(17, 5, 4, DAY)).toThrow(/backwards/);
+  it("sums to exactly the rate over a full day measured from its own epoch", () => {
+    let total = 0;
+    for (let t = 41; t <= 40 + DAY; t++) total += accrueRate(17, t, DAY, 40);
+    expect(total).toBe(17);
+  });
+
+  it("re-phases only itself: a dated rate is the undated stream, shifted", () => {
+    // the property the per-rate epoch buys — a purchase at the drill press
+    // cannot perturb the cutter's stream, because each rate counts its own
+    // ticks and nothing consults a shared clock
+    for (let elapsed = 1; elapsed <= 3 * DAY; elapsed++) {
+      expect(accrueRate(17, 40 + elapsed, DAY, 40)).toBe(
+        accrueRate(17, elapsed, DAY),
+      );
+    }
+  });
+
+  it("accrues a pre-6E run byte for byte", () => {
+    // pinned before dating existed: rate 17 over a 10-tick day is 1.7/tick,
+    // so the first day's stream is this and an undated rate must still be it
+    const stream = [];
+    for (let t = 1; t <= DAY; t++) stream.push(accrueRate(17, t, DAY));
+    expect(stream).toEqual([1, 2, 2, 1, 2, 2, 1, 2, 2, 2]);
   });
 });
 
@@ -84,8 +110,8 @@ describe("wagesAtTick", () => {
   it("sums each centre's hourly bill to the cent over a staffed hour", () => {
     const r = rates({
       wageCentsPerHourByWorkCenter: new Map([
-        [10, 1800],
-        [20, 833],
+        [10, dated(1800)],
+        [20, dated(833)],
       ]),
     });
     let total = 0;
@@ -98,8 +124,8 @@ describe("wagesAtTick", () => {
     // rate would pay one at 1800, so mid-hour the two schedules disagree
     const r = rates({
       wageCentsPerHourByWorkCenter: new Map([
-        [10, 1],
-        [20, 1],
+        [10, dated(1)],
+        [20, dated(1)],
       ]),
     });
     let firstHalf = 0;
@@ -114,10 +140,45 @@ describe("wagesAtTick", () => {
     // the whole economics of a second shift
     const r = rates({
       dayTicks: 20,
-      wageCentsPerHourByWorkCenter: new Map([[10, 3600]]),
+      wageCentsPerHourByWorkCenter: new Map([[10, dated(3600)]]),
     });
     expect(wagesAtTick(r, 1)).toBe(1);
     expect(wagesAtTick(r, 15)).toBe(1);
+  });
+
+  it("pays a hire from its own tick, leaving the other centre alone", () => {
+    // the drill press doubles its crew at tick 5000; the cutter's stream must
+    // be identical either side of that, and the drill's new bill must start
+    // accruing at 5001 rather than back-dating half an hour of two operators
+    const before = rates({
+      wageCentsPerHourByWorkCenter: new Map([
+        [10, dated(3600)],
+        [20, dated(1800)],
+      ]),
+    });
+    const after = rates({
+      wageCentsPerHourByWorkCenter: new Map([
+        [10, dated(7200, 5000)],
+        [20, dated(1800)],
+      ]),
+    });
+
+    // one operator is 1c/tick, two are 2c/tick, and the cutter is unmoved
+    expect(wagesAtTick(before, 5001)).toBe(wagesAtTick(before, 4999));
+    expect(wagesAtTick(after, 5001)).toBe(wagesAtTick(before, 5001) + 1);
+    // tick 5000 is the old crew's last: the drill's new rate charges nothing
+    // at its own epoch, while the cutter keeps paying on its untouched clock
+    const cutterOnly = rates({
+      wageCentsPerHourByWorkCenter: new Map([[20, dated(1800)]]),
+    });
+    expect(wagesAtTick(after, 5000)).toBe(wagesAtTick(cutterOnly, 5000));
+
+    // and the hired hour still sums to exactly the new bill
+    let hired = 0;
+    for (let tick = 5001; tick <= 5000 + 3600; tick++) {
+      hired += wagesAtTick(after, tick);
+    }
+    expect(hired).toBe(7200 + 1800);
   });
 });
 
@@ -128,8 +189,8 @@ describe("timeExpenseAtTick", () => {
     // is what makes the total equal any breakdown by construction
     const split = rates({
       standingCostByWorkCenter: new Map([
-        [10, 5],
-        [20, 5],
+        [10, dated(5)],
+        [20, dated(5)],
       ]),
     });
     const combined = rates({ facilityOverheadCentsPerDay: 10 });
@@ -141,8 +202,8 @@ describe("timeExpenseAtTick", () => {
     const config = rates({
       facilityOverheadCentsPerDay: 100,
       standingCostByWorkCenter: new Map([
-        [10, 30],
-        [20, 7],
+        [10, dated(30)],
+        [20, dated(7)],
       ]),
     });
     let total = 0;
@@ -152,6 +213,33 @@ describe("timeExpenseAtTick", () => {
 
   it("charges a free factory nothing", () => {
     expect(timeExpenseAtTick(rates(), 1)).toBe(0);
+  });
+
+  it("charges a bought machine's rent from its own tick onward", () => {
+    // a second machine at centre 10 doubles its rent from tick 20; overhead
+    // and centre 20 are undated and must accrue exactly as they did
+    const bought = rates({
+      facilityOverheadCentsPerDay: 100,
+      standingCostByWorkCenter: new Map([
+        [10, dated(60, 20)],
+        [20, dated(7)],
+      ]),
+    });
+    const untouched = rates({
+      facilityOverheadCentsPerDay: 100,
+      standingCostByWorkCenter: new Map([[20, dated(7)]]),
+    });
+
+    // the day after the purchase charges overhead, centre 20, and both
+    // machines' rent — the whole of each rate, from its own epoch
+    let day = 0;
+    for (let t = 21; t <= 20 + DAY; t++) day += timeExpenseAtTick(bought, t);
+    expect(day).toBe(100 + 7 + 60);
+
+    // and tick 20 itself, the purchase's own tick, is still the old factory
+    expect(timeExpenseAtTick(bought, 20)).toBe(
+      timeExpenseAtTick(untouched, 20),
+    );
   });
 });
 

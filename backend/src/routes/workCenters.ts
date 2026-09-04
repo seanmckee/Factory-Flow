@@ -27,6 +27,17 @@ async function nameTaken(name: string, excludeId?: number): Promise<boolean> {
   return clash !== undefined;
 }
 
+/**
+ * Drops the keys the caller left out. Every field on both bodies is optional
+ * and column defaults cover the rest, so the alternative is a copy per column
+ * — and a new column silently missing from one of the two handlers.
+ */
+function definedFields<T extends object>(body: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(body).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
+
 router.get("/", async (_req, res) => {
   try {
     // without an explicit order Postgres returns heap order, which shifts
@@ -50,23 +61,13 @@ router.post("/", async (req, res) => {
         .json({ message: `A work center named "${body.name}" already exists` });
     }
 
-    // capacity is omitted rather than set to undefined: exactOptionalPropertyTypes
-    // rejects the latter, and omitting it takes the column default of 1
-    const values: {
-      name: string;
-      capacity?: number;
-      standingCostCentsPerDay?: number;
-      wageCentsPerHour?: number;
-    } = { name: body.name };
-    if (body.capacity !== undefined) values.capacity = body.capacity;
-    if (body.standingCostCentsPerDay !== undefined) {
-      values.standingCostCentsPerDay = body.standingCostCentsPerDay;
-    }
-    if (body.wageCentsPerHour !== undefined) {
-      values.wageCentsPerHour = body.wageCentsPerHour;
-    }
-
-    const [created] = await db.insert(workCenters).values(values).returning();
+    // undefined fields are dropped rather than passed through:
+    // exactOptionalPropertyTypes rejects an explicit undefined, and an absent
+    // column takes its default — 1 machine, 1 operator, every rate free
+    const [created] = await db
+      .insert(workCenters)
+      .values({ ...definedFields(body), name: body.name })
+      .returning();
 
     if (!created) {
       return res.status(500).json({ message: "Work center insert failed" });
@@ -93,24 +94,9 @@ router.patch("/:id", async (req, res) => {
         .json({ message: `A work center named "${body.name}" already exists` });
     }
 
-    const updates: {
-      name?: string;
-      capacity?: number;
-      standingCostCentsPerDay?: number;
-      wageCentsPerHour?: number;
-    } = {};
-    if (body.name !== undefined) updates.name = body.name;
-    if (body.capacity !== undefined) updates.capacity = body.capacity;
-    if (body.standingCostCentsPerDay !== undefined) {
-      updates.standingCostCentsPerDay = body.standingCostCentsPerDay;
-    }
-    if (body.wageCentsPerHour !== undefined) {
-      updates.wageCentsPerHour = body.wageCentsPerHour;
-    }
-
     const [updated] = await db
       .update(workCenters)
-      .set(updates)
+      .set(definedFields(body))
       .where(eq(workCenters.id, params.id))
       .returning();
 

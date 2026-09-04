@@ -2,21 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
+  applyCapitalAction,
   createRun,
   deleteRun,
   getRun,
   getRunFloor,
   getRunMetrics,
   getRunTicks,
+  listCapitalActions,
   listRuns,
   releaseWorkOrder,
   unlockRun,
+  type CapitalAction,
+  type CapitalActionKind,
   type Run,
   type RunFloor,
   type RunMetrics,
   type RunSummary,
   type TickSample,
 } from "../api/runs";
+import { CAPITAL_LABELS, formatSpend } from "./capital";
 import { cumulativeThroughput, openingCents } from "./cumulativeThroughput";
 import { netPerTick, openingNetCents } from "./netProfit";
 import { chartBucket, formatTickTime, TICKS_PER_DAY } from "./simTime";
@@ -43,7 +48,7 @@ export type JumpProgress = {
 };
 
 export type ActiveTab = "floor" | "trends" | "dashboard";
-type PendingAction = "create" | "delete" | "release" | null;
+type PendingAction = "create" | "delete" | "release" | "capital" | null;
 
 /** Coordinates the server-backed run while keeping rendering concerns out of the page. */
 export function useSimulationPage() {
@@ -55,6 +60,8 @@ export function useSimulationPage() {
   const [series, setSeries] = useState<TickSample[]>([]);
   const [seriesBucket, setSeriesBucket] = useState(1);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
+  const [actions, setActions] = useState<CapitalAction[]>([]);
+  const [capitalOpen, setCapitalOpen] = useState(false);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -142,6 +149,22 @@ export function useSimulationPage() {
     [report],
   );
 
+  /**
+   * The run's capital log. Deliberately not on the clock's beat: it changes
+   * only when an action is applied, so it loads with the dashboard and again
+   * after each action.
+   */
+  const loadActions = useCallback(
+    async (id: number) => {
+      try {
+        setActions(await listCapitalActions(id));
+      } catch (error) {
+        report(error, "Failed to load the capital log");
+      }
+    },
+    [report],
+  );
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -181,6 +204,7 @@ export function useSimulationPage() {
     setFloor(null);
     setSeries([]);
     setMetrics(null);
+    setActions([]);
     setActiveTab("floor");
   }, []);
 
@@ -336,6 +360,44 @@ export function useSimulationPage() {
     }
   };
 
+  /**
+   * Buys, retires, hires or lets go — the only thing that edits a run's own
+   * frozen config. Waits the clock's beat out and holds `advancing` exactly as
+   * releasing does: all three contend for the same server-side lock, and
+   * colliding would raise the 409 the unlock button exists to cure.
+   */
+  const onCapitalAction = useCallback(
+    async (kind: CapitalActionKind, workCenterId: number) => {
+      if (runId === null) return showToast("Create or select a run first", "error");
+      if (jump) return;
+      setPendingAction("capital");
+      if (!(await awaitIdleClock())) {
+        setPendingAction(null);
+        return showToast("The run is still advancing — try again", "error");
+      }
+      advancing.current = true;
+      try {
+        const applied = await applyCapitalAction(runId, kind, workCenterId);
+        await refresh(runId);
+        await loadActions(runId);
+        const name =
+          floor?.workCenters.find((center) => center.workCenterId === workCenterId)
+            ?.name ?? `WC ${workCenterId}`;
+        showToast(
+          `${CAPITAL_LABELS[kind]} at ${name} — ${formatSpend(applied.spendCents)}, now ${applied.machinesAfter} machine${
+            applied.machinesAfter === 1 ? "" : "s"
+          } / ${applied.operatorsAfter} operator${applied.operatorsAfter === 1 ? "" : "s"}`,
+        );
+      } catch (error) {
+        report(error, "Failed to apply the action");
+      } finally {
+        advancing.current = false;
+        setPendingAction(null);
+      }
+    },
+    [runId, jump, awaitIdleClock, refresh, loadActions, floor, report, showToast],
+  );
+
   const trend = useMemo(() => {
     const history = series.map((sample) => ({ tick: sample.tickNum, cents: sample.throughputCents }));
     const pnlHistory = series.map((sample) => ({
@@ -344,6 +406,7 @@ export function useSimulationPage() {
       operatingExpenseCents: sample.operatingExpenseCents,
       carryingCostCents: sample.carryingCostCents,
       wageCents: sample.wageCents,
+      capitalSpendCents: sample.capitalSpendCents,
     }));
     const cumulative = cumulativeThroughput(history, openingCents(history, run?.throughputCents ?? 0));
     const net = cumulativeThroughput(netPerTick(pnlHistory), openingNetCents(pnlHistory, run?.netCents ?? 0));
@@ -370,14 +433,20 @@ export function useSimulationPage() {
   const changeTab = (next: ActiveTab) => {
     setActiveTab(next);
     if (next === "trends" && runId !== null && run) void loadSeries(runId, run.tickNum);
-    else if (next === "dashboard" && runId !== null && !metrics) void loadMetrics(runId);
+    else if (next === "dashboard" && runId !== null) {
+      if (!metrics) void loadMetrics(runId);
+      void loadActions(runId);
+    }
   };
 
   return {
-    activeTab, changeTab, floor, isLoading, isRunLoading, isRunning, jump,
-    loadMetrics, metrics, metricsLoading, newRunName, newRunOpen, onCreateRun,
+    actions, activeTab, capitalOpen, changeTab, floor, isLoading, isRunLoading,
+    isRunning, jump,
+    loadMetrics, metrics, metricsLoading, newRunName, newRunOpen, onCapitalAction,
+    onCreateRun,
     onDeleteRun, onRelease, pendingAction, releasableOrders, run, runId, runs,
-    runJump, salesOrders, selectRun, selectedOrderId, seriesLoading, setIsRunning,
+    runJump, salesOrders, selectRun, selectedOrderId, seriesLoading, setCapitalOpen,
+    setIsRunning,
     setNewRunName, setNewRunOpen, setSelectedOrderId, setStopping, stopping,
     stopJumpRef, trend, workOrderById,
   };

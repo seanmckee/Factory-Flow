@@ -34,7 +34,8 @@ async function seed() {
   // the drill press moves ~60 units/day (28800 ticks / 480s, less a 600-tick
   // changeover per work order). At one shift a staffed day costs ~$1,894 -
   // $1,350/day of standing costs + overhead plus ~$544 of wages (6 operators,
-  // one per machine until 6E, 8 staffed hours). A bracket drill-day earns
+  // one apiece, 8 staffed hours; standing cost is per machine since 6E, and
+  // every centre starts with one). A bracket drill-day earns
   // ~$2,900 of margin - profitable while the constraint is fed, loss-making
   // idle - while a flange-only day earns ~$1,680: below the staffed-day line
   // but far above zero, so flanges are worth running once staffed yet can't
@@ -47,15 +48,84 @@ async function seed() {
     shifts: 1,
   });
 
+  // Capital prices (6E) follow one rule each, so they stay explainable when
+  // the rates above are retuned: a machine costs **four days of its own
+  // standing cost** to buy and returns **half of that** as salvage (so
+  // churning one costs half its value - the model punishes indecision rather
+  // than rewarding fiddling), and hiring an operator costs **two staffed days
+  // of that operator's wage**.
+  //
+  // The number that matters is the drill press at $1,200. One press runs the
+  // ~170-unit book below in ~2.9 drill-days; two run it in ~1.5, the cutter
+  // binding next at ~120 brackets/day. So the whole prize is the ~$1,900/day
+  // of standing cost, overhead and wages that the compression avoids, less the
+  // second press's own ~$444/day - which pays for a $1,200 press with room to
+  // spare **if it is bought early**, and loses outright bought on day 2 with
+  // the book nearly chewed. A finite book is the other half of the lesson:
+  // capacity beyond the market is not throughput.
   const insertedWorkCenters = await db
     .insert(workCenters)
     .values([
-      { name: "Raw Material", capacity: 1, standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
-      { name: "Cutter", capacity: 1, standingCostCentsPerDay: 15_000, wageCentsPerHour: 1200 },
-      { name: "Drill Press", capacity: 1, standingCostCentsPerDay: 30_000, wageCentsPerHour: 1800 },
-      { name: "Deburr", capacity: 1, standingCostCentsPerDay: 10_000, wageCentsPerHour: 1000 },
-      { name: "Inspection", capacity: 1, standingCostCentsPerDay: 10_000, wageCentsPerHour: 1200 },
-      { name: "Packaging", capacity: 1, standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
+      {
+        name: "Raw Material",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 5_000,
+        wageCentsPerHour: 800,
+        machinePurchaseCents: 20_000,
+        machineSalvageCents: 10_000,
+        operatorHireCents: 12_800,
+      },
+      {
+        name: "Cutter",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 15_000,
+        wageCentsPerHour: 1200,
+        machinePurchaseCents: 60_000,
+        machineSalvageCents: 30_000,
+        operatorHireCents: 19_200,
+      },
+      {
+        name: "Drill Press",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 30_000,
+        wageCentsPerHour: 1800,
+        machinePurchaseCents: 120_000,
+        machineSalvageCents: 60_000,
+        operatorHireCents: 28_800,
+      },
+      {
+        name: "Deburr",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 10_000,
+        wageCentsPerHour: 1000,
+        machinePurchaseCents: 40_000,
+        machineSalvageCents: 20_000,
+        operatorHireCents: 16_000,
+      },
+      {
+        name: "Inspection",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 10_000,
+        wageCentsPerHour: 1200,
+        machinePurchaseCents: 40_000,
+        machineSalvageCents: 20_000,
+        operatorHireCents: 19_200,
+      },
+      {
+        name: "Packaging",
+        capacity: 1,
+        operators: 1,
+        standingCostCentsPerDay: 5_000,
+        wageCentsPerHour: 800,
+        machinePurchaseCents: 20_000,
+        machineSalvageCents: 10_000,
+        operatorHireCents: 12_800,
+      },
     ])
     .returning();
 

@@ -51,7 +51,8 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   its status and serialise. Routes
   are `POST /api/runs` (optionally overriding the facility-level cost rates it
   freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
-  frozen throughput, operating expense, carrying cost, `netCents` — the score,
+  frozen throughput, operating expense, carrying cost, wages, capital spend,
+  `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
   same P&L windowed, plus `onTimeDelivery`, its per-order breakdown
   `salesOrderDelivery`, and `scrap` — count and frozen material cents,
@@ -59,8 +60,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   any of these, since the whole-run `/metrics` already answers them),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
-  grid aligned to absolute ticks),
+  grid aligned to absolute ticks; `capitalSpendCents` is joined onto the tick
+  or bucket that contains the action, in JS),
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
+  actions — one endpoint with a discriminating `kind` of `buy_machine` /
+  `retire_machine` / `hire_operator` / `fire_operator`, rather than four
+  routes, because the agent's tool layer wants one verb it can parameterise;
+  it takes the run's lock, so it 409s mid-advance exactly as a release does,
+  and the money it charges is the run's **frozen** price, never the caller's
+  number),
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
   at roughly 500 ticks a second; a caller that wants more calls again, since a
@@ -85,11 +94,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - The nine `run_*` / `simulation_runs` tables are one run's history;
   everything above them in `schema.ts` is the shared factory definition.
   **The invariant: once a run exists, the engine reads that run's own config —
-  `run_work_centers` for capacity and standing cost, `run_work_order_steps` for
+  `run_work_centers` for machines, operators, standing cost, wages and the
+  capital prices, `run_work_order_steps` for
   steps, `simulation_runs` for the facility rates and `day_ticks` — and never
   `work_centers`, `routing_steps` or `factory_settings` again.** That is what lets two runs
   disagree about the drill press, and what makes forking a copy rather than a
-  versioning scheme. Steps are pinned per **work order** at release, so editing
+  versioning scheme. Since 6E that frozen config has exactly one **writer**:
+  a capital action, which charges the run's frozen price, re-dates the rate it
+  moved and appends a `run_capital_actions` row. It is still never re-read from
+  the live tables — buying a machine in one run leaves every other run, and the
+  factory, alone. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
   already halfway through a route.
 - History cascades from `simulation_runs`, and references out to the shared
@@ -129,16 +143,23 @@ day is `shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` ×
 run as `simulation_runs.day_ticks`. Per-day rates are entered per true 24h
 calendar day and amortized over the
 day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
-simply isn't ticks. Four costs, and the rules per kind:
+simply isn't ticks. Five costs, and the rules per kind:
 
 - **Time-based expense** (facility overhead + per-centre standing cost) is a
-  pure function of the tick number — `floor(t·r/D) − floor((t−1)·r/D)` — so
-  batch splitting needs no cursor and a full day sums to exactly the rate.
+  pure function of the tick number — `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`
+  — so batch splitting needs no cursor and a full day sums to exactly the rate.
   It is accrued **per rate and then summed**, never on the summed rate: floor
   diffs on a combined rate disagree with the summed breakdown mid-day, and the
   stored tick total must equal any per-centre breakdown by construction (the
   same principle as `calculateThroughput` being the sum of
   `creditFinishedParts`).
+  `t₀` is the tick the rate took effect (`DatedRate.sinceTick`), which 6E's
+  capital actions move: a rate charges from `t₀ + 1` onward, each segment
+  accruing exactly the floor of its own duration, and `t₀ = 0` — every rate no
+  action has touched — is the original arithmetic byte for byte. The epoch is
+  **per rate**, so buying a machine at the drill press re-phases that centre's
+  rent and nothing else's. Because an action takes the run's lock, a batch
+  never spans a change.
 - **Carrying cost** (basis points of on-floor material value per day) is the
   one true accumulator, since it depends on what sat on the floor: a fold over
   `cents · bps` numerator units with a remainder in `[0, 10000·day_ticks)`,
@@ -152,21 +173,40 @@ simply isn't ticks. Four costs, and the rules per kind:
   second shift doubles a day's wage bill while amortizing the same rent —
   which is the entire economics of adding one. The rate is
   `work_centers.wage_cents_per_hour` per operator, frozen into
-  `run_work_centers`; operators = capacity until 6E's explicit column, and
+  `run_work_centers` alongside `operators` (6E's explicit column; the migration
+  backfilled it to the machine count, which is what it meant before), and
   `loadRunState` pre-multiplies so the engine (`wagesAtTick`) sums per-centre
   rates without knowing about operators. Its own frozen tick column
   (`run_ticks.wage_cents`) and its own P&L line —
-  `netCents = throughput − OE − carrying − wages` — because the wages-vs-rent
+  `netCents = throughput − OE − carrying − wages − capital` — because the
+  wages-vs-rent
   split is what a shift decision is about. There is deliberately no overtime
-  yet: overtime is an *authorization*, a mid-run action on frozen config,
-  which is 6E's territory.
+  yet: overtime's whole economic identity is its **premium**, and priced at the
+  normal wage it costs what a temp's hour costs while needing no hiring, so it
+  would dominate both the shifts setting and 6E's hire/fire. It waits for 6F
+  along with mid-run shift changes, which need a non-uniform calendar day.
+- **Capital spend (6E)** is the one cost that is *not* an accrual: buying a
+  machine or hiring an operator charges a lump at the tick the action lands,
+  frozen on an append-only `run_capital_actions` row (salvage from a
+  retirement is a **negative** spend, so the line is one sum over one column).
+  Amortizing it was rejected on timescale: a realistic five-year machine life
+  is ~$11/day against a ~$1,900/day factory, so a purchase would be free
+  inside the days a run spans and "always buy" would be right every time —
+  the degenerate objective 6A exists to prevent. A lump also makes payback
+  readable straight off the net curve, and keeps amortization layerable later
+  off the frozen column, the 6B/6C pattern. There is **no cash balance**: a
+  run cannot be refused a purchase for want of funds, and net simply goes
+  further negative.
 - **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
   `carrying_cost_cents` / `wage_cents` and every P&L read sums them — never
   re-derives from
   rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
   finished run spent. Per-centre expense over a window is deliberately *not*
-  served: `rate × window` is only valid while rates are constant per run,
-  which 6E breaks.
+  served: `rate × window` is only valid while rates are constant per run, and
+  6E broke that — which is also why `rateWindowCents`, the telescoped
+  O(1) window 6A.2 built for a read that was never served, is **deleted**
+  rather than dated. A window can span a rate change, so the telescope no
+  longer holds, and summing the frozen tick column is the only honest answer.
 
 Two rules the port established, and both matter to how failures surface:
 
@@ -256,16 +296,25 @@ advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
 
 `simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
-`wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
+`wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry **per work
+center in
 the map, idle ones included**. `busy` counts machines, not parts. This is
 emitted rather than derived afterwards because a part that finished during the
 tick held a machine for all of it and is gone from `wipParts` by the time
 anything could look — so a centre's busiest ticks are exactly what a post-tick
-snapshot undercounts. Keep the list total: `aggregateMetrics` in `metrics.ts`
-reduces a window of these to utilization (busy machine-ticks ÷ capacity ×
-observed ticks), queue depth and WIP, and per-centre `observedTicks` is the
-denominator so a work center created mid-run isn't reported idle for time it
-did not exist.
+snapshot undercounts. `capacity` is emitted for the same reason since 6E: it is
+the **effective** capacity the tick admitted against (`min(machines,
+operators)`, taken at the load boundary so the engine never learns what an
+operator is), and a capital action moves it mid-run, so the observation has to
+carry its own denominator. Keep the list total: `aggregateMetrics` in
+`metrics.ts` reduces a window of these to utilization (busy machine-ticks ÷
+**summed capacity-ticks**, reported as `capacityTicks`), queue depth and WIP.
+Per-centre `observedTicks` is what makes that denominator right rather than
+being it — a work center created mid-run isn't reported idle for time it did
+not exist — and a centre retired to no machines contributes no capacity-ticks,
+so it reads 0 instead of dividing by zero. Stored observations from before 6E
+have a null `capacity` column and fall back to the run's frozen capacity,
+which is exactly what it was throughout a run that could not change it.
 
 Cycle time comes from the other series: `WipPart` carries `releasedAtTick` for
 its whole life and `finish()` copies it onto the `FinishedPart`, so
@@ -303,8 +352,14 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 **The frontend has no engine.** It was deleted when the page switched over;
 `src/simulation/` holds only pure, unit-tested chart/display transforms —
 `cumulativeThroughput.ts` (+ `openingCents`), `netProfit.ts`,
-`throughputRate.ts` (`trailingRate`), `standingCost.ts` and `simTime.ts`
-(day/time/duration formatting, `chartBucket`). Don't reintroduce simulation
+`throughputRate.ts` (`trailingRate`), `capital.ts` (action labels and
+`formatSpend`) and `simTime.ts`
+(day/time/duration formatting, `chartBucket`). `standingCost.ts`
+(`windowStandingCostCents`) is **deleted**: it derived a per-centre cost as
+rate × observed ticks ÷ `dayTicks`, and 6E made the rate per *machine* with
+the machine count itself movable mid-window, so the figure was wrong twice
+over. `capacityTicks` is not a substitute — rent is owed on machines whether
+or not anyone staffs them, and capacity-ticks count staffed ones. Don't reintroduce simulation
 logic here — the backend owns it, and two copies drifted badly the one time
 they coexisted.
 
@@ -384,18 +439,33 @@ clock's beat: it reads and aggregates every tick row, per-centre row and
 finished part in the window. The window label comes from the *response*, so a
 dashboard left over from an earlier window states what it covers rather than
 misleading — the ledger's own case is a centre reading 10% utilization over a
-run and 52% over the ticks it worked. Work-centre *names, frozen
-capacities and frozen standing rates* come off `/floor`, since `/metrics`
+run and 52% over the ticks it worked. Work-centre *names, machines, operators and the frozen
+rates and prices* come off `/floor`, since `/metrics`
 carries ids and a run keeps no copy of the names — the Deliveries table's
-client-side join to `GET /api/sales-orders` is the same pattern. The table's Standing cost
-column is derived client-side (`windowStandingCostCents`: rate × observed
-ticks ÷ `dayTicks`) — display-only, the summed tick columns are the ledger,
-and the gap between the column's sum and the opex card is facility overhead.
-The window line shows ≈ days via the run's frozen `dayTicks`
+client-side join to `GET /api/sales-orders` is the same pattern. Its Machines
+and Operators columns are therefore **current config, not window figures**,
+and the operator count reads in the `starved` tone when it differs from the
+machine count: one of the two is being paid for and not used. Beside them sit
+`busyMachineTicks` and `capacityTicks`, the utilization fraction's own two
+halves. Below the deliveries, the **capital log** (`GET /:id/actions`) lists
+every action whole-run with what it cost and the config it produced —
+whole-run on purpose, since an action is a decision taken at a tick, not a
+rate over a window, and reading it against the window containing it is the
+point. The window line shows ≈ days via the run's frozen `dayTicks`
 (`simTime.ts`, 28,800 fallback).
 
+Capital actions live in a **dialog** off the transport bar, not in more bar
+controls: buying is a whole-factory question, so what answers it is the table
+showing every centre's machines, operators, rent, wages and prices at once,
+with the short side of `min(machines, operators)` called out. Applying one
+waits the clock's beat out and holds the `advancing` ref exactly as releasing
+does — all three contend for the same server lock — and the buttons are
+disabled during a jump, which holds it outright. Prices shown are the run's
+**frozen** ones off `/floor`, so a price edited in setup after the run started
+neither changes the quote nor what the server charges.
+
 The page is two persistent control bars (run picking/creation, then
-transport: clock, release, fast-forward) over three tabs — **Floor**,
+transport: clock, release, capital, fast-forward) over three tabs — **Floor**,
 **Trends**, **Dashboard** — named by view shape (a snapshot of now, series
 over time, an aggregate over a window), because "Throughput" stopped being an
 honest tab name once rate and WIP moved in and "Metrics" overlapped it —
@@ -403,16 +473,20 @@ throughput is itself a metric. Every control stays on screen. The floor is
 `WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
 order — the floor redraws every tick, so the queue signal is the badge and the
 Waiting column, never the row order; the Trends tab reads `GET /:id/ticks` once
-and derives its four series from it (see the chart pipeline below). The table shows the run's **frozen** capacity
+and derives its four series from it (see the chart pipeline below). The table shows the run's **frozen effective** capacity
 read-only — editing the live work center would change nothing about a run
-already created — and no "% utilized", which was `slotsInUse / capacity` and
+already created, and capital actions are the way a run's own capacity moves —
+with an unstaffed machine (or an operator with no machine) called out beside
+the slot count rather than hidden behind a smaller number. There is no
+"% utilized", which was `slotsInUse / capacity` and
 could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 
 Throughput is measured in **cents**, not parts, and since Track 6A it is only
-half the score: a run's `netCents` is throughput minus operating expense minus
-carrying cost, computed at read time from frozen columns on both sides. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
+half the score: a run's `netCents` is throughput minus operating expense,
+carrying cost, wages and capital spend, computed at read time from frozen
+columns on every side. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
 The Trends tab is **one chart on one clock** (`TrendsChart`; the per-series
 `TickSeriesChart` wrapper is deleted) drawing four series from one
@@ -492,6 +566,17 @@ own task.
 Ordered-list editing lives in `src/setup/routingSteps.ts` — `moveStep`,
 `removeStep`, `parseSteps`, `toDrafts` — pure functions unit-tested like the
 simulation engine, with `StepEditor` as the shared UI over them.
+
+`src/setup/workCenterFields.ts` is the same idea for the work-centre editor's
+seven numeric columns: a spec (`WORK_CENTER_FIELDS`) driving the create
+dialog's fields, the draft seeding, the parse and the changed-column diff, all
+pure and tested. It exists because the page previously declared, validated and
+diffed each field by hand, and at seven the failure mode is silent — add a
+column and forget it in the commit, and the input edits nothing. The **table
+cells stay explicit** at the call site, which is what the
+tables-aren't-data-driven convention is actually about: bespoke cells, not
+bespoke plumbing. `count` fields are whole numbers, `money` fields are typed
+in dollars and sent as cents through `dollarsToCents`.
 
 ## Styling
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import type { CostRates } from "./operatingExpense.js";
+import type { CostRates, DatedRate } from "./operatingExpense.js";
 import { unitDraw } from "./sampleProcessTime.js";
 import { simulateBatch, type RunState } from "./simulateBatch.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
@@ -25,6 +25,12 @@ const part = (id: string, overrides: Partial<WipPart> = {}): WipPart => ({
   progressSeconds: 0,
   actualProcessTimeSeconds: 5,
   ...overrides,
+});
+
+/** a rate as it reads for a centre no capital action has touched */
+const dated = (cents: number, sinceTick = 0): DatedRate => ({
+  cents,
+  sinceTick,
 });
 
 /** a free factory: every rate zero, so pre-expense tests are unchanged */
@@ -83,8 +89,8 @@ describe("simulateBatch", () => {
   it("reports every work center every tick, idle ones included", () => {
     const batch = simulateBatch(state({ wipParts: [part("p1")] }), 1);
     expect(batch.ticks[0]?.workCenters).toEqual([
-      { workCenterId: 10, busy: 1, queued: 0 },
-      { workCenterId: 20, busy: 0, queued: 0 },
+      { workCenterId: 10, busy: 1, queued: 0, capacity: 1 },
+      { workCenterId: 20, busy: 0, queued: 0, capacity: 1 },
     ]);
   });
 
@@ -526,6 +532,51 @@ describe("simulateBatch operating expense", () => {
     }
   });
 
+  it("splits identically across a rate dated mid-batch", () => {
+    // a capital action takes the run's lock, so a real batch never *spans* a
+    // change — but the accrual must stay a pure function of the tick number
+    // for chunking to be safe at all, and a rate whose epoch falls inside the
+    // batch is the sharpest test of that: nothing carries the segment across
+    // a boundary, the tick number alone decides.
+    const withDated = () =>
+      state({
+        wipParts: [part("p1"), part("p2", { unitIndex: 1 })],
+        costs: costs({
+          facilityOverheadCentsPerDay: 17,
+          wipCarryingBpsPerDay: 333,
+          standingCostByWorkCenter: new Map([[10, dated(60, 14)]]),
+          wageCentsPerHourByWorkCenter: new Map([[10, dated(7200, 14)]]),
+        }),
+      });
+
+    const once = simulateBatch(withDated(), 30);
+
+    let carried = withDated();
+    const chunks = [];
+    for (let i = 0; i < 3; i++) {
+      const batch = simulateBatch(carried, 10);
+      chunks.push(batch);
+      carried = {
+        ...carried,
+        tickNum: batch.tickNum,
+        wipParts: batch.wipParts,
+        priorCounts: batch.priorCounts,
+        carryRemainder: batch.carryRemainder,
+      };
+    }
+
+    expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+    expect(chunks.at(-1)?.carryRemainder).toBe(once.carryRemainder);
+    // and the dated rates really did start mid-run: nothing before tick 15
+    const before = once.ticks.filter((tick) => tick.tickNum <= 14);
+    expect(before.every((tick) => tick.wageCents === 0)).toBe(true);
+    expect(
+      once.ticks
+        .filter((tick) => tick.tickNum > 14)
+        .some((tick) => tick.wageCents > 0),
+    ).toBe(true);
+  });
+
   it("is the same run whether advanced in one batch or several, at nonzero rates", () => {
     // the zero-rate variant above can't see a dropped or double-counted
     // remainder; 333 bps over 1200c leaves one non-zero at every boundary
@@ -536,12 +587,12 @@ describe("simulateBatch operating expense", () => {
           facilityOverheadCentsPerDay: 17,
           wipCarryingBpsPerDay: 333,
           standingCostByWorkCenter: new Map([
-            [10, 7],
-            [20, 5],
+            [10, dated(7)],
+            [20, dated(5)],
           ]),
           wageCentsPerHourByWorkCenter: new Map([
-            [10, 7],
-            [20, 11],
+            [10, dated(7)],
+            [20, dated(11)],
           ]),
         }),
       });
@@ -589,8 +640,8 @@ describe("simulateBatch operating expense", () => {
         costs: costs({
           facilityOverheadCentsPerDay: 100,
           standingCostByWorkCenter: new Map([
-            [10, 33],
-            [20, 9],
+            [10, dated(33)],
+            [20, dated(9)],
           ]),
         }),
       }),
@@ -606,8 +657,8 @@ describe("simulateBatch operating expense", () => {
       state({
         costs: costs({
           wageCentsPerHourByWorkCenter: new Map([
-            [10, 100],
-            [20, 33],
+            [10, dated(100)],
+            [20, dated(33)],
           ]),
         }),
       }),

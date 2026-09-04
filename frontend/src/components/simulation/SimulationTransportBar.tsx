@@ -1,19 +1,24 @@
-import { LoaderCircle, Play, Square } from "lucide-react";
+import { Factory, LoaderCircle, Play, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { JUMP_PRESETS, type SimulationPageController } from "../../simulation/useSimulationPage";
+import { TICKS_PER_DAY } from "../../simulation/simTime";
+import { CapitalDialog } from "./CapitalDialog";
 
 type Props = Pick<SimulationPageController,
-  "isRunning" | "jump" | "onRelease" | "pendingAction" | "releasableOrders" |
-  "runId" | "runJump" | "selectedOrderId" | "setIsRunning" | "setSelectedOrderId" |
+  "capitalOpen" | "floor" | "isRunning" | "jump" | "onCapitalAction" |
+  "onRelease" | "pendingAction" | "releasableOrders" |
+  "run" | "runId" | "runJump" | "selectedOrderId" | "setCapitalOpen" |
+  "setIsRunning" | "setSelectedOrderId" |
   "setStopping" | "stopping" | "stopJumpRef"
 >;
 
 export function SimulationTransportBar(props: Props) {
-  const { isRunning, jump, onRelease, pendingAction, releasableOrders, runId,
-    runJump, selectedOrderId, setIsRunning, setSelectedOrderId, setStopping,
-    stopping, stopJumpRef } = props;
+  const { capitalOpen, floor, isRunning, jump, onCapitalAction, onRelease,
+    pendingAction, releasableOrders, run, runId,
+    runJump, selectedOrderId, setCapitalOpen, setIsRunning, setSelectedOrderId,
+    setStopping, stopping, stopJumpRef } = props;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
       <Button size="sm" variant={isRunning ? "secondary" : "default"} onClick={() => setIsRunning((previous) => !previous)} disabled={runId === null || jump !== null}>
@@ -34,6 +39,13 @@ export function SimulationTransportBar(props: Props) {
         {pendingAction === "release" ? "Releasing…" : "Release Order"}
       </Button>
       <div className="h-6 w-px bg-border" />
+      {/* a dialog, not more controls in the bar: buying is a whole-factory
+          question, so it needs the table that shows which centre is short */}
+      <Button size="sm" variant="secondary" onClick={() => setCapitalOpen(true)} disabled={runId === null || jump !== null}>
+        {pendingAction === "capital" ? <LoaderCircle className="size-4 animate-spin" /> : <Factory className="size-4" />}
+        Capital
+      </Button>
+      <div className="h-6 w-px bg-border" />
       <span className="text-xs text-muted-foreground">Fast-forward</span>
       {JUMP_PRESETS.map((preset) => (
         <Button key={preset.label} size="sm" variant="outline" className="tabular-nums" onClick={() => void runJump(preset.ticks, preset.label.slice(1))} disabled={runId === null || jump !== null}>
@@ -50,6 +62,16 @@ export function SimulationTransportBar(props: Props) {
           </Button>
         </div>
       )}
+      <CapitalDialog
+        open={capitalOpen}
+        onOpenChange={setCapitalOpen}
+        centers={floor?.workCenters ?? []}
+        dayTicks={run?.dayTicks ?? TICKS_PER_DAY}
+        capitalSpendCents={run?.capitalSpendCents ?? 0}
+        onAction={(kind, workCenterId) => void onCapitalAction(kind, workCenterId)}
+        pending={pendingAction === "capital"}
+        disabled={jump !== null}
+      />
     </div>
   );
 }
