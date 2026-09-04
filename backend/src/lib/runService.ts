@@ -14,11 +14,13 @@ import {
   workCenters,
   workOrders,
 } from "../db/schema.js";
+import { TICKS_PER_DAY } from "../simulation/operatingExpense.js";
 import {
   PROCESS_TIME_DEVIATION,
   sampleProcessTime,
 } from "../simulation/sampleProcessTime.js";
 import { simulateBatch } from "../simulation/simulateBatch.js";
+import { getFactorySettings } from "./factorySettings.js";
 import { HttpError } from "./httpError.js";
 import { loadRunState, type RunRow } from "./runState.js";
 
@@ -95,21 +97,49 @@ async function withRunLock<T>(
   }
 }
 
+export type CreateRunOverrides = {
+  facilityOverheadCentsPerDay?: number;
+  wipCarryingBpsPerDay?: number;
+};
+
 /**
- * Creates a run and freezes the factory's capacities into it. From here on the
- * run reads `run_work_centers`, never `work_centers`, so editing a centre's
- * capacity leaves this run — and every run already created — alone.
+ * Creates a run and freezes the factory's config into it: capacities and
+ * standing costs per centre, the facility-level rates, and the day length.
+ * From here on the run reads its own copies, never `work_centers` or
+ * `factory_settings`, so editing a rate leaves this run — and every run
+ * already created — alone. The overrides replace the facility-level rates
+ * only; per-centre rates are 6E's capital-actions territory.
  */
-export async function createRun(name: string, rngSeed: number): Promise<RunRow> {
+export async function createRun(
+  name: string,
+  rngSeed: number,
+  overrides: CreateRunOverrides = {},
+): Promise<RunRow> {
+  // upsert-then-read is idempotent, so it can sit outside the transaction
+  const settings = await getFactorySettings();
+
   return db.transaction(async (tx) => {
     const [run] = await tx
       .insert(simulationRuns)
-      .values({ name, rngSeed })
+      .values({
+        name,
+        rngSeed,
+        dayTicks: TICKS_PER_DAY,
+        facilityOverheadCentsPerDay:
+          overrides.facilityOverheadCentsPerDay ??
+          settings.facilityOverheadCentsPerDay,
+        wipCarryingBpsPerDay:
+          overrides.wipCarryingBpsPerDay ?? settings.wipCarryingBpsPerDay,
+      })
       .returning();
     if (!run) throw new HttpError(500, "Run insert failed");
 
     const centers = await tx
-      .select({ id: workCenters.id, capacity: workCenters.capacity })
+      .select({
+        id: workCenters.id,
+        capacity: workCenters.capacity,
+        standingCostCentsPerDay: workCenters.standingCostCentsPerDay,
+      })
       .from(workCenters);
 
     if (centers.length > 0) {
@@ -118,6 +148,7 @@ export async function createRun(name: string, rngSeed: number): Promise<RunRow> 
           runId: run.id,
           workCenterId: center.id,
           capacity: center.capacity,
+          standingCostCentsPerDay: center.standingCostCentsPerDay,
         })),
       );
     }
@@ -251,6 +282,10 @@ export type AdvanceResult = {
   tickNum: number;
   ticksAdvanced: number;
   throughputCents: number;
+  /** standing costs + facility overhead over the advance, summed like throughput */
+  operatingExpenseCents: number;
+  /** the holding charge over the advance */
+  carryingCostCents: number;
   /**
    * Parts still on the floor when the advance stopped. Reported so a caller
    * advancing until the run goes idle can terminate on the advance itself
@@ -278,6 +313,8 @@ export async function advanceRun(
   return withRunLock(runId, async (run) => {
     let state = await loadRunState(run);
     let throughputCents = 0;
+    let operatingExpenseCents = 0;
+    let carryingCostCents = 0;
 
     for (let remaining = ticks; remaining > 0; ) {
       const size = Math.min(remaining, TICKS_PER_BATCH);
@@ -325,6 +362,8 @@ export async function advanceRun(
               tickNum: tick.tickNum,
               throughputCents: tick.throughputCents,
               wipCount: tick.wipCount,
+              operatingExpenseCents: tick.operatingExpenseCents,
+              carryingCostCents: tick.carryingCostCents,
             })),
           );
         }
@@ -345,19 +384,21 @@ export async function advanceRun(
 
         await tx
           .update(simulationRuns)
-          .set({ tickNum: batch.tickNum })
+          .set({ tickNum: batch.tickNum, carryRemainder: batch.carryRemainder })
           .where(eq(simulationRuns.id, runId));
       });
 
-      throughputCents += batch.ticks.reduce(
-        (sum, tick) => sum + tick.throughputCents,
-        0,
-      );
+      for (const tick of batch.ticks) {
+        throughputCents += tick.throughputCents;
+        operatingExpenseCents += tick.operatingExpenseCents;
+        carryingCostCents += tick.carryingCostCents;
+      }
       state = {
         ...state,
         tickNum: batch.tickNum,
         wipParts: batch.wipParts,
         priorCounts: batch.priorCounts,
+        carryRemainder: batch.carryRemainder,
       };
       remaining -= size;
     }
@@ -366,6 +407,8 @@ export async function advanceRun(
       tickNum: state.tickNum,
       ticksAdvanced: ticks,
       throughputCents,
+      operatingExpenseCents,
+      carryingCostCents,
       wipCount: state.wipParts.length,
     };
   });

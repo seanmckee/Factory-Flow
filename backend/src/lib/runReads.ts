@@ -58,8 +58,13 @@ function tickWindow(
 export type RunSummary = RunRow & {
   wipCount: number;
   finishedCount: number;
-  /** every unit's frozen throughput, summed — the run's score so far */
+  /** every unit's frozen throughput, summed */
   throughputCents: number;
+  /** every tick's frozen expense, summed — never re-derived from rates */
+  operatingExpenseCents: number;
+  carryingCostCents: number;
+  /** throughput − operating expense − carrying: the run's score, and it can go negative */
+  netCents: number;
   releasedOrders: {
     workOrderId: number;
     routingId: number;
@@ -72,9 +77,11 @@ export async function listRuns(): Promise<RunRow[]> {
 }
 
 /**
- * A run and the counts that say where it got to. The money is summed from the
- * frozen per-unit columns rather than from `run_ticks`, so it stays the same
- * figure the finished parts justify.
+ * A run and the counts that say where it got to. The money is summed from
+ * frozen columns — throughput from the per-unit credits rather than from
+ * `run_ticks`, so it stays the same figure the finished parts justify, and
+ * expense from the per-tick cents, so a rate edit (or 6E capital action)
+ * cannot rewrite what a run already spent.
  */
 export async function getRun(runId: number): Promise<RunSummary> {
   const [run] = await db
@@ -93,6 +100,14 @@ export async function getRun(runId: number): Promise<RunSummary> {
     .from(runFinishedParts)
     .where(eq(runFinishedParts.runId, runId));
 
+  const [expense] = await db
+    .select({
+      operatingExpenseCents: sum(runTicks.operatingExpenseCents),
+      carryingCostCents: sum(runTicks.carryingCostCents),
+    })
+    .from(runTicks)
+    .where(eq(runTicks.runId, runId));
+
   const releasedOrders = await db
     .select({
       workOrderId: runReleasedOrders.workOrderId,
@@ -103,12 +118,19 @@ export async function getRun(runId: number): Promise<RunSummary> {
     .where(eq(runReleasedOrders.runId, runId))
     .orderBy(runReleasedOrders.workOrderId);
 
+  // sum() is null over no rows, and arrives as a string from the driver
+  const throughputCents = Number(finished?.throughputCents ?? 0);
+  const operatingExpenseCents = Number(expense?.operatingExpenseCents ?? 0);
+  const carryingCostCents = Number(expense?.carryingCostCents ?? 0);
+
   return {
     ...run,
     wipCount: Number(wip?.count ?? 0),
     finishedCount: Number(finished?.count ?? 0),
-    // sum() is null over no rows, and arrives as a string from the driver
-    throughputCents: Number(finished?.throughputCents ?? 0),
+    throughputCents,
+    operatingExpenseCents,
+    carryingCostCents,
+    netCents: throughputCents - operatingExpenseCents - carryingCostCents,
     releasedOrders,
   };
 }
@@ -117,6 +139,10 @@ export type RunMetrics = {
   fromTick: number;
   toTick: number;
   throughputCents: number;
+  /** the window's frozen per-tick expense, summed like its throughput */
+  operatingExpenseCents: number;
+  carryingCostCents: number;
+  netCents: number;
   flow: MetricsAggregate;
   cycleTime: CycleTimeAggregate;
 };
@@ -205,10 +231,26 @@ export async function getRunMetrics(
     workCenters: centersByTick.get(row.tickNum) ?? [],
   }));
 
+  const throughputCents = tickRows.reduce(
+    (total, row) => total + row.throughputCents,
+    0,
+  );
+  const operatingExpenseCents = tickRows.reduce(
+    (total, row) => total + row.operatingExpenseCents,
+    0,
+  );
+  const carryingCostCents = tickRows.reduce(
+    (total, row) => total + row.carryingCostCents,
+    0,
+  );
+
   return {
     fromTick: from,
     toTick: to,
-    throughputCents: tickRows.reduce((sum, row) => sum + row.throughputCents, 0),
+    throughputCents,
+    operatingExpenseCents,
+    carryingCostCents,
+    netCents: throughputCents - operatingExpenseCents - carryingCostCents,
     flow: aggregateMetrics(
       series,
       new Map(
@@ -232,7 +274,12 @@ export async function getRunMetrics(
 export type RunFloor = {
   tickNum: number;
   wipCount: number;
-  workCenters: (WorkCenterFloorView & { name: string; capacity: number })[];
+  workCenters: (WorkCenterFloorView & {
+    name: string;
+    capacity: number;
+    /** frozen, like capacity — what this run's centre costs per calendar day */
+    standingCostCentsPerDay: number;
+  })[];
 };
 
 /**
@@ -271,6 +318,8 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       ...center,
       name: names.get(center.workCenterId) ?? `Work center ${center.workCenterId}`,
       capacity: state.workCenters.get(center.workCenterId)?.capacity ?? 0,
+      standingCostCentsPerDay:
+        state.costs.standingCostByWorkCenter.get(center.workCenterId) ?? 0,
     })),
   };
 }
@@ -279,6 +328,8 @@ export type TickSeriesRow = {
   tickNum: number;
   throughputCents: number;
   wipCount: number;
+  operatingExpenseCents: number;
+  carryingCostCents: number;
 };
 
 /**
@@ -307,6 +358,8 @@ export async function getRunTicks(
       tickNum: runTicks.tickNum,
       throughputCents: runTicks.throughputCents,
       wipCount: runTicks.wipCount,
+      operatingExpenseCents: runTicks.operatingExpenseCents,
+      carryingCostCents: runTicks.carryingCostCents,
     })
     .from(runTicks)
     .where(
