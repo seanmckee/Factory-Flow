@@ -687,7 +687,7 @@ frozen copy.
       rates, so a rate edit can't rewrite a finished run). Seed: process times
       in minutes and a ~170-unit order book so a run spans days; rates sized
       so the factory profits only while the constraint is fed.
-- [ ] 6A.2 `simulation/operatingExpense.ts` + tests — `accrueRate` (exact
+- [x] 6A.2 `simulation/operatingExpense.ts` + tests — `accrueRate` (exact
       integer floor-diff, a pure function of tick number, so batch splitting
       needs no cursor), `timeExpenseAtTick` (**accrued per rate, then summed**
       — floor diffs on a summed rate disagree with the summed breakdown
