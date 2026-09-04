@@ -50,3 +50,19 @@ export function chartBucket(tickNum: number): number {
   if (tickNum <= MAX_CHART_POINTS * 60) return 60;
   return 3_600;
 }
+
+/**
+ * The axis-length form of `formatTickTime` — "D2 3:41". Seconds dropped: an
+ * axis label is read at a glance, and no chart bucket is finer than a minute
+ * by the time the axis is crowded enough to matter.
+ */
+export function formatTickShort(
+  tick: number,
+  ticksPerDay: number = TICKS_PER_DAY,
+): string {
+  const day = Math.floor(tick / ticksPerDay) + 1;
+  const rest = tick % ticksPerDay;
+  const hours = Math.floor(rest / 3600);
+  const minutes = Math.floor((rest % 3600) / 60);
+  return `D${day} ${hours}:${String(minutes).padStart(2, "0")}`;
+}

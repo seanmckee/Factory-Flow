@@ -724,6 +724,19 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
+- [x] 6A.10d One Trends chart, hideable lines, Day·time axis, smooth rate
+      (user call after driving 6A.10c: three cards hid the relationships, the
+      minute-bucket rate drew a comb, and a tick axis "means nothing to a
+      user"). **Decided:** the tab is one `TrendsChart` — money left axis,
+      WIP right, legend click hides a line (never the last one), x-axis and
+      tooltip in Day · time via `formatTickShort`/`formatTickTime`.
+      **Decided:** the rate becomes `trailingRate` in cents per staffed hour
+      over a 3600-tick window — finishes are point events minutes apart, so a
+      minute-scale window is a comb (noise, not rate); the window counts
+      samples but divides by ticks, so raw and bucketed series agree, and the
+      left edge still divides by covered ticks. `TickSeriesChart`,
+      `throughputRate` and `bucketThroughputRate` deleted with their tests —
+      superseded, and dead wrappers are the drift the working agreement bans.
 - [x] 6A.10c Whole-run charts + drain-stop (after the second hands-on: a +1
       day jump on a raised-capacity run drained the floor at staffed hour ~5,
       the newest-5000 window showed only the dead time after it — rate and WIP
