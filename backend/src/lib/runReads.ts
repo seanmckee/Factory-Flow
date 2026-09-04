@@ -7,6 +7,7 @@ import {
   runTicks,
   runWipParts,
   runWorkCenters,
+  runWorkOrderSteps,
   simulationRuns,
   workCenters,
 } from "../db/schema.js";
@@ -29,7 +30,8 @@ import type {
   TickWorkCenterMetrics,
 } from "../simulation/simulationTick.js";
 import { HttpError } from "./httpError.js";
-import { loadRunState, type RunRow } from "./runState.js";
+import type { RunRow } from "./runState.js";
+import type { Routing, WipPart } from "../simulation/types.js";
 
 /**
  * The read side of the run API: summaries, windowed metrics, the floor
@@ -94,33 +96,35 @@ export async function getRun(runId: number): Promise<RunSummary> {
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const [wip] = await db
-    .select({ count: count() })
-    .from(runWipParts)
-    .where(eq(runWipParts.runId, runId));
-
-  const [finished] = await db
-    .select({ count: count(), throughputCents: sum(runFinishedParts.throughputCents) })
-    .from(runFinishedParts)
-    .where(eq(runFinishedParts.runId, runId));
-
-  const [expense] = await db
-    .select({
-      operatingExpenseCents: sum(runTicks.operatingExpenseCents),
-      carryingCostCents: sum(runTicks.carryingCostCents),
-    })
-    .from(runTicks)
-    .where(eq(runTicks.runId, runId));
-
-  const releasedOrders = await db
-    .select({
-      workOrderId: runReleasedOrders.workOrderId,
-      routingId: runReleasedOrders.routingId,
-      routingRevision: runReleasedOrders.routingRevision,
-    })
-    .from(runReleasedOrders)
-    .where(eq(runReleasedOrders.runId, runId))
-    .orderBy(runReleasedOrders.workOrderId);
+  const [[wip], [finished], [expense], releasedOrders] = await Promise.all([
+    db
+      .select({ count: count() })
+      .from(runWipParts)
+      .where(eq(runWipParts.runId, runId)),
+    db
+      .select({
+        count: count(),
+        throughputCents: sum(runFinishedParts.throughputCents),
+      })
+      .from(runFinishedParts)
+      .where(eq(runFinishedParts.runId, runId)),
+    db
+      .select({
+        operatingExpenseCents: sum(runTicks.operatingExpenseCents),
+        carryingCostCents: sum(runTicks.carryingCostCents),
+      })
+      .from(runTicks)
+      .where(eq(runTicks.runId, runId)),
+    db
+      .select({
+        workOrderId: runReleasedOrders.workOrderId,
+        routingId: runReleasedOrders.routingId,
+        routingRevision: runReleasedOrders.routingRevision,
+      })
+      .from(runReleasedOrders)
+      .where(eq(runReleasedOrders.runId, runId))
+      .orderBy(runReleasedOrders.workOrderId),
+  ]);
 
   // sum() is null over no rows, and arrives as a string from the driver
   const throughputCents = Number(finished?.throughputCents ?? 0);
@@ -181,49 +185,48 @@ export async function getRunMetrics(
 
   const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
 
-  const tickRows = await db
-    .select()
-    .from(runTicks)
-    .where(
-      and(
-        eq(runTicks.runId, runId),
-        gte(runTicks.tickNum, from),
-        lte(runTicks.tickNum, to),
+  const [tickRows, centerRows, finished, storedCenters] = await Promise.all([
+    db
+      .select()
+      .from(runTicks)
+      .where(
+        and(
+          eq(runTicks.runId, runId),
+          gte(runTicks.tickNum, from),
+          lte(runTicks.tickNum, to),
+        ),
+      )
+      .orderBy(runTicks.tickNum),
+    db
+      .select()
+      .from(runTickWorkCenters)
+      .where(
+        and(
+          eq(runTickWorkCenters.runId, runId),
+          gte(runTickWorkCenters.tickNum, from),
+          lte(runTickWorkCenters.tickNum, to),
+        ),
       ),
-    )
-    .orderBy(runTicks.tickNum);
-
-  const centerRows = await db
-    .select()
-    .from(runTickWorkCenters)
-    .where(
-      and(
-        eq(runTickWorkCenters.runId, runId),
-        gte(runTickWorkCenters.tickNum, from),
-        lte(runTickWorkCenters.tickNum, to),
-      ),
-    );
-
-  const finished = await db
-    .select()
-    .from(runFinishedParts)
-    .where(
-      and(
-        eq(runFinishedParts.runId, runId),
-        gte(runFinishedParts.completedAtTick, from),
-        lte(runFinishedParts.completedAtTick, to),
-      ),
-    )
-    .orderBy(runFinishedParts.completedAtTick, runFinishedParts.id);
-
-  const storedCenters = await db
-    .select({
-      workCenterId: runWorkCenters.workCenterId,
-      capacity: runWorkCenters.capacity,
-    })
-    .from(runWorkCenters)
-    .where(eq(runWorkCenters.runId, runId))
-    .orderBy(runWorkCenters.workCenterId);
+    db
+      .select()
+      .from(runFinishedParts)
+      .where(
+        and(
+          eq(runFinishedParts.runId, runId),
+          gte(runFinishedParts.completedAtTick, from),
+          lte(runFinishedParts.completedAtTick, to),
+        ),
+      )
+      .orderBy(runFinishedParts.completedAtTick, runFinishedParts.id),
+    db
+      .select({
+        workCenterId: runWorkCenters.workCenterId,
+        capacity: runWorkCenters.capacity,
+      })
+      .from(runWorkCenters)
+      .where(eq(runWorkCenters.runId, runId))
+      .orderBy(runWorkCenters.workCenterId),
+  ]);
 
   const centersByTick = new Map<number, TickWorkCenterMetrics[]>();
   for (const row of centerRows) {
@@ -322,29 +325,84 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const state = await loadRunState(run);
+  // A floor snapshot needs only WIP and the run's pinned routing/capacity.
+  // Loading the full advance state here also fetched demand, allocations,
+  // finished counts and costs, turning a once-per-second UI read into a chain
+  // of unnecessary database round trips.
+  const [storedParts, storedSteps, storedCenters, liveCenters] = await Promise.all([
+    db
+      .select()
+      .from(runWipParts)
+      .where(eq(runWipParts.runId, run.id))
+      .orderBy(runWipParts.id),
+    db
+      .select({
+        workOrderId: runWorkOrderSteps.workOrderId,
+        workCenterId: runWorkOrderSteps.workCenterId,
+        processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
+      })
+      .from(runWorkOrderSteps)
+      .where(eq(runWorkOrderSteps.runId, run.id))
+      .orderBy(runWorkOrderSteps.workOrderId, runWorkOrderSteps.sequence),
+    db
+      .select({
+        workCenterId: runWorkCenters.workCenterId,
+        capacity: runWorkCenters.capacity,
+        standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
+      })
+      .from(runWorkCenters)
+      .where(eq(runWorkCenters.runId, run.id)),
+    db.select({ id: workCenters.id, name: workCenters.name }).from(workCenters),
+  ]);
 
-  const names = new Map(
-    (await db
-      .select({ id: workCenters.id, name: workCenters.name })
-      .from(workCenters)).map((center) => [center.id, center.name]),
+  const routingByWorkOrder = new Map<number, Routing>();
+  for (const step of storedSteps) {
+    const routing = routingByWorkOrder.get(step.workOrderId);
+    const pinnedStep = {
+      workCenterId: step.workCenterId,
+      processTimeSeconds: step.processTimeSeconds,
+    };
+    if (routing) routing.steps.push(pinnedStep);
+    else routingByWorkOrder.set(step.workOrderId, { steps: [pinnedStep] });
+  }
+
+  const wipParts: WipPart[] = storedParts.map((part) => ({
+    id: part.partUuid,
+    workOrderId: part.workOrderId,
+    unitIndex: part.unitIndex,
+    releasedAtTick: part.releasedAtTick,
+    stepIndex: part.stepIndex,
+    progressSeconds: part.progressSeconds,
+    actualProcessTimeSeconds: part.actualProcessTimeSeconds,
+  }));
+  const centerMap = new Map(
+    storedCenters.map((center) => [
+      center.workCenterId,
+      { id: center.workCenterId, capacity: center.capacity },
+    ]),
+  );
+  const names = new Map(liveCenters.map((center) => [center.id, center.name]));
+  const standingCosts = new Map(
+    storedCenters.map((center) => [
+      center.workCenterId,
+      center.standingCostCentsPerDay,
+    ]),
   );
 
   const view = deriveFloorView(
-    state.wipParts,
-    state.routingByWorkOrder,
-    state.workCenters,
+    wipParts,
+    routingByWorkOrder,
+    centerMap,
   );
 
   return {
     tickNum: run.tickNum,
-    wipCount: state.wipParts.length,
+    wipCount: wipParts.length,
     workCenters: view.map((center) => ({
       ...center,
       name: names.get(center.workCenterId) ?? `Work center ${center.workCenterId}`,
-      capacity: state.workCenters.get(center.workCenterId)?.capacity ?? 0,
-      standingCostCentsPerDay:
-        state.costs.standingCostByWorkCenter.get(center.workCenterId) ?? 0,
+      capacity: centerMap.get(center.workCenterId)?.capacity ?? 0,
+      standingCostCentsPerDay: standingCosts.get(center.workCenterId) ?? 0,
     })),
   };
 }
