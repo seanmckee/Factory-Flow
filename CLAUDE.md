@@ -44,8 +44,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - `tsconfig.json` enables `noUncheckedIndexedAccess` and `exactOptionalPropertyTypes`; array indexing and destructuring yield `T | undefined`, so seed/route code explicitly null-checks after `.returning()`.
 - Each router in `src/routes/` is a default-exported `Router` mounted at `/api/<resource>` in `src/server.ts`. Sales orders and work orders expose `POST` and `DELETE /:id` alongside their GETs; work centers, parts and routings expose `POST`, `PATCH /:id` and `DELETE /:id`. Routings add `PUT /:id/steps`, the only PUT in the API: steps are replaced wholesale because `UNIQUE(routing_id, sequence)` makes an incremental reorder collide halfway through, so the handler deletes and reinserts inside a transaction and renumbers sequences from array order. Step payloads therefore never carry a `sequence`.
 - `src/routes/runs.ts` is the run API, and the only router that holds no DB
-  code: `lib/runService.ts` owns loading, the lock and the batched writes, and
-  the routes validate, map an `HttpError` onto its status and serialise. Routes
+  code: the service layer is split on the read/write line — `lib/runService.ts`
+  owns the lock and the batched writes, `lib/runReads.ts` the summaries,
+  metrics, floor and tick series, and `lib/runState.ts` the `loadRunState`
+  loader both sides share — and the routes validate, map an `HttpError` onto
+  its status and serialise. Routes
   are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
   frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
@@ -138,7 +141,8 @@ Advancing a run is split across the pure/impure line. `simulateBatch`
 (`simulation/simulateBatch.ts`) takes a `RunState`, ticks it N times in memory
 and returns a `RunBatch` — the surviving WIP, the finished records with their
 frozen money, a `TickRecord` per tick, and the advanced `priorCounts` — while
-`lib/runService.ts` only loads the state, calls it, and writes the batch. All
+`lib/runService.ts` only loads the state (via `lib/runState.ts`), calls it,
+and writes the batch. All
 the logic that decides anything is therefore under test with no database;
 `runService` holds no arithmetic. `priorCounts` advances *within* a batch, so a
 unit finishing at tick 5 is priced against the allocation after the one that

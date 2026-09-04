@@ -17,12 +17,13 @@ hint saying what the chart answers.
 **Next up:** Track 6 (operating expense). Track 6 is what makes the score able
 to go down and so what makes an agent's objective non-degenerate.
 
-**One refactor unit first** (decided 2026-09-03): split the read side of
-`runService.ts` — `getRun`, `getRunMetrics`, `getRunFloor`, `getRunTicks` —
-out of the 842-line module before Track 6 starts. It is half the file, it has
-nothing to do with advancing, and Track 6's P&L reads and Track 7's comparison
-reads both belong on that side of the line however the rest is eventually
-carved. Deeper carving, and the `SimulationPage` hooks (`useRunClock`,
+**One refactor unit first — done** (decided and landed 2026-09-03): the read
+side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,
+`getRunTicks`, plus `tickWindow` and the read types — moved to `runReads.ts`,
+and `loadRunState` (shared by `advanceRun` and `getRunFloor`) to `runState.ts`,
+so neither side imports the other. No behavior change, no new tests (nothing
+pure moved). Track 6's P&L reads and Track 7's comparison reads belong on that
+side of the line however the rest is eventually carved. Deeper carving, and the `SimulationPage` hooks (`useRunClock`,
 `useRunJump`), wait until after Track 7 — boundaries invented ahead of the code
 that uses them are the ones you end up fighting.
 
