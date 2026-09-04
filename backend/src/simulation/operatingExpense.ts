@@ -9,6 +9,9 @@ import type { Part, WipPart, WorkOrder } from "./types.js";
  */
 export const TICKS_PER_DAY = 28_800;
 
+/** Ticks in a staffed hour — the denominator wages accrue over. */
+export const TICKS_PER_HOUR = 3_600;
+
 /** The run's frozen cost config, loaded beside its capacities. */
 export type CostRates = {
   dayTicks: number;
@@ -17,6 +20,15 @@ export type CostRates = {
   wipCarryingBpsPerDay: number;
   /** frozen per-centre standing cost, cents/day, keyed by work center id */
   standingCostByWorkCenter: Map<number, number>;
+  /**
+   * The centre's whole hourly wage bill, keyed by work center id — the loader
+   * pre-multiplies the frozen per-operator rate by the frozen capacity
+   * (operators = capacity until 6E), so the engine sums rates without knowing
+   * about operators. Per staffed hour, not per calendar day: that denominator
+   * is what makes a second shift double the day's wages while amortizing the
+   * same rent.
+   */
+  wageCentsPerHourByWorkCenter: Map<number, number>;
 };
 
 /**
@@ -53,6 +65,23 @@ export function timeExpenseAtTick(rates: CostRates, tickNum: number): number {
   );
   for (const standingCost of rates.standingCostByWorkCenter.values()) {
     cents += accrueRate(standingCost, tickNum, rates.dayTicks);
+  }
+  return cents;
+}
+
+/**
+ * Every centre's wage bill at tick `t`, accrued per rate over the staffed
+ * hour and then summed — the same never-on-the-summed-rate rule as
+ * `timeExpenseAtTick`, so the stored tick total equals any per-centre
+ * breakdown by construction. Wages are a pure function of the tick number
+ * like the other time rates: an operator is paid for staffed time whether or
+ * not the machine runs, which is what makes an idle staffed factory a money
+ * furnace.
+ */
+export function wagesAtTick(rates: CostRates, tickNum: number): number {
+  let cents = 0;
+  for (const hourly of rates.wageCentsPerHourByWorkCenter.values()) {
+    cents += accrueRate(hourly, tickNum, TICKS_PER_HOUR);
   }
   return cents;
 }

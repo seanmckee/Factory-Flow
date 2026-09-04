@@ -55,6 +55,7 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
           workCenterId: runWorkCenters.workCenterId,
           capacity: runWorkCenters.capacity,
           standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
+          wageCentsPerHour: runWorkCenters.wageCentsPerHour,
         })
         .from(runWorkCenters)
         .where(eq(runWorkCenters.runId, run.id)),
@@ -179,6 +180,14 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
         storedCenters.map((center) => [
           center.workCenterId,
           center.standingCostCentsPerDay,
+        ]),
+      ),
+      // the centre's whole hourly bill: operators = capacity until 6E, and
+      // pre-multiplying here keeps the engine ignorant of operators entirely
+      wageCentsPerHourByWorkCenter: new Map(
+        storedCenters.map((center) => [
+          center.workCenterId,
+          center.capacity * center.wageCentsPerHour,
         ]),
       ),
     },

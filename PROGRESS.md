@@ -1086,7 +1086,7 @@ balance it yet.
       worth running once staffed yet can't carry the factory — the
       contribution-margin lesson beside the constraint one. Verify the
       arithmetic in seed comments, live at 6D.3.
-- [ ] 6D.2 Engine: wages + tests. `CostRates` gains per-centre
+- [x] 6D.2 Engine: wages + tests. `CostRates` gains per-centre
       `wageCentsPerHour` (the loader pre-multiplies by frozen capacity, so
       the engine sums rates without knowing about operators);
       `wagesAtTick(rates, tickNum)` accrues each centre's rate over 3,600 and
