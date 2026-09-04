@@ -17,6 +17,35 @@ export const workCenters = pgTable("work_centers", {
   // indistinguishable on the simulator grid and in routing step pickers
   name: varchar("name", { length: 255 }).notNull().unique(),
   capacity: integer("capacity").notNull().default(1),
+  /**
+   * What the centre costs per calendar day whether or not it runs -
+   * depreciation, maintenance, power. Live value; a run freezes its own copy
+   * into `run_work_centers` at creation, like capacity.
+   */
+  standingCostCentsPerDay: integer("standing_cost_cents_per_day")
+    .notNull()
+    .default(0),
+});
+
+/**
+ * Facility-level cost rates - the live factory's, frozen onto each run at
+ * creation. A singleton: the app always reads and writes the id=1 row,
+ * upserted with the column defaults on first read. Facility-scoped settings
+ * that later tracks add (shift calendar, default penalties) belong here too.
+ */
+export const factorySettings = pgTable("factory_settings", {
+  id: integer("id").primaryKey(),
+  /** rent, utilities - the cost of the doors being open, per calendar day */
+  facilityOverheadCentsPerDay: integer("facility_overhead_cents_per_day")
+    .notNull()
+    .default(0),
+  /**
+   * Holding charge on the material value sitting on the floor, in basis
+   * points per calendar day (100 = 1%/day), so the money model stays integer.
+   */
+  wipCarryingBpsPerDay: integer("wip_carrying_bps_per_day")
+    .notNull()
+    .default(0),
 });
 
 export const parts = pgTable("parts", {
@@ -132,6 +161,29 @@ export const simulationRuns = pgTable("simulation_runs", {
     { onDelete: "restrict" },
   ),
   forkedAtTick: integer("forked_at_tick"),
+  /**
+   * Ticks in this run's calendar day, frozen at creation (one 8-hour shift of
+   * one-second ticks today; a second shift is a longer day, not a
+   * reinterpretation). Frozen because expense accrual is a function of
+   * `tick_num / day_ticks` - moving it under a half-advanced run would change
+   * the slope of money already promised deterministic.
+   */
+  dayTicks: integer("day_ticks").notNull().default(28800),
+  /** frozen copy of `factory_settings.facility_overhead_cents_per_day` */
+  facilityOverheadCentsPerDay: integer("facility_overhead_cents_per_day")
+    .notNull()
+    .default(0),
+  /** frozen copy of `factory_settings.wip_carrying_bps_per_day` */
+  wipCarryingBpsPerDay: integer("wip_carrying_bps_per_day")
+    .notNull()
+    .default(0),
+  /**
+   * Carrying cost's sub-cent remainder, carried across advances the way
+   * `tick_num` is - the one accumulator time-based expense doesn't need,
+   * because carrying depends on what sat on the floor each tick. Always in
+   * [0, 10000 * day_ticks), which is at most 2.88e8 and fits int4.
+   */
+  carryRemainder: integer("carry_remainder").notNull().default(0),
 });
 
 /**
@@ -219,6 +271,17 @@ export const runTicks = pgTable(
     tickNum: integer("tick_num").notNull(),
     throughputCents: integer("throughput_cents").notNull(),
     wipCount: integer("wip_count").notNull(),
+    /**
+     * Standing costs + facility overhead accrued this tick. Frozen cents, like
+     * the money on `run_finished_parts`: the P&L sums these rather than
+     * re-deriving from rates, so a later rate edit (or 6E capital action)
+     * cannot rewrite a finished run's expenses.
+     */
+    operatingExpenseCents: integer("operating_expense_cents")
+      .notNull()
+      .default(0),
+    /** holding charge on the tick's end-of-tick WIP, separately reported */
+    carryingCostCents: integer("carrying_cost_cents").notNull().default(0),
   },
   (table) => [primaryKey({ columns: [table.runId, table.tickNum] })],
 );
@@ -293,6 +356,10 @@ export const runWorkCenters = pgTable(
     /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
     workCenterId: integer("work_center_id").notNull(),
     capacity: integer("capacity").notNull(),
+    /** frozen copy of `work_centers.standing_cost_cents_per_day` */
+    standingCostCentsPerDay: integer("standing_cost_cents_per_day")
+      .notNull()
+      .default(0),
   },
   (table) => [primaryKey({ columns: [table.runId, table.workCenterId] })],
 );
