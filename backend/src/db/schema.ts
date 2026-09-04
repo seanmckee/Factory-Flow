@@ -16,23 +16,51 @@ export const workCenters = pgTable("work_centers", {
   // unique like parts.part_number - two identically named centers are
   // indistinguishable on the simulator grid and in routing step pickers
   name: varchar("name", { length: 255 }).notNull().unique(),
+  /**
+   * Machines here - not the centre's effective capacity, which is
+   * `min(machines, operators)` and is computed at the load boundary. Kept
+   * named `capacity` rather than renamed: the API mirrors and routing pickers
+   * all speak it, and the rename buys no behaviour.
+   */
   capacity: integer("capacity").notNull().default(1),
   /**
-   * What the centre costs per calendar day whether or not it runs -
-   * depreciation, maintenance, power. Live value; a run freezes its own copy
-   * into `run_work_centers` at creation, like capacity.
+   * Operators assigned here. Gates effective capacity together with the
+   * machine count, and is what the wage bill multiplies - so an operator with
+   * no machine to run is paid for nothing, and a machine with nobody on it is
+   * rent with no output. Both are mistakes 6E lets you make and charges for.
+   */
+  operators: integer("operators").notNull().default(1),
+  /**
+   * What **one machine** costs per calendar day whether or not it runs -
+   * depreciation, maintenance, power. Per machine since 6E, so a centre's rent
+   * is `machines × rate` and buying one charges its keep automatically. Live
+   * value; a run freezes its own copy into `run_work_centers` at creation.
    */
   standingCostCentsPerDay: integer("standing_cost_cents_per_day")
     .notNull()
     .default(0),
   /**
-   * One operator's pay per staffed hour. Operators = capacity until 6E adds
-   * the explicit column, so the centre's bill is `capacity × rate` — and
-   * unlike standing cost the denominator is the staffed hour, not the
-   * calendar day: a second shift doubles the day's wages while amortizing the
-   * same rent, which is the entire economics of adding one.
+   * One operator's pay per staffed hour, so the centre's bill is
+   * `operators × rate` - and unlike standing cost the denominator is the
+   * staffed hour, not the calendar day: a second shift doubles the day's wages
+   * while amortizing the same rent, which is the entire economics of adding
+   * one.
    */
   wageCentsPerHour: integer("wage_cents_per_hour").notNull().default(0),
+  /** what one more machine here costs to buy, charged as a lump at purchase */
+  machinePurchaseCents: integer("machine_purchase_cents").notNull().default(0),
+  /**
+   * What retiring a machine here returns - a negative spend on the action row.
+   * Below the purchase price by design, so churning a machine costs real money
+   * and the model punishes indecision rather than rewarding fiddling.
+   */
+  machineSalvageCents: integer("machine_salvage_cents").notNull().default(0),
+  /**
+   * One-off onboarding cost per operator hired here. Firing is deliberately
+   * free: a crew you can shed cheaply is the temp lever, and it is what makes
+   * a second shift's commitment a real comparison.
+   */
+  operatorHireCents: integer("operator_hire_cents").notNull().default(0),
 });
 
 /**
@@ -344,6 +372,16 @@ export const runTickWorkCenters = pgTable(
     busy: integer("busy").notNull(),
     /** parts that wanted a machine here and didn't get one */
     queued: integer("queued").notNull(),
+    /**
+     * The effective capacity this tick gated admission on — the observation's
+     * own denominator, since 6E made capacity a thing that moves mid-run.
+     * Utilization divides by summed capacity-ticks, so a window spanning a
+     * purchase no longer measures the days before it against the machine count
+     * after it. **Null means pre-6E**: capacity never changed in that run, so
+     * the run's frozen `run_work_centers.capacity` is the right denominator —
+     * the same retroactive rule as 6B's null `due_at_tick`.
+     */
+    capacity: integer("capacity"),
   },
   (table) => [
     primaryKey({
@@ -384,11 +422,21 @@ export const runReleasedOrders = pgTable(
 );
 
 /**
- * Work-center capacity as it stood when the run was created, copied for every
+ * Work-center config as it stood when the run was created, copied for every
  * centre in the factory. The engine reads capacity from here and never from
  * `work_centers`, which is what lets two runs disagree about the drill press:
  * change it in one run without touching the other, or the finished history of
  * either.
+ *
+ * Since 6E these rows are the one part of a run's frozen config that can
+ * change while it lives, and only through a capital action, which charges for
+ * the change and records it in `run_capital_actions`. The two
+ * `*_effective_from_tick` columns are what keeps the accrual exact across such
+ * a change: a per-day rate accrues `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`,
+ * so each segment charges exactly the floor of its own duration. They are
+ * **per rate** rather than one per row, so only the rate that actually changed
+ * re-phases — hiring at the drill press must not perturb its rent stream, nor
+ * any other centre's.
  */
 export const runWorkCenters = pgTable(
   "run_work_centers",
@@ -398,13 +446,34 @@ export const runWorkCenters = pgTable(
       .notNull(),
     /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
     workCenterId: integer("work_center_id").notNull(),
+    /** machines; effective capacity is `min(capacity, operators)` */
     capacity: integer("capacity").notNull(),
-    /** frozen copy of `work_centers.standing_cost_cents_per_day` */
+    /** frozen copy of `work_centers.operators`, then bought and sold */
+    operators: integer("operators").notNull().default(1),
+    /** frozen copy of `work_centers.standing_cost_cents_per_day`, per machine */
     standingCostCentsPerDay: integer("standing_cost_cents_per_day")
       .notNull()
       .default(0),
     /** frozen copy of `work_centers.wage_cents_per_hour` (per operator) */
     wageCentsPerHour: integer("wage_cents_per_hour").notNull().default(0),
+    /**
+     * The tick this centre's standing rate took effect — 0 for a run that has
+     * never bought or retired a machine here, which is every pre-6E run and so
+     * exactly the old arithmetic.
+     */
+    standingCostEffectiveFromTick: integer("standing_cost_effective_from_tick")
+      .notNull()
+      .default(0),
+    /** the same, for the wage rate: moved by hiring and firing, not by machines */
+    wageEffectiveFromTick: integer("wage_effective_from_tick")
+      .notNull()
+      .default(0),
+    /** frozen prices, so an action charges what the run was created against */
+    machinePurchaseCents: integer("machine_purchase_cents")
+      .notNull()
+      .default(0),
+    machineSalvageCents: integer("machine_salvage_cents").notNull().default(0),
+    operatorHireCents: integer("operator_hire_cents").notNull().default(0),
   },
   (table) => [primaryKey({ columns: [table.runId, table.workCenterId] })],
 );
@@ -496,6 +565,48 @@ export const runScrappedParts = pgTable(
     index("run_scrapped_parts_run_id_scrapped_at_tick_id_idx").on(
       table.runId,
       table.scrappedAtTick,
+      table.id,
+    ),
+  ],
+);
+
+/**
+ * Capital actions applied to a run — buying and retiring machines, hiring and
+ * firing operators — append-only, with the money frozen at the tick applied,
+ * the same rule as `run_finished_parts` and `run_scrapped_parts`: editing a
+ * price afterwards must not rewrite what a run paid.
+ *
+ * `spend_cents` is **signed**: salvage from a retirement is a negative spend,
+ * so the P&L's capital line is one sum over one column. `machines_after` and
+ * `operators_after` freeze the config the action produced, so the log reads
+ * without replaying deltas against the current row.
+ *
+ * The action is effective from `applied_at_tick + 1` — it is applied between
+ * advances, under the run's lock, so a batch never spans one and the engine
+ * still sees one rate per batch.
+ */
+export const runCapitalActions = pgTable(
+  "run_capital_actions",
+  {
+    id: serial("id").primaryKey(),
+    runId: integer("run_id")
+      .references(() => simulationRuns.id, { onDelete: "cascade" })
+      .notNull(),
+    /** `buy_machine` | `retire_machine` | `hire_operator` | `fire_operator` */
+    kind: varchar("kind", { length: 30 }).notNull(),
+    /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
+    workCenterId: integer("work_center_id").notNull(),
+    /** the run's tick when it was applied; the change bites the tick after */
+    appliedAtTick: integer("applied_at_tick").notNull(),
+    /** frozen; positive is money out, negative is salvage coming back */
+    spendCents: integer("spend_cents").notNull(),
+    machinesAfter: integer("machines_after").notNull(),
+    operatorsAfter: integer("operators_after").notNull(),
+  },
+  (table) => [
+    index("run_capital_actions_run_id_applied_at_tick_id_idx").on(
+      table.runId,
+      table.appliedAtTick,
       table.id,
     ),
   ],

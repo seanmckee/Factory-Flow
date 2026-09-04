@@ -8,22 +8,26 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6D (shifts and wages) is complete** — planned and
-built 2026-09-04, units 6D.1–6D.4 below. A run's calendar day is
-`shifts × 28,800` staffed ticks (a facility setting, overridable per run), and
-operators — one per machine until 6E — are paid per staffed hour into their
-own frozen tick column, so `netCents` now subtracts a fourth line and a second
-shift doubles the day's wages while amortizing the same rent. Before it, 6C
-(setup as constraint time, scrap in its own RNG domain), 6B (due dates +
-on-time delivery) and 6A (the P&L core).
+**You are here:** **Track 6E (capital actions) is planned** — 2026-09-04, the
+section below — and in build. It is the first thing in the project that
+changes a run's **own frozen config** while the run is alive: buy or retire a
+machine, hire or fire an operator, each a lump capital spend frozen on an
+append-only action row and subtracted from `netCents` as the fifth P&L line.
+Before it, 6D (shifts and wages), 6C (setup as constraint time, scrap in its
+own RNG domain), 6B (due dates + on-time delivery) and 6A (the P&L core).
 
-**Next up:** 6E (capital actions) — re-plan when reached; it now owes
-overtime too, deferred there because an authorization is a mid-run action on
-frozen config. See the Track 6 section for the sub-track split and the time
-model. Track 6A made the score able to go down, which is
-what makes an agent's objective non-degenerate; 6B adds the promise the agent
-can break without buying anything with it; 6C makes batch size a real decision
-and output itself unreliable.
+**Deferred out of 6E to 6F** (user call while planning): overtime and mid-run
+shift changes. Both make a run's calendar day non-uniform, which is the one
+place `day_ticks` is a single frozen integer, and overtime without a wage
+premium strictly dominates every other labour lever. See the 6F section.
+
+**Next up after 6E:** Track 7 (forking), whose comparison is what all of
+Track 6 exists to make meaningful. Track 6A made the score able to go down,
+which is what makes an agent's objective non-degenerate; 6B adds the promise
+the agent can break without buying anything with it; 6C makes batch size a
+real decision and output itself unreliable; 6D prices the staffed hour; 6E is
+the first decision that costs money up front and changes the factory
+afterwards — which is what a fork is *for*.
 
 **One refactor unit first — done** (decided and landed 2026-09-03): the read
 side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,
@@ -1115,14 +1119,195 @@ balance it yet.
       CLAUDE.md cost-model section (three costs become four), README Phase 4
       wages bullet, this file.
 
-### Track 6E — Capital actions (`feat/capital-actions`) — re-plan when reached
+### Track 6E — Capital actions (`feat/capital-actions`)
 
-Actions that cost money and mutate the run's **own frozen config**: buy/retire
-a machine, hire/fire an operator, authorize overtime. Operators gate effective
-capacity = `min(machines, operators)` — a new frozen per-centre column.
-Mid-run rate changes mean per-centre expense must then be stored per tick or
-effective-dated (`accrueRate` generalizes to `floor((t−t₀)·r/D)` diffs) — the
-reason 6A never serves a derived per-centre cost.
+Planned 2026-09-04. Four actions — buy a machine, retire a machine, hire an
+operator, fire an operator — and with them the first mutation of a run's
+**own frozen config** while it is alive. Everything until now froze at
+creation and stayed frozen; 6E keeps the invariant (a run still reads only its
+own copies, never `work_centers` or `factory_settings`) and adds the one way
+those copies can change.
+
+**Capital spend is a lump at the moment of purchase, and the fifth P&L line.**
+This closes a README open question, and the decisive argument is the
+timescale: a realistically amortized machine — $20k over a five-year life is
+$11/day against a ~$1,900/day factory — is *free* inside the days a run spans,
+so "always buy" becomes the right answer to every question, which is the
+degenerate objective 6A existed to kill. Amortization only bites here by
+inventing an unrealistically short machine life. Lump also keeps payback
+readable, which is the point of the feature: the cumulative net curve steps
+down by the purchase and the extra output has to climb back out, so payback is
+where the curve recrosses what doing nothing would have earned. And it is the
+**reversible** call — the cents are frozen on the action row, so amortization
+stays layerable off that column later, exactly as 6B froze a due tick and
+charged no penalty and 6C froze scrapped material and booked no write-off.
+**No cash balance:** a run cannot be refused a purchase for want of funds and
+cannot go bankrupt — net simply goes further negative. A spend limit needs a
+cash model, which is a bigger idea than this track.
+
+**Standing cost is reinterpreted as per machine.**
+`work_centers.standing_cost_cents_per_day` becomes what *one* machine costs to
+keep, so a centre's rent is `machines × rate`: buying charges the second
+machine's rent automatically and retiring hands it back. A documentation
+change with no data change today — every seeded centre has one machine.
+Rejected: per-centre with the buy action naming the standing cost it adds (the
+caller, eventually the agent, has to invent a number the factory already
+knows), and per-centre unchanged by purchases (a machine that costs nothing to
+keep makes buying it a free decision).
+
+**Operators become explicit, and effective capacity is
+`min(machines, operators)`.** The loader computes the min, so the engine stays
+as ignorant of operators as it already is for wages — the 6D pre-multiply
+pattern. The wage bill becomes `operators × rate` rather than
+`capacity × rate`, which is what makes hiring a lever rather than a
+consequence, and paying an operator with no machine to run (or owning a
+machine with nobody on it) is a mistake the model will now let you make and
+charge you for. `work_centers.capacity` keeps its name and now means
+**machines**; renaming it was rejected as wide churn through the API mirrors
+and routing pickers for no behavioural gain.
+
+**Rates become effective-dated, and this is the architectural core.**
+`accrueRate` is a pure function of the tick number — the property that makes
+batch splitting cursor-free, the same property the RNG has — and it assumes a
+rate constant for the run's whole life. A purchase changes a centre's standing
+rate; a hire changes its wage rate. So each rate carries the tick it took
+effect and accrues `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`. **Per rate, not
+per centre and not per run:** only the rate that actually changed re-phases,
+so hiring at the drill press never perturbs the cutter's rent accrual, and
+every segment accrues exactly the floor of its own duration × rate. Because
+an action takes the run lock like a release or an advance, **a batch can never
+span a change** — the engine still sees one rate per batch, and the
+one-batch-vs-several determinism test stands untouched.
+
+**The action log is append-only with frozen money.** `run_capital_actions` is
+the `run_finished_parts` / `run_scrapped_parts` pattern again: the cents are
+frozen at the tick the action was applied, so editing a price later cannot
+rewrite what a run paid. Salvage is a **negative spend**, so the P&L line is
+one sum over one column. The row also records the machines and operators
+*after* the action, so the log reads without replaying deltas.
+
+**Prices are master data, frozen at creation** — per-centre machine purchase
+and salvage, and a per-centre operator hiring fee (the seed's wages already
+carry a skill spread, so hiring a driller costing more than a packer is the
+consistent shape). The run charges its own frozen copies, the invariant 3.1b
+established. **Firing is free**, deliberately: a crew you can shed cheaply is
+the temp lever, and it is what makes a second shift's commitment — and, at
+6F, overtime's premium — a real comparison rather than a formality.
+**Retiring the last machine is allowed:** a centre with no machines starves
+everything routed through it, which is a legitimately terrible decision and
+not the model's business to forbid.
+
+**The utilization denominator moves into the observation.** Utilization is
+busy machine-ticks ÷ (capacity × observed ticks), and capacity has been safe
+to read live only because it never moved. It moves now, so
+`run_tick_work_centers` gains a nullable `capacity` written per tick — the
+**effective** capacity the tick actually gated admission on — and
+`aggregateMetrics` divides by summed capacity-ticks. Null means pre-6E, read
+the run's frozen capacity, the same retroactive rule as 6B's `due_at_tick` and
+6C's pinned zeroes. Without it a window spanning a purchase divides the days
+*before* the purchase by the new machine count and reports the constraint half
+as busy, in precisely the window someone opens to judge whether the purchase
+helped. Rejected: reconstructing the capacity timeline from the action log at
+read time — exact, but it makes utilization depend on two tables agreeing, and
+Track 2.1's rule is that observations are emitted, never reconstructed
+afterwards.
+
+- [x] 6E.1 Ledger rewrite (this section) + schema + migration + seed.
+      Live: `work_centers.operators`, `machine_purchase_cents`,
+      `machine_salvage_cents`, `operator_hire_cents`; standing cost
+      reinterpreted per machine (comment only). Frozen: the same four on
+      `run_work_centers`, plus `standing_cost_effective_from_tick` and
+      `wage_effective_from_tick`. New `run_capital_actions`.
+      `run_tick_work_centers.capacity` nullable with **no backfill**.
+      `operators` is **backfilled to `capacity`** rather than defaulted to 1,
+      on both the live and the frozen table: a capacity-2 centre has to keep
+      behaving exactly as it did, since operators = capacity was 6D's stated
+      assumption, not an accident. Seed prices follow one explainable rule —
+      purchase = four days of that machine's standing cost, salvage = half of
+      purchase (so churning a machine costs half its value and the model
+      punishes indecision), hire = two staffed days of that operator's wage.
+      Sized so the second drill press pays back **only if bought early**: one
+      press runs the ~170-unit book in ~2.9 drill-days and two in ~1.5 (the
+      cutter binds next at 120 brackets/day), so the whole prize is the ~$1,900
+      of daily cost that compression avoids, against a $1,200 press. Buying on
+      day 2, with the book nearly chewed, is a clear loss — and a book that
+      ends is itself the lesson, capacity beyond the market being the thing
+      Goldratt says is not throughput.
+      **The backfill is hand-added to the generated migration**, two `UPDATE`s
+      setting `operators = capacity` on the live and the frozen table: the
+      column default of 1 would silently halve a two-machine centre's wage
+      bill and its effective capacity, inside runs already created, and
+      operators = capacity was 6D's *stated* assumption rather than an
+      accident. Migration applied and reseeded; arithmetic only so far — the
+      engine reads none of the new columns until 6E.2/6E.3, so the payback
+      story above is verified live at 6E.4 the way 6C.1's due-day story was.
+- [ ] 6E.2 Engine: effective-dated accrual + tests. `accrueRate` gains a
+      `sinceTick`; `CostRates`' per-centre standing and wage entries become a
+      rate with the tick it took effect; `timeExpenseAtTick` and `wagesAtTick`
+      keep their shape (per rate, then summed). Tests: a closed segment
+      accrues exactly `floor(ticks·r/D)`; a change re-phases only its own rate
+      and leaves every other centre's stream byte-identical; a pre-6E run
+      (every `sinceTick` zero) accrues exactly what it accrued before, the
+      6C domain-separator precedent.
+- [ ] 6E.3 Engine: effective capacity + the observed denominator + tests.
+      `min(machines, operators)` at the loader; `TickWorkCenterMetrics` gains
+      `capacity`; `aggregateMetrics` divides by summed capacity-ticks with the
+      null fallback. A centre retired to zero machines observes zero
+      capacity-ticks, so its utilization follows the empty-window rule already
+      in the aggregate rather than dividing by zero.
+- [ ] 6E.4 Live master data + the action API. `operators` and the three prices
+      through work-centre POST/PATCH and the GETs;
+      `POST /api/runs/:id/actions` — one endpoint with a discriminated-union
+      body, because Track 8's tool layer wants one verb, not four — taking the
+      run lock, effective from `tick_num + 1`, writing the frozen action row
+      and mutating the run's own config in the same transaction;
+      `GET /api/runs/:id/actions`. Capital spend into `RunSummary`,
+      `RunMetrics` (windowed on `applied_at_tick`, like scrap) and `netCents`
+      everywhere it is computed; `/ticks` rows gain the spend joined per tick
+      in JS, the convention, so the Trends net curve cannot contradict the run
+      bar; `/floor` centres gain machines, operators and the frozen prices.
+      Exercise over HTTP, including two actions inside one staffed hour and an
+      action refused mid-advance.
+- [ ] 6E.5 UI. Work-centres table gains operators and the three prices.
+      Simulation page gains a capital panel in the transport bar: per centre,
+      buy/retire a machine and hire/fire an operator at the run's frozen
+      prices, waiting out the clock's beat exactly as releasing does, since
+      all three contend for the same lock. Dashboard gains a Capital card
+      beside the other cost lines and the action log as a table (what, where,
+      when in Day · time, what it cost); the net stat and the Trends net curve
+      subtract it.
+- [ ] 6E.6 Doc sweep. CLAUDE.md: four costs become five, the
+      frozen-config invariant gains its first sanctioned mutation, and the
+      effective-dating rule beside `accrueRate`'s. README: the capital-decision
+      bullets in Phase 4, and **two open questions close** — amortized versus
+      lump (lump), and whether a run can edit its own config (yes, and only
+      through an action that charges for it). This file.
+
+### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
+
+Split out of 6E on 2026-09-04 (user call). Authorize overtime for a period,
+and change shifts mid-run.
+
+**Why it is not in 6E.** Overtime's whole economic identity is the **premium**:
+priced at the normal wage it costs exactly what a temp's hour costs and needs
+no hiring, so it strictly dominates both the shifts setting and 6E's hire/fire
+and the decision collapses. Pricing it therefore comes first — the leaning is
+a single facility-wide multiplier in basis points (15000 = time and a half),
+frozen per run like every other rate, rather than a second wage column per
+centre nothing yet reads.
+
+**What it actually costs to build.** Both overtime and a mid-run shift change
+make a run's calendar day **non-uniform**, and `day_ticks` is a single frozen
+integer that two things multiply against: `loadRunState`'s
+`dueDay × dayTicks`, and every rate's `floor(t·r/D)` amortization. So a run
+needs a day-boundary table (`run_days`: day number, start tick, width) and
+"which day is tick 41,000 in" becomes a lookup rather than a division.
+**Recorded leaning (user's): authorize mid-day**, standing inside the day being
+extended, rather than the easier schedule-ahead form — which means 6F also
+owes the accrual rework, because rent is a per-day rate amortized across the
+day's staffed ticks and stretching a day already in progress charges that day
+more than one day's rent. Scheduling ahead is the cheap version and stays the
+fallback if the rework proves out of proportion.
 
 ## Track 7 onward — re-plan when reached
 
