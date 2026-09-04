@@ -3,14 +3,14 @@ import { Info, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
 import { Progress } from "@/components/ui/progress";
 import RunDashboard from "../components/RunDashboard";
-import TickSeriesChart from "../components/TickSeriesChart";
+import TrendsChart from "../components/TrendsChart";
 import {
   cumulativeThroughput,
   openingCents,
 } from "../simulation/cumulativeThroughput";
 import { netPerTick, openingNetCents } from "../simulation/netProfit";
 import { chartBucket, formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
-import { bucketThroughputRate, throughputRate } from "../simulation/throughputRate";
+import { trailingRate } from "../simulation/throughputRate";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
 import {
@@ -516,7 +516,7 @@ function SimulationPage() {
   // needs no such correction for them.
   const runTotalCents = run?.throughputCents ?? 0;
   const runNetTotalCents = run?.netCents ?? 0;
-  const charts = useMemo(() => {
+  const trend = useMemo(() => {
     const history = series.map((sample) => ({
       tick: sample.tickNum,
       cents: sample.throughputCents,
@@ -527,37 +527,25 @@ function SimulationPage() {
       operatingExpenseCents: sample.operatingExpenseCents,
       carryingCostCents: sample.carryingCostCents,
     }));
-    const toPoint = ({ tick, cents }: { tick: number; cents: number }) => ({
-      tick,
-      value: cents,
-    });
-    // both curves come off the same /ticks response, so a zip by index is
-    // exact; the net curve's opening is deliberately unfloored — see netProfit
+    // every derived curve comes off the same /ticks response, so a zip by
+    // index is exact; the net curve's opening is deliberately unfloored — see
+    // netProfit
     const cumulative = cumulativeThroughput(
       history,
       openingCents(history, runTotalCents),
-    ).map(toPoint);
+    );
     const net = cumulativeThroughput(
       netPerTick(pnlHistory),
       openingNetCents(pnlHistory, runNetTotalCents),
     );
-    return {
-      cumulative: cumulative.map((point, i) => ({
-        ...point,
-        secondary: net[i]?.cents,
-      })),
-      // a bucketed sample already spans the rate window, so it rescales
-      // instead of sliding — index arithmetic on a strided series would mix
-      // ticks and samples
-      rate:
-        seriesBucket > 1
-          ? bucketThroughputRate(history, seriesBucket).map(toPoint)
-          : throughputRate(history).map(toPoint),
-      wip: series.map((sample) => ({
-        tick: sample.tickNum,
-        value: sample.wipCount,
-      })),
-    };
+    const rate = trailingRate(history, seriesBucket);
+    return series.map((sample, i) => ({
+      tick: sample.tickNum,
+      throughput: cumulative[i]?.cents ?? 0,
+      net: net[i]?.cents ?? 0,
+      rate: rate[i]?.cents ?? 0,
+      wip: sample.wipCount,
+    }));
   }, [series, seriesBucket, runTotalCents, runNetTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
@@ -801,59 +789,17 @@ function SimulationPage() {
             </div>
           </TabsContent>
 
-          {/* Cumulative money on top, then the two local series: the rate is
-              where a stall or a burst is a shape rather than a change of
-              slope, and WIP is the book's other axis. The region scrolls on a
-              short viewport; the page doesn't. */}
+          {/* One chart, one clock: the relationships are the point — WIP
+              rising against a flat rate, net sagging under a climbing
+              throughput. A legend click hides a line. */}
           <TabsContent value="trends" className="min-h-0 flex-1 overflow-auto">
-            <div className="grid h-full min-h-[36rem] grid-cols-2 grid-rows-[3fr_2fr] gap-3">
-              <div className="col-span-2 min-h-0">
-                <ChartCard
-                  title="Cumulative throughput & net profit"
-                  hint="The two scores together: money made through sales as a running total, and the same money net of operating expense and carrying cost. The gap between the lines is what the doors being open cost; net crossing the dashed zero is the run turning profitable — output can look healthy while net still falls."
-                >
-                  <TickSeriesChart
-                    data={charts.cumulative}
-                    yLabel="Cumulative ($)"
-                    tooltipLabel="Throughput"
-                    secondaryLabel="Net profit"
-                    zeroLine
-                    formatValue={formatSignedCents}
-                    formatAxis={(cents) => (cents / 100).toFixed(0)}
-                  />
-                </ChartCard>
-              </div>
-              <div className="min-h-0">
-                <ChartCard
-                  title="Throughput rate"
-                  hint="How fast the run is earning right now: the same money as a trailing rate over the last simulated minute. Bursts and stalls show directly, where the cumulative curve only bends."
-                >
-                  <TickSeriesChart
-                    data={charts.rate}
-                    yLabel="Rate ($/min)"
-                    tooltipLabel="Rate"
-                    formatValue={(cents) => `${formatCents(cents)}/min`}
-                    formatAxis={(cents) => (cents / 100).toFixed(0)}
-                    stroke="var(--chart-2)"
-                  />
-                </ChartCard>
-              </div>
-              <div className="min-h-0">
-                <ChartCard
-                  title="Work in process"
-                  hint="Parts released but not yet finished, per tick. Rising WIP against a flat rate means parts are piling up at a constraint rather than flowing — the floor tab shows where."
-                >
-                  <TickSeriesChart
-                    data={charts.wip}
-                    yLabel="WIP (parts)"
-                    tooltipLabel="WIP"
-                    formatValue={(parts) => `${parts.toLocaleString()} parts`}
-                    formatAxis={(parts) => String(parts)}
-                    stroke="var(--chart-3)"
-                    type="stepAfter"
-                  />
-                </ChartCard>
-              </div>
+            <div className="h-full min-h-[28rem]">
+              <ChartCard
+                title="Trends"
+                hint="The run's vitals on one clock — cumulative throughput, the same money net of operating expense and carrying cost (the dashed zero is break-even), the trailing-hour earning rate, and WIP on the right axis. Click a legend entry to hide a line; the shapes against each other are the story: WIP climbing while the rate is flat means parts are piling at a constraint, and net falling while throughput climbs means the doors cost more than the flow earns."
+              >
+                <TrendsChart data={trend} dayTicks={run.dayTicks} />
+              </ChartCard>
             </div>
           </TabsContent>
 

@@ -334,20 +334,22 @@ Throughput is measured in **cents**, not parts, and since Track 6A it is only
 half the score: a run's `netCents` is throughput minus operating expense minus
 carrying cost, computed at read time from frozen columns on both sides. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The Trends tab draws four series from one `GET /:id/ticks` response,
-each in a titled card with a hover hint saying what the chart answers,
-each through `TickSeriesChart` (the one recharts wrapper — data plus
-formatters, token colours, and an optional named `secondary` line +
-`zeroLine`): the stored per-tick money **accumulated**
+The Trends tab is **one chart on one clock** (`TrendsChart`; the per-series
+`TickSeriesChart` wrapper is deleted) drawing four series from one
+`GET /:id/ticks` response, each hideable by clicking its legend entry — the
+relationships are the point, and three separate cards made the viewer
+assemble them by eye. Money shares the left axis, WIP (a step line off
+`wipCount`) sits on the right, the x-axis and tooltip speak Day · time
+(`formatTickShort` / `formatTickTime`), never raw ticks. The series: the
+stored per-tick money **accumulated**
 (`openingCents(history, run.throughputCents)` →
-`cumulativeThroughput(history, opening)`) with **cumulative net profit
-overlaid on the same axis** (`netPerTick` → the same accumulator, seeded by
-`openingNetCents(history, run.netCents)` — the overlay rather than a fourth
-card because the gap between the lines is the point, and net crossing the
-dashed zero is the run turning profitable), the money as a **trailing
-rate** in cents per simulated minute (`throughputRate`, 60-tick window — the
-successor to the deleted `smoothThroughput`), and per-tick **WIP** as a step
-line straight off `wipCount`. For the cumulative curve the **opening balance
+`cumulativeThroughput(history, opening)`), **cumulative net profit**
+(`netPerTick` → the same accumulator, seeded by
+`openingNetCents(history, run.netCents)` — net crossing the dashed zero is
+the run turning profitable), and the **trailing-hour earning rate** in cents
+per staffed hour (`trailingRate`, 3600-tick window over samples
+`seriesBucket` apart — finishes are point events minutes apart, so a shorter
+window reads as a comb, which is noise, not rate). For the cumulative curve the **opening balance
 is not optional**. `/ticks` keeps only the newest 5000 rows of whatever
 resolution is asked for, so an over-long series is a *suffix* of the run and a
 curve accumulated from zero re-bases and contradicts the money in the line
@@ -355,10 +357,9 @@ above it. The Trends tab mostly avoids the cap by asking for the series
 **bucketed** (`chartBucket`: raw seconds while the run fits on screen, then
 simulated minutes, then hours — a day is 480 minute-points), which keeps the
 whole run visible and recharts fast; bucket sums keep the opening-balance
-identity exact. The rate over a bucketed series is `bucketThroughputRate` — a
-bucket already spans the rate window, so it rescales to ¢/min rather than
-sliding, since index arithmetic on a strided series would mix ticks and
-samples. It is exact rather than approximate
+identity exact. The rate over a bucketed series is `trailingRate(history, bucketTicks)` —
+the sliding window counts samples but divides by ticks, so raw and bucketed
+series of the same flow agree. It is exact rather than approximate
 because a tick's `throughputCents` is the sum of its parts' credits and the
 run's total is the sum of the same frozen per-part columns, so what the run
 earned before the window is the total minus the window's own sum, and no API
