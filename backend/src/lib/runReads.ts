@@ -3,6 +3,7 @@ import { db } from "../db/index.js";
 import {
   runFinishedParts,
   runReleasedOrders,
+  runScrappedParts,
   runTickWorkCenters,
   runTicks,
   runWipParts,
@@ -18,11 +19,13 @@ import {
 import {
   aggregateCycleTime,
   aggregateOnTimeDelivery,
+  aggregateScrap,
   groupDeliveryBySalesOrder,
   aggregateMetrics,
   type CycleTimeAggregate,
   type OnTimeDeliveryAggregate,
   type SalesOrderDelivery,
+  type ScrapAggregate,
   type MetricsAggregate,
 } from "../simulation/metrics.js";
 import type {
@@ -161,6 +164,8 @@ export type RunMetrics = {
   onTimeDelivery: OnTimeDeliveryAggregate;
   /** the same finishes per covering order; names join client-side, like /floor */
   salesOrderDelivery: SalesOrderDelivery[];
+  /** the window's ruined units, windowed on `scrapped_at_tick` */
+  scrap: ScrapAggregate;
 };
 
 /**
@@ -185,7 +190,7 @@ export async function getRunMetrics(
 
   const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
 
-  const [tickRows, centerRows, finished, storedCenters] = await Promise.all([
+  const [tickRows, centerRows, finished, scrapped, storedCenters] = await Promise.all([
     db
       .select()
       .from(runTicks)
@@ -218,6 +223,16 @@ export async function getRunMetrics(
         ),
       )
       .orderBy(runFinishedParts.completedAtTick, runFinishedParts.id),
+    db
+      .select({ materialCostCents: runScrappedParts.materialCostCents })
+      .from(runScrappedParts)
+      .where(
+        and(
+          eq(runScrappedParts.runId, runId),
+          gte(runScrappedParts.scrappedAtTick, from),
+          lte(runScrappedParts.scrappedAtTick, to),
+        ),
+      ),
     db
       .select({
         workCenterId: runWorkCenters.workCenterId,
@@ -296,6 +311,7 @@ export async function getRunMetrics(
         dueAtTick: part.dueAtTick,
       })),
     ),
+    scrap: aggregateScrap(scrapped),
   };
 }
 

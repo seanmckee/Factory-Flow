@@ -990,15 +990,27 @@ the material cents are frozen per scrapped unit — the same argument that made
       cycle time's nulls). Scrap at the last step scraps, never credits; a
       50%-per-step route chunked four ways scraps identical units to one
       batch of 40.
-- [ ] 6C.4 API. `scrapBps` through the step schemas, POST/PUT and GETs;
-      release pins both new columns; `loadRunState` loads them + the
-      setup-done set (floor's step reads gain the columns too — the engine
-      type requires them); `advanceRun` inserts scrap rows (`chunkFor` like
-      the rest) and updates the batch's `setup_started_at_tick`s in the same
-      transaction; `RunMetrics` gains `scrap` windowed on `scrapped_at_tick`;
+- [x] 6C.4 API. `scrapBps` through the step schemas (capped at 10000,
+      **defaulted to 0** so step payloads predating 6C stay valid — which
+      leaves one known hazard until 6C.5: the routing editor round-trips steps
+      without the field, so saving a routing in the UI resets its scrap rates),
+      POST/PUT and GETs; release pins both new columns; `advanceRun` inserts
+      scrap rows, updates the batch's `setup_started_at_tick`s in the same
+      transaction, and carries `setupDone` between batches like the counts;
+      `RunMetrics` gains `scrap` windowed on `scrapped_at_tick`;
       `AdvanceResult` gains `scrappedCount` (an agent-visible signal, cheap —
       the batch already holds the rows). `RunSummary` deliberately unchanged,
-      as with OTD: whole-run `/metrics` answers it. Exercise over HTTP.
+      as with OTD: whole-run `/metrics` answers it.
+      **Exercised over HTTP, and the 6C.1 due-day arithmetic verified live:**
+      brackets-first, SO-2001's 52nd unit landed at tick 27,067 of 28,800 with
+      one bracket scrapped *at the drill press* mid-day — the overage absorbed
+      it and the order still shipped 52 on time; the written setup ticks tell
+      the queue story (WO-1001 pays the drill changeover at tick 560, WO-1003
+      at 25,112 behind all of WO-1001, the flanges' still unpaid at day's
+      end); two runs from seed 4242 advanced as 20000+8800 and as 4×7200
+      produced identical money, scrap and completion ticks, which is the
+      setup-carry and scrap determinism proven at the service layer;
+      `scrapBps: 20000` 400s with the field's own message.
 - [ ] 6C.5 UI + doc sweep. Step editor gains a scrap field — entered as a
       percentage, sent as bps, the carrying-rate convention (the setup-time
       field already exists); `routingSteps.ts` drafts/parse stay the pure

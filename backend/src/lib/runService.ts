@@ -5,6 +5,7 @@ import {
   routings,
   runFinishedParts,
   runReleasedOrders,
+  runScrappedParts,
   runTickWorkCenters,
   runTicks,
   runWipParts,
@@ -222,6 +223,8 @@ export async function releaseWorkOrder(
         .select({
           workCenterId: routingSteps.workCenterId,
           processTimeSeconds: routingSteps.processTimeSeconds,
+          setupTimeSeconds: routingSteps.setupTimeSeconds,
+          scrapBps: routingSteps.scrapBps,
         })
         .from(routingSteps)
         .where(eq(routingSteps.routingId, routing.id))
@@ -251,6 +254,8 @@ export async function releaseWorkOrder(
           sequence,
           workCenterId: step.workCenterId,
           processTimeSeconds: step.processTimeSeconds,
+          setupTimeSeconds: step.setupTimeSeconds,
+          scrapBps: step.scrapBps,
         })),
       );
 
@@ -294,6 +299,11 @@ export type AdvanceResult = {
   /** the holding charge over the advance */
   carryingCostCents: number;
   /**
+   * Units ruined over the advance — an agent-visible signal beside the money,
+   * costing nothing to report since the batches already hold the rows.
+   */
+  scrappedCount: number;
+  /**
    * Parts still on the floor when the advance stopped. Reported so a caller
    * advancing until the run goes idle can terminate on the advance itself
    * rather than following every call with a `GET /:id`, whose answer could
@@ -322,6 +332,7 @@ export async function advanceRun(
     let throughputCents = 0;
     let operatingExpenseCents = 0;
     let carryingCostCents = 0;
+    let scrappedCount = 0;
 
     for (let remaining = ticks; remaining > 0; ) {
       const size = Math.min(remaining, TICKS_PER_BATCH);
@@ -363,6 +374,36 @@ export async function advanceRun(
           );
         }
 
+        for (const slice of chunked(batch.scrappedParts, chunkFor(9))) {
+          await tx.insert(runScrappedParts).values(
+            slice.map((part) => ({
+              runId,
+              partUuid: part.partId,
+              workOrderId: part.workOrderId,
+              unitIndex: part.unitIndex,
+              releasedAtTick: part.releasedAtTick,
+              scrappedAtTick: part.scrappedAtTick,
+              sequence: part.stepIndex,
+              workCenterId: part.workCenterId,
+              materialCostCents: part.materialCostCents,
+            })),
+          );
+        }
+
+        // a handful of rows per run's whole life, so per-row updates are fine
+        for (const setup of batch.setupsStarted) {
+          await tx
+            .update(runWorkOrderSteps)
+            .set({ setupStartedAtTick: setup.atTick })
+            .where(
+              and(
+                eq(runWorkOrderSteps.runId, runId),
+                eq(runWorkOrderSteps.workOrderId, setup.workOrderId),
+                eq(runWorkOrderSteps.sequence, setup.stepIndex),
+              ),
+            );
+        }
+
         for (const slice of chunked(batch.ticks, chunkFor(6))) {
           await tx.insert(runTicks).values(
             slice.map((tick) => ({
@@ -401,12 +442,14 @@ export async function advanceRun(
         operatingExpenseCents += tick.operatingExpenseCents;
         carryingCostCents += tick.carryingCostCents;
       }
+      scrappedCount += batch.scrappedParts.length;
       state = {
         ...state,
         tickNum: batch.tickNum,
         wipParts: batch.wipParts,
         priorCounts: batch.priorCounts,
         carryRemainder: batch.carryRemainder,
+        setupDone: batch.setupDone,
       };
       remaining -= size;
     }
@@ -417,6 +460,7 @@ export async function advanceRun(
       throughputCents,
       operatingExpenseCents,
       carryingCostCents,
+      scrappedCount,
       wipCount: state.wipParts.length,
     };
   });
