@@ -12,41 +12,82 @@ export const TICKS_PER_DAY = 28_800;
 /** Ticks in a staffed hour — the denominator wages accrue over. */
 export const TICKS_PER_HOUR = 3_600;
 
+/**
+ * A rate with the tick its amortization is measured from. Capital actions (6E)
+ * change a centre's rates mid-run, and a per-period rate has to know which
+ * period it is in: the accrual counts ticks from `sinceTick`, so each segment
+ * charges exactly the floor of its own duration × rate.
+ *
+ * `sinceTick: 0` means "since the run began", which is what every rate no
+ * capital action has touched carries — and so is the pre-6E accrual byte for
+ * byte.
+ */
+export type DatedRate = {
+  /**
+   * Cents per the denominator of the map it sits in: a calendar day for
+   * standing cost, a staffed hour for wages.
+   */
+  cents: number;
+  sinceTick: number;
+};
+
 /** The run's frozen cost config, loaded beside its capacities. */
 export type CostRates = {
   dayTicks: number;
+  /**
+   * Facility overhead is undated: it is frozen at creation and no capital
+   * action touches it, a centre being the only thing 6E can buy into or out
+   * of. If a facility-level action ever lands, this becomes a `DatedRate` too.
+   */
   facilityOverheadCentsPerDay: number;
   /** basis points of on-floor material value per day (100 = 1%/day) */
   wipCarryingBpsPerDay: number;
-  /** frozen per-centre standing cost, cents/day, keyed by work center id */
-  standingCostByWorkCenter: Map<number, number>;
+  /**
+   * The centre's whole daily standing cost, keyed by work center id — the
+   * loader pre-multiplies the frozen per-machine rate by the machine count, so
+   * the engine sums rates without knowing what a machine is.
+   */
+  standingCostByWorkCenter: Map<number, DatedRate>;
   /**
    * The centre's whole hourly wage bill, keyed by work center id — the loader
-   * pre-multiplies the frozen per-operator rate by the frozen capacity
-   * (operators = capacity until 6E), so the engine sums rates without knowing
-   * about operators. Per staffed hour, not per calendar day: that denominator
-   * is what makes a second shift double the day's wages while amortizing the
-   * same rent.
+   * pre-multiplies the frozen per-operator rate by the operator count, so the
+   * engine sums rates without knowing about operators. Per staffed hour, not
+   * per calendar day: that denominator is what makes a second shift double the
+   * day's wages while amortizing the same rent.
    */
-  wageCentsPerHourByWorkCenter: Map<number, number>;
+  wageCentsPerHourByWorkCenter: Map<number, DatedRate>;
 };
 
 /**
- * The integer cents a per-day rate accrues at tick `t`:
- * `floor(t·r/D) − floor((t−1)·r/D)`. A pure function of the tick number, so
- * batch splitting reproduces it with no cursor — the same property as the RNG —
- * and any full day sums to exactly `r`.
+ * The integer cents a per-day rate accrues at tick `t`, counting from the tick
+ * the rate took effect: `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`. Still a
+ * pure function of the tick number, so batch splitting reproduces it with no
+ * cursor — the same property as the RNG — and any full day *inside one
+ * segment* sums to exactly `r`.
+ *
+ * A rate charges from `sinceTick + 1` onward and nothing before it, so the
+ * default of 0 charges from the run's first tick: that is the whole of the
+ * pre-6E behaviour, unchanged.
  */
 export function accrueRate(
   rate: number,
   tickNum: number,
   dayTicks: number,
+  sinceTick = 0,
 ): number {
   if (rate < 0) throw new Error(`Cannot accrue a negative rate ${rate}`);
   if (dayTicks < 1) throw new Error(`A day of ${dayTicks} ticks is not a day`);
+  if (sinceTick < 0) {
+    throw new Error(`A rate cannot take effect at tick ${sinceTick}`);
+  }
+  // a rate in effect from t₀ charges nothing at or before it — and the floor
+  // diff of a negative elapsed count would charge a spurious cent, since
+  // `Math.floor` of a negative share rounds away from zero
+  if (tickNum <= sinceTick) return 0;
+  const elapsed = tickNum - sinceTick;
   return (
-    Math.floor((tickNum * rate) / dayTicks) -
-    Math.floor(((tickNum - 1) * rate) / dayTicks)
+    Math.floor((elapsed * rate) / dayTicks) -
+    Math.floor(((elapsed - 1) * rate) / dayTicks)
   );
 }
 
@@ -64,7 +105,12 @@ export function timeExpenseAtTick(rates: CostRates, tickNum: number): number {
     rates.dayTicks,
   );
   for (const standingCost of rates.standingCostByWorkCenter.values()) {
-    cents += accrueRate(standingCost, tickNum, rates.dayTicks);
+    cents += accrueRate(
+      standingCost.cents,
+      tickNum,
+      rates.dayTicks,
+      standingCost.sinceTick,
+    );
   }
   return cents;
 }
@@ -81,30 +127,14 @@ export function timeExpenseAtTick(rates: CostRates, tickNum: number): number {
 export function wagesAtTick(rates: CostRates, tickNum: number): number {
   let cents = 0;
   for (const hourly of rates.wageCentsPerHourByWorkCenter.values()) {
-    cents += accrueRate(hourly, tickNum, TICKS_PER_HOUR);
+    cents += accrueRate(
+      hourly.cents,
+      tickNum,
+      TICKS_PER_HOUR,
+      hourly.sinceTick,
+    );
   }
   return cents;
-}
-
-/**
- * What one rate accrues over `[fromTick, toTick]`, in O(1): the per-tick
- * accruals telescope to `floor(to·r/D) − floor((from−1)·r/D)`.
- */
-export function rateWindowCents(
-  rate: number,
-  fromTick: number,
-  toTick: number,
-  dayTicks: number,
-): number {
-  if (toTick < fromTick) {
-    throw new Error(`Window ${fromTick}..${toTick} is backwards`);
-  }
-  if (rate < 0) throw new Error(`Cannot accrue a negative rate ${rate}`);
-  if (dayTicks < 1) throw new Error(`A day of ${dayTicks} ticks is not a day`);
-  return (
-    Math.floor((toTick * rate) / dayTicks) -
-    Math.floor(((fromTick - 1) * rate) / dayTicks)
-  );
 }
 
 /**

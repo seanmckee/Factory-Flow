@@ -132,13 +132,20 @@ day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
 simply isn't ticks. Four costs, and the rules per kind:
 
 - **Time-based expense** (facility overhead + per-centre standing cost) is a
-  pure function of the tick number — `floor(t·r/D) − floor((t−1)·r/D)` — so
-  batch splitting needs no cursor and a full day sums to exactly the rate.
+  pure function of the tick number — `floor((t−t₀)·r/D) − floor((t−1−t₀)·r/D)`
+  — so batch splitting needs no cursor and a full day sums to exactly the rate.
   It is accrued **per rate and then summed**, never on the summed rate: floor
   diffs on a combined rate disagree with the summed breakdown mid-day, and the
   stored tick total must equal any per-centre breakdown by construction (the
   same principle as `calculateThroughput` being the sum of
   `creditFinishedParts`).
+  `t₀` is the tick the rate took effect (`DatedRate.sinceTick`), which 6E's
+  capital actions move: a rate charges from `t₀ + 1` onward, each segment
+  accruing exactly the floor of its own duration, and `t₀ = 0` — every rate no
+  action has touched — is the original arithmetic byte for byte. The epoch is
+  **per rate**, so buying a machine at the drill press re-phases that centre's
+  rent and nothing else's. Because an action takes the run's lock, a batch
+  never spans a change.
 - **Carrying cost** (basis points of on-floor material value per day) is the
   one true accumulator, since it depends on what sat on the floor: a fold over
   `cents · bps` numerator units with a remainder in `[0, 10000·day_ticks)`,
@@ -152,7 +159,8 @@ simply isn't ticks. Four costs, and the rules per kind:
   second shift doubles a day's wage bill while amortizing the same rent —
   which is the entire economics of adding one. The rate is
   `work_centers.wage_cents_per_hour` per operator, frozen into
-  `run_work_centers`; operators = capacity until 6E's explicit column, and
+  `run_work_centers` alongside `operators` (6E's explicit column; the migration
+  backfilled it to the machine count, which is what it meant before), and
   `loadRunState` pre-multiplies so the engine (`wagesAtTick`) sums per-centre
   rates without knowing about operators. Its own frozen tick column
   (`run_ticks.wage_cents`) and its own P&L line —
@@ -165,8 +173,11 @@ simply isn't ticks. Four costs, and the rules per kind:
   re-derives from
   rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
   finished run spent. Per-centre expense over a window is deliberately *not*
-  served: `rate × window` is only valid while rates are constant per run,
-  which 6E breaks.
+  served: `rate × window` is only valid while rates are constant per run, and
+  6E broke that — which is also why `rateWindowCents`, the telescoped
+  O(1) window 6A.2 built for a read that was never served, is **deleted**
+  rather than dated. A window can span a rate change, so the telescope no
+  longer holds, and summing the frozen tick column is the only honest answer.
 
 Two rules the port established, and both matter to how failures surface:
 

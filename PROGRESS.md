@@ -1241,14 +1241,41 @@ afterwards.
       accident. Migration applied and reseeded; arithmetic only so far — the
       engine reads none of the new columns until 6E.2/6E.3, so the payback
       story above is verified live at 6E.4 the way 6C.1's due-day story was.
-- [ ] 6E.2 Engine: effective-dated accrual + tests. `accrueRate` gains a
+- [x] 6E.2 Engine: effective-dated accrual + tests. `accrueRate` gains a
       `sinceTick`; `CostRates`' per-centre standing and wage entries become a
-      rate with the tick it took effect; `timeExpenseAtTick` and `wagesAtTick`
+      `DatedRate` — cents plus the tick it took effect;
+      `timeExpenseAtTick` and `wagesAtTick`
       keep their shape (per rate, then summed). Tests: a closed segment
       accrues exactly `floor(ticks·r/D)`; a change re-phases only its own rate
       and leaves every other centre's stream byte-identical; a pre-6E run
       (every `sinceTick` zero) accrues exactly what it accrued before, the
       6C domain-separator precedent.
+      **Decided during the unit:** a rate charges **nothing at or before its
+      own epoch** rather than throwing. It is reachable arithmetic — an action
+      applied at tick 40 leaves tick 40 to the old rate — and the naive floor
+      diff would charge a spurious cent there, `Math.floor` rounding a
+      negative share away from zero. The epoch is the tick the action was
+      applied *at*, so the first tick at the new rate is the next one, which
+      makes `sinceTick: 0` mean "since the run began" and the default path
+      identical to the old one-argument function.
+      **`rateWindowCents` is deleted**, with its three tests — the telescoped
+      O(1) window 6A.2 built for a read 6A.6 then deliberately never served.
+      A window can now span a rate change, so the telescope is simply wrong,
+      and a dead function that computes a wrong number is worse than no
+      function: the working agreement's rule about superseded wrappers.
+      **Facility overhead stays undated** — a centre is the only thing 6E can
+      buy into or out of; a facility-level action would make it a `DatedRate`
+      too.
+      **The loader now pre-multiplies both rates** — standing by machines
+      (the rate is per machine since 6E.1) and wages by `operators` rather
+      than by capacity — so the engine still knows nothing about either. Both
+      multiplications are no-ops on today's data by construction, since the
+      migration backfilled operators to the machine count and every centre has
+      one machine.
+      A `simulateBatch` test pins the property the design rests on: a rate
+      dated *inside* a batch splits identically one-batch-vs-three, so
+      chunking stays safe even though the lock means a real batch never spans
+      a change.
 - [ ] 6E.3 Engine: effective capacity + the observed denominator + tests.
       `min(machines, operators)` at the loader; `TickWorkCenterMetrics` gains
       `capacity`; `aggregateMetrics` divides by summed capacity-ticks with the
