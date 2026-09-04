@@ -32,7 +32,14 @@ the first book with a horizon a machine can pay back over. Verified by a full
 playthrough: expanded early it nets **+$42,444 at 100% OTD**, the drill press
 reads 82.7% *with two presses*, and one idle day costs $4,051. See 6H.1 below.
 
-**Next up: 6G, then the rest of 6H, and both before Track 7** — added
+**6G.1 is built (2026-09-04): observations are stored per simulated minute.**
+Advancing an empty floor went 8.9 s → 1.9 s per 20,000 ticks and the
+dashboard's own whole-run `/metrics` on the 15-day playthrough 7.4 s → 1.13 s,
+with every reported figure byte-identical across the migration. What is left of
+6G is the O(WIP) tick loop (6G.2), which the write cost was masking, and the
+jump's refresh cadence (6G.3).
+
+**Next up: 6G.2/6G.3, then the rest of 6H, and both before Track 7** — added
 2026-09-04 after driving 6E, and they are prerequisites rather than polish.
 **6G (simulator throughput):** an *empty* floor costs 8.2 s per 20,000 ticks
 because 140,000 observation rows go to the database whatever happens, so
@@ -1597,28 +1604,68 @@ instead of merely close.
       ticks byte for byte unchanged.
       **The name question is deferred to 6G.1b**, where the table is actually
       renamed and the answer has consequences.
-- [ ] 6G.1b Storage on the grid. New `run_buckets` / `run_bucket_work_centers`
-      replacing `run_ticks` / `run_tick_work_centers`; the migration
-      **aggregates the existing rows into buckets** rather than dropping them
-      (an `INSERT … SELECT … GROUP BY` per table, with
-      `(array_agg(wip_count order by tick_num desc))[1]` for the closing level —
-      the trick `getRunTicks` already uses — and `COALESCE(capacity,
-      min(machines, operators))` for the pre-6E null), so no finished run loses
-      its series. `runService` writes buckets, and the write must be an
-      **accumulating upsert** (`ON CONFLICT … DO UPDATE SET x = existing +
-      excluded`, `GREATEST` for the maxima, overwrite for the level): an
-      advance of a tick count the width does not divide leaves a **partial**
-      bucket that the next advance completes, which is the one thing per-tick
-      rows never had to handle. `getRunMetrics`, `getRun`'s expense sums and
-      `getRunTicks` all read buckets; `?bucket=N` becomes a multiple of the
-      stored width.
-      Answer the name question here: the row is no longer a tick.
-- [ ] 6G.1c Frontend + docs. `chartBucket` floors at the stored width (the
-      per-*second* series is gone, as planned — and a live beat is 60 ticks, so
-      one beat is exactly one point, which suits the chart better than it
-      sounds); `TickSample` needs no change, since `/ticks` keeps its shape
-      (`wipCount` was already a bucket-end level on the bucketed path). CLAUDE.md
-      and README.
+- [x] 6G.1b Storage on the grid. `run_buckets` / `run_bucket_work_centers`
+      replace `run_ticks` / `run_tick_work_centers`, one row per simulated
+      minute; `runService` writes them, and `getRun`, `getRunMetrics` and
+      `getRunTicks` read them.
+      **Measured, which is the whole point** (ten-centre seed, 20,000 ticks per
+      advance): advancing an empty floor **8.9 s → 1.9 s**, ~326 WIP
+      11.2 s → 3.3 s, ~1,300 WIP 13.0 s → 6.1 s; whole-run `/metrics` on the
+      432,000-tick playthrough **7.4 s → 1.13 s**, `GET /:id` 344 ms → 83 ms.
+      At heavy WIP the remaining cost is now the O(WIP) tick loop rather than
+      the write, which is 6G.2 and is no longer masked.
+      **Decided: the tables are renamed, not kept** (the open question). A row
+      is no longer a tick, and this project deletes rather than keeps a name
+      that has stopped being true — the same call as the Trends tab rename and
+      `standingCost.ts`. `start_tick` is the key rather than a bucket index, so
+      the grid reads in the same units as every other tick column.
+      **Decided: an accumulating upsert, and it is the one genuinely new
+      mechanic.** Per-tick rows were insert-only because a tick is complete when
+      written; a bucket is not, since an advance of a tick count 60 does not
+      divide leaves a partial one for the next advance to finish. So the write
+      is `ON CONFLICT … DO UPDATE` with sums adding, `greatest()` for the two
+      maxima and the closing level simply overwritten — batches arrive in tick
+      order, so the newer last tick *is* the bucket's last tick. Rejected:
+      forcing advances onto bucket boundaries (changes the API contract for a
+      storage detail) and carrying a partial bucket in `RunState` (more mutable
+      state to persist, when the row already is the accumulator).
+      **Decided: the migration aggregates the existing rows rather than dropping
+      them** — an `INSERT … SELECT … GROUP BY` per table, hand-added to the
+      generated file like 6E.1's backfill. A finished run's series is history,
+      and the claim being made is that resolution costs no reported figure, so
+      the migration ought to demonstrate that on real data instead of starting
+      empty. The pre-6E null `capacity` is resolved here with
+      `least(machines, operators)` — such runs could never change capacity, so
+      what it is now is what it was throughout — which lets `capacity_ticks` be
+      NOT NULL and **removes the read-side fallback entirely** rather than
+      carrying it forever.
+      **Decided: the window snaps to whole buckets, and every line snaps with
+      it.** `/metrics` covers the minute containing `from` through the minute
+      containing `to`, and the finished, scrapped and capital rows are windowed
+      on that same snapped range rather than the raw request — otherwise the
+      response's single label would describe minute-aligned money and
+      tick-exact OTD at once. The label coming from the response (4.4) is what
+      makes the coarsening honest. Capital still windows from the *requested*
+      start so 6E.7's tick-0 spend survives the snap.
+      **Verified over HTTP.** The migrated playthrough returns net, all five
+      P&L lines, `tickCount`, `meanWip` (358.4043), `maxWip` (1082) and all ten
+      centres' utilization, busy, capacity and observed ticks **byte for byte
+      unchanged**. And the accumulation is exact: one 300-tick advance, five
+      aligned 60s, and a jagged `7, 23, 30, 1, 99, 40, 100` produce identical
+      summaries, identical flow aggregates and identical stored series; a
+      310-tick run leaves a six-row series whose last bucket holds 10 ticks and
+      whose sums still equal the run's totals.
+- [x] 6G.1c Frontend + docs. `chartBucket` never asks finer than the stored
+      minute, and that is a **correctness fix rather than tidying**: its value
+      doubles as `trailingRate`'s sample spacing, so asking for seconds while
+      the server returns minute rows divided the rate by 60× too few ticks and
+      would have drawn the earning rate a sixtieth of its real height on every
+      run under 5,000 ticks. `seriesBucket` starts at `TICKS_PER_BUCKET` for
+      the same reason. `TickSample` needed no change, since `/ticks` keeps its
+      shape — `wipCount` was already a bucket-end level on the bucketed path.
+      CLAUDE.md's schema pointers, cost-model freeze paragraph, `/ticks`
+      contract and chart pipeline; the `ticksQuerySchema` comment.
+
 - [ ] 6G.2 Clone on write in the tick loop. Every tick copies **every** WIP
       part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
       20,000 ticks is 40 million object clones — and a part that sits queued

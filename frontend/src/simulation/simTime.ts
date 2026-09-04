@@ -41,13 +41,27 @@ export function formatTickTime(
 export const MAX_CHART_POINTS = 5_000;
 
 /**
- * The bucket the Trends tab should ask `/ticks` for: raw seconds while the
- * whole run fits on screen, then simulated minutes, then hours. Coarsening
- * beats truncating — the newest-5000 suffix once hid an entire drained floor.
+ * Ticks per stored observation bucket, mirroring the backend's
+ * `TICKS_PER_BUCKET`. The server stores one row per simulated minute (6G), so
+ * this is the finest series `/ticks` can return however small a bucket is
+ * asked for.
+ */
+export const TICKS_PER_BUCKET = 60;
+
+/**
+ * The bucket the Trends tab should ask `/ticks` for: simulated minutes while
+ * the whole run fits on screen, then hours. Coarsening beats truncating — the
+ * newest-5000 suffix once hid an entire drained floor.
+ *
+ * It never returns less than `TICKS_PER_BUCKET`, and that is **load-bearing
+ * rather than tidy**: the value is handed to `trailingRate` as the spacing
+ * between samples, and asking for 1 while the server hands back minute rows
+ * would divide the rate by 60× too few ticks. The per-second series is gone
+ * with 6G, which costs nothing the chart was showing — a live beat advances 60
+ * ticks, so one beat is exactly one point.
  */
 export function chartBucket(tickNum: number): number {
-  if (tickNum <= MAX_CHART_POINTS) return 1;
-  if (tickNum <= MAX_CHART_POINTS * 60) return 60;
+  if (tickNum <= MAX_CHART_POINTS * TICKS_PER_BUCKET) return TICKS_PER_BUCKET;
   return 3_600;
 }
 

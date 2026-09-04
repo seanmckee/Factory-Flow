@@ -60,8 +60,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   any of these, since the whole-run `/metrics` already answers them),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
-  grid aligned to absolute ticks; `capitalSpendCents` is joined onto the tick
-  or bucket that contains the action, in JS),
+  grid aligned to absolute ticks; `capitalSpendCents` is joined onto the
+  bucket that contains the action, in JS. Observations are stored per
+  simulated minute since 6G, so a bucket at or below `TICKS_PER_BUCKET`
+  returns the stored resolution rather than erroring, and a larger one
+  regroups on top),
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
   actions — one endpoint with a discriminating `kind` of `buy_machine` /
@@ -109,7 +112,7 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - History cascades from `simulation_runs`, and references out to the shared
   definition are RESTRICT — a work order a run has released can't be deleted
   from under it. Five columns are deliberately **un-keyed**: `work_center_id`
-  in `run_work_centers`, `run_work_order_steps`, `run_tick_work_centers` and
+  in `run_work_centers`, `run_work_order_steps`, `run_bucket_work_centers` and
   `run_scrapped_parts`, plus `run_released_orders.routing_id`. A pinned copy
   and a set of
   observations exist to outlive edits to what they copied; an FK would either
@@ -177,7 +180,7 @@ simply isn't ticks. Five costs, and the rules per kind:
   backfilled it to the machine count, which is what it meant before), and
   `loadRunState` pre-multiplies so the engine (`wagesAtTick`) sums per-centre
   rates without knowing about operators. Its own frozen tick column
-  (`run_ticks.wage_cents`) and its own P&L line —
+  (`run_buckets.wage_cents`) and its own P&L line —
   `netCents = throughput − OE − carrying − wages − capital` — because the
   wages-vs-rent
   split is what a shift decision is about. There is deliberately no overtime
@@ -197,8 +200,9 @@ simply isn't ticks. Five costs, and the rules per kind:
   off the frozen column, the 6B/6C pattern. There is **no cash balance**: a
   run cannot be refused a purchase for want of funds, and net simply goes
   further negative.
-- **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
-  `carrying_cost_cents` / `wage_cents` and every P&L read sums them — never
+- **The accrued cents are frozen** into `run_buckets.operating_expense_cents` /
+  `carrying_cost_cents` / `wage_cents` — per simulated minute since 6G, summed
+  from the ticks in it — and every P&L read sums those rows, never
   re-derives from
   rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
   finished run spent. Per-centre expense over a window is deliberately *not*
@@ -290,8 +294,9 @@ remainder travel the same way.
 (one staffed hour), each
 batch one transaction, so a crash costs at most one batch. Inserts are split
 per table by `chunkFor(paramsPerRow)`, because Postgres caps bind parameters
-near 65535 and a simulated day of the seeded ten-centre factory is ~320k rows.
-Both
+near 65535. Since 6G stores observations per simulated minute a day is ~5.3k
+observation rows rather than ~320k, so the chunking now matters most to the WIP
+replace. Both
 advancing and releasing take the run's `advancing` lock via `withRunLock`: an
 advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
@@ -518,7 +523,7 @@ relationships are the point, and three separate cards made the viewer
 assemble them by eye. Money shares the left axis, WIP (a step line off
 `wipCount`) sits on the right, the x-axis and tooltip speak Day · time
 (`formatTickShort` / `formatTickTime`), never raw ticks. The series: the
-stored per-tick money **accumulated**
+stored per-bucket money **accumulated**
 (`openingCents(history, run.throughputCents)` →
 `cumulativeThroughput(history, opening)`), **cumulative net profit**
 (`netPerTick` → the same accumulator, seeded by
@@ -531,10 +536,13 @@ is not optional**. `/ticks` keeps only the newest 5000 rows of whatever
 resolution is asked for, so an over-long series is a *suffix* of the run and a
 curve accumulated from zero re-bases and contradicts the money in the line
 above it. The Trends tab mostly avoids the cap by asking for the series
-**bucketed** (`chartBucket`: raw seconds while the run fits on screen, then
-simulated minutes, then hours — a day is 480 minute-points), which keeps the
+**bucketed** (`chartBucket`: simulated minutes while the run fits on screen,
+then hours — a day is 480 minute-points), which keeps the
 whole run visible and recharts fast; bucket sums keep the opening-balance
-identity exact. The rate over a bucketed series is `trailingRate(history, bucketTicks)` —
+identity exact. `chartBucket` never asks finer than the stored minute, and that
+is load-bearing rather than tidy: its value is also `trailingRate`'s sample
+spacing, so asking for seconds while the server returns minute rows would
+divide the rate by 60× too few ticks. The rate over a bucketed series is `trailingRate(history, bucketTicks)` —
 the sliding window counts samples but divides by ticks, so raw and bucketed
 series of the same flow agree. It is exact rather than approximate
 because a tick's `throughputCents` is the sum of its parts' credits and the

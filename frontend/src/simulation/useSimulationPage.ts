@@ -24,7 +24,12 @@ import {
 import { CAPITAL_LABELS, formatSpend } from "./capital";
 import { cumulativeThroughput, openingCents } from "./cumulativeThroughput";
 import { netPerTick, openingNetCents } from "./netProfit";
-import { chartBucket, formatTickTime, TICKS_PER_DAY } from "./simTime";
+import {
+  chartBucket,
+  formatTickTime,
+  TICKS_PER_BUCKET,
+  TICKS_PER_DAY,
+} from "./simTime";
 import { trailingRate } from "./throughputRate";
 import { useToast } from "../toast/ToastContext";
 import type { SalesOrder } from "../types/SalesOrder";
@@ -58,7 +63,7 @@ export function useSimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
-  const [seriesBucket, setSeriesBucket] = useState(1);
+  const [seriesBucket, setSeriesBucket] = useState(TICKS_PER_BUCKET);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [actions, setActions] = useState<CapitalAction[]>([]);
   const [capitalOpen, setCapitalOpen] = useState(false);

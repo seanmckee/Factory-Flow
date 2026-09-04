@@ -83,6 +83,71 @@ export function bucketLastTick(bucket: ObservationBucket): number {
 }
 
 /**
+ * The grid slot a tick falls in, as its first tick. The **one** place the grid
+ * is defined: the flow bucketing below, the money sums beside it, storage's
+ * primary key and `/ticks`' regrouping all go through here, so a grid that
+ * disagreed with itself would put a tick's money in one row and its
+ * observations in another.
+ *
+ * Ticks are numbered from 1, so slot boundaries are `1, w+1, 2w+1, …`.
+ */
+export function bucketStartTick(tickNum: number, width: number): number {
+  return Math.floor((tickNum - 1) / width) * width + 1;
+}
+
+/** A tick's frozen money, the four columns storage sums per bucket. */
+export type TickMoney = {
+  tickNum: number;
+  throughputCents: number;
+  operatingExpenseCents: number;
+  carryingCostCents: number;
+  wageCents: number;
+};
+
+export type BucketMoney = Omit<TickMoney, "tickNum">;
+
+/**
+ * Sum a tick series' money onto the same grid, keyed by slot start.
+ *
+ * Separate from `bucketTicks` because money and flow arrive on different
+ * shapes — `TickRecord` carries the cents, `TickMetrics` the observations — and
+ * only the write side has both. They share `bucketStartTick`, which is the part
+ * that has to agree.
+ *
+ * Summing is exact and needs no rounding: the cents are already integers frozen
+ * per tick, and a bucket's total is their sum, so a bucket sums to what the
+ * ticks in it did and a run sums to what its buckets do.
+ */
+export function bucketMoney(
+  records: TickMoney[],
+  width: number,
+): Map<number, BucketMoney> {
+  if (!Number.isInteger(width) || width < 1) {
+    throw new Error(`Bucket width must be a positive whole number, got ${width}`);
+  }
+
+  const byStart = new Map<number, BucketMoney>();
+  for (const record of records) {
+    const start = bucketStartTick(record.tickNum, width);
+    let money = byStart.get(start);
+    if (!money) {
+      money = {
+        throughputCents: 0,
+        operatingExpenseCents: 0,
+        carryingCostCents: 0,
+        wageCents: 0,
+      };
+      byStart.set(start, money);
+    }
+    money.throughputCents += record.throughputCents;
+    money.operatingExpenseCents += record.operatingExpenseCents;
+    money.carryingCostCents += record.carryingCostCents;
+    money.wageCents += record.wageCents;
+  }
+  return byStart;
+}
+
+/**
  * Group a tick-ordered series of observations onto the bucket grid.
  *
  * `series` must be in ascending tick order — storage returns it that way and a
@@ -108,7 +173,7 @@ export function bucketTicks(
   // per-bucket work-center accumulators, held beside the bucket being filled
   let centers = new Map<number, BucketWorkCenterMetrics>();
   let current: ObservationBucket | undefined;
-  let currentIndex = -1;
+  let currentStart = -1;
   let previousTick = -Infinity;
 
   for (const tick of series) {
@@ -119,11 +184,11 @@ export function bucketTicks(
     }
     previousTick = tick.tickNum;
 
-    const index = Math.floor((tick.tickNum - 1) / width);
-    if (!current || index !== currentIndex) {
+    const start = bucketStartTick(tick.tickNum, width);
+    if (!current || start !== currentStart) {
       centers = new Map();
       current = {
-        startTick: index * width + 1,
+        startTick: start,
         tickCount: 0,
         wipPartTicks: 0,
         maxWip: 0,
@@ -131,7 +196,7 @@ export function bucketTicks(
         workCenters: [],
       };
       buckets.push(current);
-      currentIndex = index;
+      currentStart = start;
     }
 
     current.tickCount += 1;

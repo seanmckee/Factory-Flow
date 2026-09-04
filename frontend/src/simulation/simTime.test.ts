@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { chartBucket, formatDays, formatDurationSeconds, formatTickShort, formatTickTime, ticksToDays, MAX_CHART_POINTS, TICKS_PER_DAY } from "./simTime";
+import { chartBucket, formatDays, formatDurationSeconds, formatTickShort, formatTickTime, ticksToDays, MAX_CHART_POINTS, TICKS_PER_BUCKET, TICKS_PER_DAY } from "./simTime";
 
 describe("ticksToDays", () => {
   it("converts a whole day exactly", () => {
@@ -44,15 +44,20 @@ describe("formatTickTime", () => {
 });
 
 describe("chartBucket", () => {
-  it("stays at raw seconds while the run fits on screen", () => {
-    expect(chartBucket(0)).toBe(1);
-    expect(chartBucket(MAX_CHART_POINTS)).toBe(1);
+  it("never asks finer than the stored bucket", () => {
+    // the server stores a row per simulated minute (6G), so a smaller bucket
+    // would be handed minute rows anyway — and the value doubles as
+    // `trailingRate`'s sample spacing, so asking for 1 would divide the rate
+    // by 60x too few ticks
+    expect(chartBucket(0)).toBe(TICKS_PER_BUCKET);
+    expect(chartBucket(MAX_CHART_POINTS)).toBe(TICKS_PER_BUCKET);
+    expect(chartBucket(MAX_CHART_POINTS * TICKS_PER_BUCKET)).toBe(
+      TICKS_PER_BUCKET,
+    );
   });
 
-  it("coarsens to minutes, then hours, as the run outgrows the screen", () => {
-    expect(chartBucket(MAX_CHART_POINTS + 1)).toBe(60);
-    expect(chartBucket(MAX_CHART_POINTS * 60)).toBe(60);
-    expect(chartBucket(MAX_CHART_POINTS * 60 + 1)).toBe(3_600);
+  it("coarsens to hours once the run outgrows the screen at minutes", () => {
+    expect(chartBucket(MAX_CHART_POINTS * TICKS_PER_BUCKET + 1)).toBe(3_600);
   });
 
   it("keeps a full day at minute resolution", () => {
