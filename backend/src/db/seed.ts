@@ -15,6 +15,280 @@ import {
 
 const db = drizzle(process.env.DATABASE_URL!);
 
+/* ---------------------------------------------------------------------------
+ * The playground seed: a ten-centre floor, ten parts with full routings, and a
+ * 29-order / ~3,600-unit book spanning three demand waves over 18 due-days —
+ * deep enough that long runs need no manual data entry, and priced so the
+ * capital levers are real decisions rather than always-buy or never-buy.
+ *
+ * The economics, so retuning stays explainable:
+ *
+ * - Base burn is ~$3,340/day at one shift: $600 facility overhead + $1,700 of
+ *   standing cost + $1,040 of wages (ten operators, 8 staffed hours).
+ * - The constraint ladder. Demand on the Drill Press is ~23.5 press-days
+ *   against an 18-day due book, so one press makes wave 1 (barely, if
+ *   prioritized) and drowns in waves 2–3 — a second press is how OTD survives.
+ *   The Cutter carries ~16 cutter-days and feeds almost everything, so it
+ *   binds next once presses multiply; the CNC Mill (~9 mill-days, and the
+ *   highest margin per second in the shop) is the third buy. Welding, Lathe
+ *   and Paint sit at 3–7 days each: comfortable, until fillers pile on.
+ * - Margin per constraint-second orders the dispatch decision: Manifold
+ *   13.3¢/mill-s and Housing 13.9¢/mill-s (the premium line), Rail 11.8¢ and
+ *   Bracket 10.0¢/drill-s, Pivot 9.2¢, Flange 5.8¢. Hinge, Spacer and Bushing
+ *   never touch the drill or mill — nearly-free money while the shop has
+ *   slack, and the first thing to shed when the Cutter or Lathe becomes the
+ *   constraint (a spacer earns 5.6¢/cutter-s to the bracket's 20¢).
+ * - The whole book carries ~$121k of margin against ~$43k of material.
+ *   Released all at once at 10%/day carrying that floor costs ~$4,300/day —
+ *   staged releases are not optional. Run solo (~26 days) the book nets
+ *   roughly +$26k with waves 2–3 late; expanded early (2nd press, 2nd mill,
+ *   2nd cutter and their operators, ~$4k of capital) it nets roughly +$48k
+ *   with OTD intact. The controls are the difference.
+ * ------------------------------------------------------------------------- */
+
+// Capital prices follow one rule each, enforced by construction below: a
+// machine costs four days of its own standing cost and salvages for half
+// (churning costs real money — the model punishes indecision), and hiring an
+// operator costs two staffed days of that operator's wage.
+const CENTER_SPECS = [
+  { name: "Raw Material", standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
+  { name: "Cutter", standingCostCentsPerDay: 15_000, wageCentsPerHour: 1200 },
+  { name: "Lathe", standingCostCentsPerDay: 20_000, wageCentsPerHour: 1400 },
+  { name: "CNC Mill", standingCostCentsPerDay: 35_000, wageCentsPerHour: 2000 },
+  { name: "Drill Press", standingCostCentsPerDay: 30_000, wageCentsPerHour: 1800 },
+  { name: "Welding", standingCostCentsPerDay: 18_000, wageCentsPerHour: 1600 },
+  { name: "Deburr", standingCostCentsPerDay: 10_000, wageCentsPerHour: 1000 },
+  { name: "Paint Booth", standingCostCentsPerDay: 22_000, wageCentsPerHour: 1200 },
+  { name: "Inspection", standingCostCentsPerDay: 10_000, wageCentsPerHour: 1200 },
+  { name: "Packaging", standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
+];
+
+type StepSpec = {
+  center: string;
+  processTimeSeconds: number;
+  setupTimeSeconds: number;
+  scrapBps: number;
+};
+
+type PartSpec = {
+  partNumber: string;
+  name: string;
+  materialCostCents: number;
+  routingName: string;
+  steps: StepSpec[];
+};
+
+// Process times are minutes-scale seconds; setups are one changeover per
+// (work order, step), so splitting an order across work orders visibly costs
+// constraint time. Scrap sits where value has already accrued — worst on the
+// mill and weld, whose seconds are the dearest in the shop.
+const PART_SPECS: PartSpec[] = [
+  {
+    partNumber: "100-001",
+    name: "Aluminum Bracket",
+    materialCostCents: 1200,
+    routingName: "Standard Bracket Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 240, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Drill Press", processTimeSeconds: 480, setupTimeSeconds: 600, scrapBps: 100 },
+      { center: "Deburr", processTimeSeconds: 180, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Inspection", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    partNumber: "100-002",
+    name: "Steel Flange",
+    materialCostCents: 800,
+    routingName: "Standard Flange Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 180, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Drill Press", processTimeSeconds: 480, setupTimeSeconds: 600, scrapBps: 100 },
+      { center: "Inspection", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // Filler: no drill, no mill. Earns only while the Cutter and Deburr have
+    // slack — and stops being worth cutting the moment they don't.
+    partNumber: "100-003",
+    name: "Hinge Plate",
+    materialCostCents: 500,
+    routingName: "Hinge Plate Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 120, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Deburr", processTimeSeconds: 120, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Packaging", processTimeSeconds: 30, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // The drill hog: 720s of press time a unit, priced to be worth it
+    // (11.8¢/drill-s to the bracket's 10¢).
+    partNumber: "200-001",
+    name: "Mounting Rail",
+    materialCostCents: 2500,
+    routingName: "Mounting Rail Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 300, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Drill Press", processTimeSeconds: 720, setupTimeSeconds: 900, scrapBps: 150 },
+      { center: "Deburr", processTimeSeconds: 240, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Inspection", processTimeSeconds: 180, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    partNumber: "200-002",
+    name: "Pivot Arm",
+    materialCostCents: 1500,
+    routingName: "Pivot Arm Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Lathe", processTimeSeconds: 300, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Drill Press", processTimeSeconds: 360, setupTimeSeconds: 600, scrapBps: 100 },
+      { center: "Inspection", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 60, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // Pure filler: three fast steps. The 300s cutter setup against 90s units
+    // is why spacer orders come big — a small batch is setup-dominated.
+    partNumber: "300-001",
+    name: "Spacer Kit",
+    materialCostCents: 300,
+    routingName: "Spacer Kit Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 30, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 90, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Packaging", processTimeSeconds: 30, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // Lathe filler — keeps the Lathe honest between pivot batches.
+    partNumber: "300-002",
+    name: "Threaded Bushing",
+    materialCostCents: 600,
+    routingName: "Threaded Bushing Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 30, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Lathe", processTimeSeconds: 240, setupTimeSeconds: 300, scrapBps: 75 },
+      { center: "Deburr", processTimeSeconds: 60, setupTimeSeconds: 150, scrapBps: 25 },
+      { center: "Packaging", processTimeSeconds: 30, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // The premium line: 1200s of mill time a unit at the best margin per
+    // second in the shop — what the second mill is bought for.
+    partNumber: "400-001",
+    name: "Precision Manifold",
+    materialCostCents: 6000,
+    routingName: "Precision Manifold Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 240, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "CNC Mill", processTimeSeconds: 1200, setupTimeSeconds: 1200, scrapBps: 200 },
+      { center: "Drill Press", processTimeSeconds: 240, setupTimeSeconds: 600, scrapBps: 50 },
+      { center: "Inspection", processTimeSeconds: 300, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 90, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    partNumber: "400-002",
+    name: "Gearbox Housing",
+    materialCostCents: 4500,
+    routingName: "Gearbox Housing Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "CNC Mill", processTimeSeconds: 900, setupTimeSeconds: 1200, scrapBps: 150 },
+      { center: "Drill Press", processTimeSeconds: 360, setupTimeSeconds: 600, scrapBps: 100 },
+      { center: "Deburr", processTimeSeconds: 180, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Paint Booth", processTimeSeconds: 300, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Inspection", processTimeSeconds: 240, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 90, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+  {
+    // The Welding line's whole demand — skips drill and mill entirely, so
+    // frames keep earning while the presses are buried.
+    partNumber: "500-001",
+    name: "Steel Frame Weldment",
+    materialCostCents: 3500,
+    routingName: "Frame Weldment Process",
+    steps: [
+      { center: "Raw Material", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Cutter", processTimeSeconds: 360, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Welding", processTimeSeconds: 600, setupTimeSeconds: 600, scrapBps: 150 },
+      { center: "Deburr", processTimeSeconds: 240, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Paint Booth", processTimeSeconds: 360, setupTimeSeconds: 300, scrapBps: 50 },
+      { center: "Inspection", processTimeSeconds: 180, setupTimeSeconds: 0, scrapBps: 0 },
+      { center: "Packaging", processTimeSeconds: 120, setupTimeSeconds: 0, scrapBps: 0 },
+    ],
+  },
+];
+
+type BookEntry = {
+  part: string;
+  quantity: number;
+  unitPriceCents: number;
+  dueDay: number;
+};
+
+// Three waves. Wave 1 (due days 2–6) is makeable on the starting factory if
+// releases are staged and the constraint runs the right parts. Wave 2 (8–12)
+// is ~8 press-days and ~3 mill-days due inside five — on time only with the
+// second press (and mill) bought early. Wave 3 (14–18) is ~11 more press-days:
+// the expanded factory cruises, the starting one ships everything weeks late.
+// Prices wobble a few dollars order to order, so the margin ordering is a fact
+// about parts, not a single number to memorize.
+const ORDER_BOOK: BookEntry[] = [
+  // Wave 1
+  { part: "100-001", quantity: 60, unitPriceCents: 6_000, dueDay: 2 },
+  { part: "400-001", quantity: 25, unitPriceCents: 22_000, dueDay: 3 },
+  { part: "100-002", quantity: 90, unitPriceCents: 3_600, dueDay: 4 },
+  { part: "100-003", quantity: 120, unitPriceCents: 1_400, dueDay: 4 },
+  { part: "500-001", quantity: 35, unitPriceCents: 13_000, dueDay: 5 },
+  { part: "200-002", quantity: 60, unitPriceCents: 4_800, dueDay: 5 },
+  { part: "300-002", quantity: 100, unitPriceCents: 1_800, dueDay: 6 },
+  { part: "300-001", quantity: 200, unitPriceCents: 800, dueDay: 6 },
+  // Wave 2
+  { part: "400-001", quantity: 50, unitPriceCents: 21_500, dueDay: 8 },
+  { part: "200-001", quantity: 60, unitPriceCents: 10_500, dueDay: 8 },
+  { part: "400-002", quantity: 40, unitPriceCents: 17_000, dueDay: 9 },
+  { part: "100-001", quantity: 120, unitPriceCents: 5_800, dueDay: 10 },
+  { part: "500-001", quantity: 60, unitPriceCents: 12_800, dueDay: 10 },
+  { part: "100-002", quantity: 150, unitPriceCents: 3_800, dueDay: 11 },
+  { part: "100-003", quantity: 200, unitPriceCents: 1_300, dueDay: 11 },
+  { part: "200-002", quantity: 100, unitPriceCents: 5_000, dueDay: 12 },
+  { part: "300-002", quantity: 150, unitPriceCents: 1_700, dueDay: 12 },
+  { part: "300-001", quantity: 300, unitPriceCents: 800, dueDay: 12 },
+  // Wave 3
+  { part: "400-001", quantity: 60, unitPriceCents: 22_500, dueDay: 14 },
+  { part: "200-001", quantity: 80, unitPriceCents: 11_500, dueDay: 14 },
+  { part: "400-002", quantity: 60, unitPriceCents: 17_500, dueDay: 15 },
+  { part: "100-001", quantity: 150, unitPriceCents: 6_200, dueDay: 15 },
+  { part: "500-001", quantity: 80, unitPriceCents: 13_500, dueDay: 16 },
+  { part: "200-002", quantity: 120, unitPriceCents: 4_600, dueDay: 16 },
+  { part: "100-002", quantity: 180, unitPriceCents: 3_500, dueDay: 17 },
+  { part: "100-003", quantity: 250, unitPriceCents: 1_400, dueDay: 17 },
+  { part: "300-002", quantity: 200, unitPriceCents: 1_800, dueDay: 17 },
+  { part: "100-001", quantity: 100, unitPriceCents: 6_600, dueDay: 18 },
+  { part: "300-001", quantity: 400, unitPriceCents: 900, dueDay: 18 },
+];
+
+/**
+ * Overage units against scrap: every work order carries spares sized at 1.5×
+ * the routing's expected loss plus one, so full delivery survives an ordinary
+ * scrap draw (~2σ) without being certain. The spares are uncovered — they
+ * consume material, carrying and constraint time and earn nothing — which is
+ * exactly the trade a real overage decision is.
+ */
+function spareUnits(quantity: number, totalScrapBps: number): number {
+  return Math.ceil((quantity * totalScrapBps * 1.5) / 10000) + 1;
+}
+
 async function seed() {
   console.log("Seeding database...");
 
@@ -30,347 +304,147 @@ async function seed() {
   await db.delete(workCenters);
   await db.delete(parts);
 
-  // Cost rates are tuning knobs, sized against what the constraint can earn:
-  // the drill press moves ~60 units/day (28800 ticks / 480s, less a 600-tick
-  // changeover per work order). At one shift a staffed day costs ~$1,894 -
-  // $1,350/day of standing costs + overhead plus ~$544 of wages (6 operators,
-  // one apiece, 8 staffed hours; standing cost is per machine since 6E, and
-  // every centre starts with one). A bracket drill-day earns
-  // ~$2,900 of margin - profitable while the constraint is fed, loss-making
-  // idle - while a flange-only day earns ~$1,680: below the staffed-day line
-  // but far above zero, so flanges are worth running once staffed yet can't
-  // carry the factory. Wages are per staffed hour, so a second shift doubles
-  // the day's wage bill while amortizing the same rent.
   await db.insert(factorySettings).values({
     id: 1,
     facilityOverheadCentsPerDay: 60_000, // $600/day - rent, the doors being open
-    wipCarryingBpsPerDay: 1000, // 10%/day of material value - aggressive, so releasing everything visibly costs
+    wipCarryingBpsPerDay: 1000, // 10%/day of material value - releasing everything at once visibly costs
     shifts: 1,
   });
 
-  // Capital prices (6E) follow one rule each, so they stay explainable when
-  // the rates above are retuned: a machine costs **four days of its own
-  // standing cost** to buy and returns **half of that** as salvage (so
-  // churning one costs half its value - the model punishes indecision rather
-  // than rewarding fiddling), and hiring an operator costs **two staffed days
-  // of that operator's wage**.
-  //
-  // The number that matters is the drill press at $1,200. One press runs the
-  // ~170-unit book below in ~2.9 drill-days; two run it in ~1.5, the cutter
-  // binding next at ~120 brackets/day. So the whole prize is the ~$1,900/day
-  // of standing cost, overhead and wages that the compression avoids, less the
-  // second press's own ~$444/day - which pays for a $1,200 press with room to
-  // spare **if it is bought early**, and loses outright bought on day 2 with
-  // the book nearly chewed. A finite book is the other half of the lesson:
-  // capacity beyond the market is not throughput.
   const insertedWorkCenters = await db
     .insert(workCenters)
-    .values([
-      {
-        name: "Raw Material",
+    .values(
+      CENTER_SPECS.map((c) => ({
+        name: c.name,
         capacity: 1,
         operators: 1,
-        standingCostCentsPerDay: 5_000,
-        wageCentsPerHour: 800,
-        machinePurchaseCents: 20_000,
-        machineSalvageCents: 10_000,
-        operatorHireCents: 12_800,
-      },
-      {
-        name: "Cutter",
-        capacity: 1,
-        operators: 1,
-        standingCostCentsPerDay: 15_000,
-        wageCentsPerHour: 1200,
-        machinePurchaseCents: 60_000,
-        machineSalvageCents: 30_000,
-        operatorHireCents: 19_200,
-      },
-      {
-        name: "Drill Press",
-        capacity: 1,
-        operators: 1,
-        standingCostCentsPerDay: 30_000,
-        wageCentsPerHour: 1800,
-        machinePurchaseCents: 120_000,
-        machineSalvageCents: 60_000,
-        operatorHireCents: 28_800,
-      },
-      {
-        name: "Deburr",
-        capacity: 1,
-        operators: 1,
-        standingCostCentsPerDay: 10_000,
-        wageCentsPerHour: 1000,
-        machinePurchaseCents: 40_000,
-        machineSalvageCents: 20_000,
-        operatorHireCents: 16_000,
-      },
-      {
-        name: "Inspection",
-        capacity: 1,
-        operators: 1,
-        standingCostCentsPerDay: 10_000,
-        wageCentsPerHour: 1200,
-        machinePurchaseCents: 40_000,
-        machineSalvageCents: 20_000,
-        operatorHireCents: 19_200,
-      },
-      {
-        name: "Packaging",
-        capacity: 1,
-        operators: 1,
-        standingCostCentsPerDay: 5_000,
-        wageCentsPerHour: 800,
-        machinePurchaseCents: 20_000,
-        machineSalvageCents: 10_000,
-        operatorHireCents: 12_800,
-      },
-    ])
+        standingCostCentsPerDay: c.standingCostCentsPerDay,
+        wageCentsPerHour: c.wageCentsPerHour,
+        machinePurchaseCents: 4 * c.standingCostCentsPerDay,
+        machineSalvageCents: 2 * c.standingCostCentsPerDay,
+        operatorHireCents: 16 * c.wageCentsPerHour,
+      })),
+    )
     .returning();
+
+  const centerIdByName = new Map(insertedWorkCenters.map((c) => [c.name, c.id]));
 
   const insertedParts = await db
     .insert(parts)
-    .values([
-      {
-        partNumber: "100-001",
-        name: "Aluminum Bracket",
-        materialCostCents: 1200,
-      },
-      { partNumber: "100-002", name: "Steel Flange", materialCostCents: 800 },
-      { partNumber: "100-003", name: "Hinge Plate", materialCostCents: 500 },
-      { partNumber: "200-001", name: "Mounting Rail", materialCostCents: 2500 },
-      { partNumber: "200-002", name: "Pivot Arm", materialCostCents: 1500 },
-    ])
+    .values(
+      PART_SPECS.map((p) => ({
+        partNumber: p.partNumber,
+        name: p.name,
+        materialCostCents: p.materialCostCents,
+      })),
+    )
     .returning();
 
-  const bracket = insertedParts.find((p) => p.partNumber === "100-001")!;
-  const flange = insertedParts.find((p) => p.partNumber === "100-002")!;
+  const partIdByNumber = new Map(insertedParts.map((p) => [p.partNumber, p.id]));
 
-  const [flangeRouting] = await db
-    .insert(routings)
-    .values({ partId: flange.id, name: "Standard Flange Process" })
-    .returning();
+  // One routing per part, steps from the spec.
+  const routingIdByPartNumber = new Map<string, number>();
+  for (const spec of PART_SPECS) {
+    const partId = partIdByNumber.get(spec.partNumber);
+    if (partId === undefined) {
+      throw new Error(`Part insert failed for ${spec.partNumber}`);
+    }
+    const [routing] = await db
+      .insert(routings)
+      .values({ partId, name: spec.routingName })
+      .returning();
+    if (!routing) {
+      throw new Error(`Routing insert failed for ${spec.partNumber}`);
+    }
+    routingIdByPartNumber.set(spec.partNumber, routing.id);
 
-  const [bracketRouting] = await db
-    .insert(routings)
-    .values({ partId: bracket.id, name: "Standard Bracket Process" })
-    .returning();
-
-  if (!bracketRouting || !flangeRouting) {
-    throw new Error("Routing insert failed");
+    await db.insert(routingSteps).values(
+      spec.steps.map((step, i) => {
+        const workCenterId = centerIdByName.get(step.center);
+        if (workCenterId === undefined) {
+          throw new Error(`Unknown work center ${step.center}`);
+        }
+        return {
+          routingId: routing.id,
+          workCenterId,
+          sequence: i + 1,
+          processTimeSeconds: step.processTimeSeconds,
+          setupTimeSeconds: step.setupTimeSeconds,
+          scrapBps: step.scrapBps,
+        };
+      }),
+    );
   }
 
-  const [rawMaterial, cutter, drillPress, deburr, inspection, packaging] =
-    insertedWorkCenters;
-  if (
-    !rawMaterial ||
-    !cutter ||
-    !drillPress ||
-    !deburr ||
-    !inspection ||
-    !packaging
-  ) {
-    throw new Error("Work center insert failed");
-  }
+  // One work order per sales order, WO-1001 ↔ SO-2001 and so on down the book,
+  // with the work order carrying the spares and the allocation covering
+  // exactly the sold quantity.
+  const scrapBpsByPartNumber = new Map(
+    PART_SPECS.map((p) => [
+      p.partNumber,
+      p.steps.reduce((sum, s) => sum + s.scrapBps, 0),
+    ]),
+  );
 
-  // Flange: 5 steps, skips Deburr. Drill Press is the shared constraint.
-  // Process times are minutes, not toy seconds, so the order book below spans
-  // simulated days and per-day costs are material against the money earned.
-  //
-  // Setups (6C) are one changeover per work order per step: the drill's 10
-  // minutes is worth 1.25 units of constraint time, so splitting an order
-  // across work orders visibly costs. Scrap rates put the risk where value
-  // has accrued — worst at the drill, where the constraint minutes are
-  // already spent when the unit fails.
-  await db.insert(routingSteps).values([
-    {
-      routingId: flangeRouting.id,
-      workCenterId: rawMaterial.id,
-      sequence: 1,
-      processTimeSeconds: 60,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-    {
-      routingId: flangeRouting.id,
-      workCenterId: cutter.id,
-      sequence: 2,
-      processTimeSeconds: 180,
-      setupTimeSeconds: 300,
-      scrapBps: 50,
-    },
-    {
-      routingId: flangeRouting.id,
-      workCenterId: drillPress.id,
-      sequence: 3,
-      processTimeSeconds: 480,
-      setupTimeSeconds: 600,
-      scrapBps: 100,
-    },
-    {
-      routingId: flangeRouting.id,
-      workCenterId: inspection.id,
-      sequence: 4,
-      processTimeSeconds: 120,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-    {
-      routingId: flangeRouting.id,
-      workCenterId: packaging.id,
-      sequence: 5,
-      processTimeSeconds: 60,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-  ]);
-
-  // Bracket: 6 steps, includes Deburr. Drill Press is the shared constraint.
-  await db.insert(routingSteps).values([
-    {
-      routingId: bracketRouting.id,
-      workCenterId: rawMaterial.id,
-      sequence: 1,
-      processTimeSeconds: 60,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-    {
-      routingId: bracketRouting.id,
-      workCenterId: cutter.id,
-      sequence: 2,
-      processTimeSeconds: 240,
-      setupTimeSeconds: 300,
-      scrapBps: 50,
-    },
-    {
-      routingId: bracketRouting.id,
-      workCenterId: drillPress.id,
-      sequence: 3,
-      processTimeSeconds: 480,
-      setupTimeSeconds: 600,
-      scrapBps: 100,
-    },
-    {
-      routingId: bracketRouting.id,
-      workCenterId: deburr.id,
-      sequence: 4,
-      processTimeSeconds: 180,
-      setupTimeSeconds: 300,
-      scrapBps: 50,
-    },
-    {
-      routingId: bracketRouting.id,
-      workCenterId: inspection.id,
-      sequence: 5,
-      processTimeSeconds: 120,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-    {
-      routingId: bracketRouting.id,
-      workCenterId: packaging.id,
-      sequence: 6,
-      processTimeSeconds: 60,
-      setupTimeSeconds: 0,
-      scrapBps: 0,
-    },
-  ]);
+  const workOrderValues = ORDER_BOOK.map((entry, i) => {
+    const partId = partIdByNumber.get(entry.part);
+    const routingId = routingIdByPartNumber.get(entry.part);
+    const totalScrapBps = scrapBpsByPartNumber.get(entry.part);
+    if (partId === undefined || routingId === undefined || totalScrapBps === undefined) {
+      throw new Error(`Order book references unknown part ${entry.part}`);
+    }
+    return {
+      orderNumber: `WO-${1001 + i}`,
+      partId,
+      routingId,
+      quantity: entry.quantity + spareUnits(entry.quantity, totalScrapBps),
+    };
+  });
 
   const insertedWorkOrders = await db
     .insert(workOrders)
-    .values([
-      {
-        // 52 units against a 50-unit allocation: two units of overage, the
-        // planned answer to scrap (a bracket has a ~2% chance of dying on the
-        // way through, so an exact 50 under-delivers SO-2001 in most runs).
-        // The spares cost their material and carrying either way — that is
-        // the trade. WO-1002 stays exact, so SO-2003 wears the other half of
-        // the decision.
-        orderNumber: "WO-1001",
-        partId: bracket.id,
-        routingId: bracketRouting.id,
-        quantity: 52,
-      },
-      {
-        orderNumber: "WO-1002",
-        partId: flange.id,
-        routingId: flangeRouting.id,
-        quantity: 90,
-      },
-      {
-        orderNumber: "WO-1003",
-        partId: bracket.id,
-        routingId: bracketRouting.id,
-        quantity: 30,
-      },
-    ])
+    .values(workOrderValues)
     .returning();
 
-  const [wo1001, wo1002, wo1003] = insertedWorkOrders;
-  if (!wo1001 || !wo1002 || !wo1003) {
-    throw new Error("Work order insert failed");
-  }
+  const salesOrderValues = ORDER_BOOK.map((entry, i) => {
+    const partId = partIdByNumber.get(entry.part);
+    if (partId === undefined) {
+      throw new Error(`Order book references unknown part ${entry.part}`);
+    }
+    return {
+      orderNumber: `SO-${2001 + i}`,
+      partId,
+      quantity: entry.quantity,
+      unitPriceCents: entry.unitPriceCents,
+      dueDay: entry.dueDay,
+    };
+  });
 
   const insertedSalesOrders = await db
     .insert(salesOrders)
-    .values([
-      // Due days are sized against the drill press (~480s/unit, ~60/day; the
-      // book is ~2.9 drill-days plus a 10-minute changeover per work order):
-      // SO-2001 makes day 1 only if brackets release immediately and run
-      // first, and 6C tightened it — its 52 units span two work orders, so
-      // the split costs a second drill setup, and WO-1001's two overage units
-      // run ahead of WO-1003 in the queue. Brackets-first the last unit lands
-      // ~tick 28,100 of 28,800, a ~1σ margin: a tight promise, not a safe
-      // one. SO-2002 stays comfortable brackets-first and late flanges-first,
-      // so the due date agrees with the price signal (the $65 order is the
-      // one to protect); SO-2003 makes day 3 only if the drill never starves,
-      // in tension with the carrying cost that rewards releasing WO-1002
-      // late — and its exact 90 means any flange scrap under-delivers it.
-      // Prices were raised with 6D's wages so a fed constraint still profits;
-      // the ordering of the price signal is unchanged (protect the brackets,
-      // and the $65 order above the $60 one).
-      {
-        orderNumber: "SO-2001",
-        partId: bracket.id,
-        quantity: 52,
-        unitPriceCents: 6000,
-        dueDay: 1,
-      },
-      {
-        orderNumber: "SO-2002",
-        partId: bracket.id,
-        quantity: 28,
-        unitPriceCents: 6500,
-        dueDay: 2,
-      },
-      {
-        orderNumber: "SO-2003",
-        partId: flange.id,
-        quantity: 90,
-        unitPriceCents: 3600,
-        dueDay: 3,
-      },
-    ])
+    .values(salesOrderValues)
     .returning();
 
-  const [so2001, so2002, so2003] = insertedSalesOrders;
-  if (!so2001 || !so2002 || !so2003) {
-    throw new Error("Sales order insert failed");
-  }
+  // 1:1 allocations, one statement: ids come out ascending in insert order,
+  // which is the order `calculateThroughput` consumes them in.
+  const allocationValues = ORDER_BOOK.map((entry, i) => {
+    const so = insertedSalesOrders[i];
+    const wo = insertedWorkOrders[i];
+    if (!so || !wo) {
+      throw new Error(`Order insert failed at book index ${i}`);
+    }
+    return { salesOrderId: so.id, workOrderId: wo.id, quantity: entry.quantity };
+  });
 
-  await db.insert(allocations).values([
-    // SO-2001 needs 52 brackets  takes two work orders to cover
-    { salesOrderId: so2001.id, workOrderId: wo1001.id, quantity: 50 },
-    { salesOrderId: so2001.id, workOrderId: wo1003.id, quantity: 2 },
-    // WO-1003 makes 30  remaining 28 go to another customer at a higher price
-    { salesOrderId: so2002.id, workOrderId: wo1003.id, quantity: 28 },
-    // SO-2003 covered by a single work order
-    { salesOrderId: so2003.id, workOrderId: wo1002.id, quantity: 90 },
-  ]);
+  await db.insert(allocations).values(allocationValues);
 
-  console.log("Database Seeded");
+  const totalUnits = workOrderValues.reduce((sum, wo) => sum + wo.quantity, 0);
+  const soldUnits = ORDER_BOOK.reduce((sum, e) => sum + e.quantity, 0);
+  console.log(
+    `Database seeded: ${CENTER_SPECS.length} work centers, ${PART_SPECS.length} parts/routings, ` +
+      `${ORDER_BOOK.length} sales orders covering ${soldUnits} units ` +
+      `(${totalUnits} released units including scrap spares), due days 2-18.`,
+  );
 }
 
 seed().catch((err) => {

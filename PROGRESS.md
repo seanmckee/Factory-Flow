@@ -25,16 +25,23 @@ shift changes. Both make a run's calendar day non-uniform, which is the one
 place `day_ticks` is a single frozen integer, and overtime without a wage
 premium strictly dominates every other labour lever. See the 6F section.
 
-**Next up: 6G then 6H, and both before Track 7** — added 2026-09-04 after
-driving 6E, and they are prerequisites rather than polish. **6G (simulator
-throughput):** an *empty* floor costs 8.2 s per 20,000 ticks because 140,000
-observation rows go to the database whatever happens, so per-minute buckets
-are finally worth the schema change; the O(WIP) tick loop is a second,
-independent curve that bites past ~500 parts. **6H (demand depth):** buying
-capacity always loses today, and the measured reason is the book, not the
-prices — 172 units is 1.4 drill-days at two presses, after which an idle
-factory burns 189,400c a day, so there is no horizon for a machine to pay back
-over. 6G comes first because 6H makes every run ten times longer.
+**6H.1 landed out of order (2026-09-04, user call): the playground seed.** Ten
+work centres, ten parts with full routings, 29 orders / 3,600 units across due
+days 2–18 — deep enough to drive long runs with nothing entered by hand, and
+the first book with a horizon a machine can pay back over. Verified by a full
+playthrough: expanded early it nets **+$42,444 at 100% OTD**, the drill press
+reads 82.7% *with two presses*, and one idle day costs $4,051. See 6H.1 below.
+
+**Next up: 6G, then the rest of 6H, and both before Track 7** — added
+2026-09-04 after driving 6E, and they are prerequisites rather than polish.
+**6G (simulator throughput):** an *empty* floor costs 8.2 s per 20,000 ticks
+because 140,000 observation rows go to the database whatever happens, so
+per-minute buckets are finally worth the schema change; the O(WIP) tick loop is
+a second, independent curve that bites past ~500 parts. 6H.1 made both bite for
+real — a 15-day playthrough is ~5 wall-minutes and ~5M observation rows, and
+WIP peaked at 865 parts. **6H.2/6H.3 (legible constraint, rolling demand):**
+buying capacity is now a decision worth making, but the dialog still shows no
+utilization, so *where* to buy is guesswork.
 
 Then **Track 7 (forking)**, whose comparison is what all of Track 6 exists to
 make meaningful — and which 6E just gave its sharpest question: fork at a
@@ -1559,16 +1566,56 @@ routing visits it, so it can never produce — and `operators` defaults to 1, so
 it draws a wage immediately. Buying capacity anywhere but the constraint has
 the same shape. The model is right; the UI gives no signal at all.
 
-- [ ] 6H.1 A book that spans a horizon — seed only, no engine change, so it
-      lands before the harder half. Roughly ten staffed days of demand with
-      due days spread across it, keeping 6B's and 6C's tuned stories intact as
-      the first days of it (SO-2001 day 1 tight, SO-2003 day 3 contingent on
-      the drill never starving) and adding depth behind them. Verifies what
-      6E.1 could only assert on paper: a second drill press bought early pays
-      back and keeps earning, bought late does not, and releasing the whole
-      book at once buries the floor in carrying cost. **Depends on 6G**: this
-      makes runs ten times longer and WIP an order of magnitude heavier, which
-      is precisely the region where both measured costs bite.
+- [x] 6H.1 A book that spans a horizon — seed only, no engine change. **Taken
+      out of order, ahead of 6G** (user call 2026-09-04: "i wanna deviate from
+      the track and make my seeded data have more parts many orders and stuff
+      so i can do long runs without having to manually create orders"), and
+      scoped wider than this entry planned: a **playground** default, not a
+      tuned three-order lesson. As landed: **ten** work centres (Lathe, CNC
+      Mill, Welding and Paint Booth join the original six), **ten** parts each
+      with a full routing, and **29 sales orders / 3,600 sold units** in three
+      demand waves across due days 2–18.
+      **Decided: the 6B/6C tuned stories are gone, not preserved.** This entry
+      asked to keep SO-2001's tight day-1 promise and SO-2003's starve-contingent
+      day 3 as the book's first days. They could not survive a ten-centre floor
+      — every one of those margins was computed against a six-centre factory's
+      ~$1,894 staffed day, and the new floor's base burn is ~$3,340 — so the
+      whole book was retuned rather than half-retuned. What replaces them is a
+      *ladder* rather than a single tight promise: drill demand is ~23.5
+      press-days against an 18-day book, so wave 1 (due 2–6) is makeable on the
+      starting factory, wave 2 (8–12) needs the second press and mill, and wave
+      3 (14–18) needs them bought early. The 6C setup and scrap stories carry
+      over intact in shape — spares are now sized per work order at 1.5× the
+      routing's expected loss plus one, so overage is a rule rather than one
+      hand-picked pair.
+      **The seed is data-driven now** — `CENTER_SPECS`, `PART_SPECS`,
+      `ORDER_BOOK` and a `spareUnits` rule — because at ten centres and 29
+      orders the hand-written form had the failure mode `workCenterFields.ts`
+      was built to kill: a column or an order edited in one of four places.
+      Capital prices are *computed* from 6E.1's rules (4 days of standing cost
+      to buy, half back as salvage, 16 wage-hours to hire) rather than typed,
+      so retuning a rate can no longer leave a price behind.
+      **Verified live, and it answers what 6E.1 could only assert on paper.**
+      One full playthrough (run "Playground shakedown", seed 4243, ~432,000
+      ticks): second press + mill bought at tick 0 and a second cutter on day 2
+      ($4,000 of capital), releases staged wave by wave — **net +$42,444 on
+      $120,815 of throughput, 100% OTD, all 29 orders shipped in full**, floor
+      drained end of day 15. Net went **negative on day 1** (−$1,707, paying for
+      the machines), crossed zero on day 2, then ran ~$5–6k a day. Drill Press
+      read **82.7% utilization with two presses**, so one press is ~1.65×
+      overloaded and the late waves cannot ship on time without the buy — the
+      payback horizon 6H exists to create. Two honest counterweights showed up
+      unasked: the second **mill** ran only 32.3%, so it was due-date insurance
+      rather than a profit machine, and a thin patch in my own release schedule
+      left the floor **empty most of day 8**, which burned $4,051 of net against
+      $495 earned — an idle expanded factory is the most expensive thing in the
+      game, exactly 6A's lesson at ten times the scale.
+      **6G is now owed rather than assumed.** This entry said "depends on 6G";
+      it landed first, and the cost is measurable but not blocking: ~14,400
+      ticks per 8–13 s (~5 minutes of wall clock for the 15-day playthrough),
+      with WIP peaking at 865 parts — past the ~500 where 6G.2's clone-on-write
+      curve bites, and ~5M observation rows where 6G.1's buckets would have
+      written ~85k.
 - [ ] 6H.2 Buy at the constraint, not at random — the affordances that make
       the decision legible. The capital dialog gains each centre's
       **utilization over the run so far** (it already fetches `/metrics` for

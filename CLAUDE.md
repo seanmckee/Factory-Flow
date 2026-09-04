@@ -290,7 +290,8 @@ remainder travel the same way.
 (one staffed hour), each
 batch one transaction, so a crash costs at most one batch. Inserts are split
 per table by `chunkFor(paramsPerRow)`, because Postgres caps bind parameters
-near 65535 and a simulated day of a six-centre factory is ~200k rows. Both
+near 65535 and a simulated day of the seeded ten-centre factory is ~320k rows.
+Both
 advancing and releasing take the run's `advancing` lock via `withRunLock`: an
 advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
