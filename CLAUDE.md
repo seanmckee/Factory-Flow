@@ -235,41 +235,42 @@ badly the one time they coexisted.
 
 The page drives a server-side run: it picks or creates one, releases work
 orders into it, and a `setInterval(…, 1000)` calls
-`POST /api/runs/:id/advance {ticks: 1}`, so **one tick = one simulated second**
-as before. It holds no simulation state — WIP, money and the tick number are
-the run's, so a reload resumes the same run and two tabs cannot disagree.
+`POST /api/runs/:id/advance {ticks: 60}` — one tick is one simulated second,
+and the live clock plays **one simulated minute per real second**
+(`CLOCK_TICKS_PER_BEAT`), which restored the visible pace after the 6A seed
+moved process times to minute scale. It holds no simulation state — WIP, money
+and the tick number are the run's, so a reload resumes the same run and two
+tabs cannot disagree. The run bar shows the tick as calendar time
+(`formatTickTime`, "Day 2 · 3:41:05" — staffed time, the only time a run
+simulates).
 Advancing holds a server-side lock, so an overlapping call is a 409; an
 `advancing` ref skips a beat rather than queueing one, the interval being a
 display clock. Stopping is client-side only: the run keeps its state and
 resumes where it left off.
 
 **Fast-forward is the point of the page, not a faster clock.** There is
-deliberately no speed multiplier: the question a run answers is where a set of
-releases ends up, not what it looks like going faster, and a "100×" button
-lies the moment the multiplier outruns the server's ~500 ticks a second. So
-the 1× clock is unchanged and the jumps sit beside it — `JUMP_TICKS`
-(`100 / 500 / 1000`) and **Run until idle**, which advances until the floor is
-empty or `IDLE_TICK_CEILING` (100000) stops it, so a floor that can never
-empty doesn't advance until the tab closes.
+deliberately no arbitrary speed multiplier: the question a run answers is
+where a set of releases ends up, and a "100×" button lies the moment the
+multiplier outruns the server's ~500–4000 ticks a second (the minute clock's
+60-a-beat is far inside that; an unbounded multiplier isn't). The jumps sit
+beside the clock as calendar units — `JUMP_PRESETS`: **+1 hour / +4 hours /
++1 day**. **Run until idle is gone**, removed with Track 6A: an empty floor
+stopped being a goal the moment rent accrues against time — an idle factory
+is a money furnace, and "run out the order book" is not a question a factory
+asks.
 
-A jump chunks at `CHUNK_TICKS` (500), matching the server's `TICKS_PER_BATCH`,
-so a chunk is exactly one transaction and **Stop always lands on a committed
-tick boundary** — it stops dispatching and never aborts in flight, because the
-server commits that batch regardless and an aborted request would only leave
-the page claiming a tick the run has passed. Until-idle terminates on
-`AdvanceResult.wipCount`, not on a follow-up `GET`, so the loop makes no other
-request; there is nothing per chunk to refresh, since the overlay shows
-progress only. Floor, chart and strip refresh once when the jump lands.
-
-`SimulatingOverlay` covers the page while it runs, and Stop is the only live
-control in it — an until-idle jump can run to its ceiling and a reload would
-strand the run's lock rather than end it. It appears on a 200 ms gate, which
-every real jump clears; the gate exists so a jump that returns immediately
-doesn't flash a modal. The bar is determinate only above one chunk, since a
-one-chunk jump has nothing to report until it is already done. A jump **stops
-the clock first** and waits out any beat in flight, and releasing does the same
-wait: all three contend for the same lock, and letting them collide would raise
-the very 409 the unlock action is there to cure. The work-order picker lists
+A jump chunks at `CHUNK_TICKS` (3600 — one staffed hour), matching the
+server's `TICKS_PER_BATCH`, so a chunk is exactly one transaction and **Stop
+always lands on a committed tick boundary** — it stops dispatching and never
+aborts in flight, because the server commits that batch regardless and an
+aborted request would only leave the page claiming a tick the run has passed.
+**A jump streams rather than blocks**: there is no modal overlay
+(`SimulatingOverlay` is deleted) — progress is inline in the transport bar
+with Stop beside it, and the page refreshes as each committed hour lands, so
+a day reads as the charts flying through it. A jump **stops the clock
+first** and waits out any beat in flight, and releasing does the same wait:
+all three contend for the same lock, and letting them collide would raise the
+very 409 the unlock action is there to cure. The work-order picker lists
 only orders not yet released into the selected run — (run_id, work_order_id) is
 the release table's primary key, so a second release is a 409 better made
 unselectable than toasted.

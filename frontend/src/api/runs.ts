@@ -77,7 +77,7 @@ export type AdvanceResult = {
   throughputCents: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
-  /** WIP still on the floor — what a jump running until idle stops on. */
+  /** WIP still on the floor after the advance — an agent's stop condition. */
   wipCount: number;
 };
 

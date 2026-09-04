@@ -724,6 +724,21 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
+- [x] 6A.10b Advance throughput + streaming jumps (after the first day-scale
+      hands-on: a simulated day took ~22s behind a blocking modal). Measured:
+      the pure simulation of a day is 0.25s (~116k ticks/s) — the rest was
+      ~211k rows/day of Neon round trips in flat 1,000-row chunks.
+      **Decided:** insert chunks sized per table against the ~65,535
+      bind-parameter cap (`chunkFor(paramsPerRow)`), `TICKS_PER_BATCH`
+      500 → 3600 (one staffed hour; 7,200 tried, bought ~0.8s at double the
+      lock hold). A day is ~8s and falling out of the modal: **jumps stream**
+      — inline progress in the transport bar, the page refreshes per committed
+      hour, `SimulatingOverlay` deleted. **Run until idle removed** (user
+      call): with rent accruing against time an idle factory is a money
+      furnace, so an empty floor is not a goal; `AdvanceResult.wipCount` stays,
+      as an agent's stop condition. Next lever if ~8s ever matters:
+      per-minute observation buckets (60× fewer rows) — a schema change,
+      deliberately not taken now.
 - [x] 6A.10a UI: transport catches up with the day scale (added after the
       first hands-on: minute-scale process times made the 1× clock unwatchable
       and +100/+500/+1000 ticks meaningless). **Decided:** the live clock plays
