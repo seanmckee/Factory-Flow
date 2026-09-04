@@ -8,12 +8,16 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6E (capital actions) is planned** — 2026-09-04, the
-section below — and in build. It is the first thing in the project that
+**You are here:** **Track 6E (capital actions) is built** — planned and built
+2026-09-04, units 6E.1–6E.6 below, **one thing outstanding: nobody has driven
+the UI in a browser** (the extension was not connected; see 6E.5). It is the
+first thing in the project that
 changes a run's **own frozen config** while the run is alive: buy or retire a
 machine, hire or fire an operator, each a lump capital spend frozen on an
 append-only action row and subtracted from `netCents` as the fifth P&L line.
-Before it, 6D (shifts and wages), 6C (setup as constraint time, scrap in its
+Operators became explicit, so a centre runs `min(machines, operators)` and a
+machine nobody staffs is rent with no output. Before it, 6D (shifts and
+wages), 6C (setup as constraint time, scrap in its
 own RNG domain), 6B (due dates + on-time delivery) and 6A (the P&L core).
 
 **Deferred out of 6E to 6F** (user call while planning): overtime and mid-run
@@ -21,8 +25,15 @@ shift changes. Both make a run's calendar day non-uniform, which is the one
 place `day_ticks` is a single frozen integer, and overtime without a wage
 premium strictly dominates every other labour lever. See the 6F section.
 
-**Next up after 6E:** Track 7 (forking), whose comparison is what all of
-Track 6 exists to make meaningful. Track 6A made the score able to go down,
+**Next up:** a hands-on pass over 6E's UI, then **Track 7 (forking)**, whose
+comparison is what all of Track 6 exists to make meaningful — and which 6E
+just gave its sharpest question: fork at a checkpoint, buy the second drill
+press in one branch only, and read the payback off the two net curves.
+Track 6F (overtime, shift calendar) is scoped below and can wait behind it:
+forking is load-bearing for the agent, overtime is one more lever.
+
+**Why Track 6 was worth it, in one line each.** Track 6A made the score able
+to go down,
 which is what makes an agent's objective non-degenerate; 6B adds the promise
 the agent can break without buying anything with it; 6C makes batch size a
 real decision and output itself unreliable; 6D prices the staffed hour; 6E is
@@ -1386,12 +1397,30 @@ afterwards.
       3.4 lesson stands — "create then read" and every other first-paint case
       is exactly what headless checks miss — so this owes a hands-on pass,
       and 6E.6 should not be treated as closing the track until it has had one.
-- [ ] 6E.6 Doc sweep. CLAUDE.md: four costs become five, the
-      frozen-config invariant gains its first sanctioned mutation, and the
-      effective-dating rule beside `accrueRate`'s. README: the capital-decision
-      bullets in Phase 4, and **two open questions close** — amortized versus
-      lump (lump), and whether a run can edit its own config (yes, and only
-      through an action that charges for it). This file.
+- [x] 6E.6 Doc sweep. CLAUDE.md was kept current unit by unit — four costs
+      became five, the frozen-config invariant gained its first sanctioned
+      writer, `accrueRate`'s formula gained its epoch, the observation gained
+      its own denominator, and the frontend sections gained the capital dialog,
+      the log and `workCenterFields.ts` — so this unit is the README.
+      **Two open questions close**, and both kept on the page with their
+      answers because the answers shaped the track: capital spend is a **lump**
+      (the argument is timescale, not simplicity — a realistically amortised
+      machine is ~$11/day against a ~$1,900/day factory, so it would be free
+      inside a run and "always buy" would win, the degenerate objective 6A
+      exists to prevent), and a run **can** edit its own config, but only
+      through an action that charges for it: `run_work_centers` has exactly one
+      writer, and free editing was never the question worth answering.
+      Phase 4's capital bullets are struck through with what was *not* built
+      named beside them — a bought machine is capacity at an **existing**
+      centre (a new one nothing routes to would need routings changed mid-run),
+      letting an operator go is free on purpose, and add-a-shift/overtime moved
+      to 6F. "Payback period" is marked delivered as something **readable**
+      rather than reported: the lump makes the net curve step down, and a
+      *number* needs Track 7's two runs side by side. Phase 4 stays *partly
+      delivered* — rework, the penalty halves of 6B and 6C, and 6F are still
+      out. The master-data list keeps **shift calendars** and gives up wage and
+      per-centre rates; Phase 5's "buy a machine, add a shift" notes that two
+      of its levers already exist and what forking actually adds.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 

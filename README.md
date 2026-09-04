@@ -104,11 +104,17 @@ scrap is a per-step probability drawn at step completion through the seeded
 RNG in its own domain — a ruined unit's material is recorded but not charged,
 its money bite being the lost sale, the wasted machine time and the carrying
 already paid. Track 6D added shifts and wages: a run's calendar day is
-`shifts × 28,800` staffed ticks, and operators (one per machine until 6E) are
+`shifts × 28,800` staffed ticks, and operators are
 paid per staffed hour — so a second shift doubles the day's wage bill while
-amortizing the same rent, and net profit now subtracts a fourth line. Still
-open from the list below: capital decisions (6E), overtime (an authorization,
-so it waits for 6E's mid-run actions), rework, and the penalty halves of 6B's
+amortizing the same rent. Track 6E added **capital actions**: buy or retire a
+machine, hire or let go an operator, against the run's *own* frozen config
+while it runs. Operators became explicit, so a centre runs
+`min(machines, operators)` and a machine nobody staffs is rent with no output;
+each action charges a lump at the tick it lands, frozen on an append-only row,
+and net profit now subtracts a fifth line. Still
+open from the list below: overtime and mid-run shift changes (Track 6F — a
+non-uniform calendar day, and a premium without which overtime dominates
+every other labour lever), rework, and the penalty halves of 6B's
 and 6C's bullets — see PROGRESS.md for the sub-track plan.
 
 The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
@@ -124,18 +130,18 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
   - ~~Setup cost per changeover, which finally makes batch-size decisions have a real trade-off.~~ Delivered as machine time (6C), not a cents charge — the cost is rent against time and lost constraint minutes.
   - ~~Scrap~~ (6C) and rework cost — rework still open, and scrapped material is recorded, not yet charged.
 - **Inventory carrying cost** — a holding charge on WIP and finished goods per unit per day, so sitting inventory is genuinely expensive rather than just a number on a chart. This is what makes "release less work" a financially visible strategy.
-- **Capital decisions** — actions that cost money up front and change the factory afterwards:
-  - Buy a machine: one-off capital outlay, then a new work centre with its own standing cost.
-  - Hire an operator: onboarding cost, then a recurring wage.
-  - Add a shift, or authorise overtime for a period.
-  - Sell or retire a machine.
+- ~~**Capital decisions**~~ — delivered as Track 6E, actions that cost money up front and change the factory afterwards:
+  - ~~Buy a machine~~: a one-off outlay, then another machine's standing cost at that centre — standing cost is now **per machine**, so buying prices its own keep. Delivered as capacity at an *existing* centre rather than a new one: a new centre nothing routes to would need routings changed mid-run.
+  - ~~Hire an operator~~: an onboarding cost, then a recurring wage. Letting one go is deliberately **free** — a crew you can shed cheaply is the temp lever, and it is what gives a shift's commitment something to beat.
+  - Add a shift, or authorise overtime for a period — **still open** (Track 6F). Both make a run's calendar day non-uniform, which is the one place `day_ticks` is a single frozen integer, and overtime needs a wage premium or it strictly dominates hiring.
+  - ~~Sell or retire a machine~~: returns salvage, which is less than the purchase price, so churning one costs real money.
 - **Penalties** — ~~due dates~~ delivered as Track 6B: sales orders carry a due day, runs freeze each finished unit's due tick, and the dashboard reads on-time delivery overall and per order. Deliberately a metric and not money — no late penalty on the P&L yet; the frozen per-part due tick is any future penalty's basis. Lost sales still to come.
 
 **What this produces**
 
-- A **run P&L**: throughput, operating expense, carrying cost, capital spend, net profit — over the whole run and over any selected time window. *Delivered for the triple (no capital spend yet): `GET /api/runs/:id` and `/metrics` both carry the breakdown.*
+- A **run P&L**: throughput, operating expense, carrying cost, wages, capital spend, net profit — over the whole run and over any selected time window. *Delivered in full: `GET /api/runs/:id` and `/metrics` both carry all five lines, summed from frozen columns so no later edit can rewrite what a run spent.*
 - A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy. *Delivered: cumulative net profit overlaid on the cumulative-throughput chart, with a zero line.*
-- **Payback period** on capital decisions: buy the second machine at the bottleneck, and see how many simulated days until it pays for itself.
+- **Payback period** on capital decisions: buy the second machine at the bottleneck, and see how many simulated days until it pays for itself. *Readable rather than reported: capital is charged as a lump, so the cumulative net curve steps down by the purchase and payback is where it climbs back over what doing nothing would have earned. A number needs Track 7's two runs side by side.*
 - A break-even question worth asking every run: at this demand and this cost structure, is this factory profitable at all?
 
 ### Phase 5 — Forkable simulations
@@ -143,7 +149,7 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 The core experiment loop, and the most valuable feature in the project.
 
 - Fork a run from any checkpoint: same state, new branch, new decisions.
-- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out.
+- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Two of those are already real: a run can buy machines and hire operators through Track 6E's actions, and a run can be created with a different shift count. What forking adds is doing it from a checkpoint of a run already in motion, against a sibling that didn't.*
 - Runs form a tree, so a chain of decisions can be traced back to the checkpoint it diverged at.
 - **Compare forks side by side**: same time window, same metrics, difference highlighted.
 - **The comparison is scored on net profit, not throughput.** With Phase 4 in place, a fork that raises output but required a machine purchase and a second shift can lose to the fork that did nothing. That result is only visible if cost is in the model — which is why the money model comes first.
@@ -197,7 +203,7 @@ Independent of the phases above, the domain model needs:
 - Machine downtime and operator availability.
 - ~~Due dates on orders~~ (landed with Track 6B — the remaining prerequisite work is the prediction itself).
 - Explicit queues. Queue *depth* is now measured per tick, per work centre, so the aggregate dynamics are no longer inferred — but queueing is still implicit in the engine (an unclaimed part simply doesn't advance), so there is nothing to reorder, prioritise, or measure a wait time from.
-- Shift calendars, wage rates, and per-work-centre cost rates as master data.
+- ~~Wage rates and per-work-centre cost rates as master data~~ (Tracks 6A/6D/6E: standing cost per machine, wages per operator-hour, and the capital prices all live on `work_centers` and freeze onto each run). **Shift calendars** remain: `shifts` is one facility number, so every day of a run is the same width — a real calendar (a short Friday, a dark week) is Track 6F's `run_days` table.
 
 ---
 
@@ -206,7 +212,7 @@ Independent of the phases above, the domain model needs:
 Decisions not yet made, recorded so they get made deliberately:
 
 - Whether forking copies state or replays from a checkpoint. Leaning copy: a run's state is a handful of rows, and the seeded RNG means a copy replays identically without an event log to keep.
-- Whether a run should be able to edit its *own* factory config. It has the tables for it — capacities and pinned steps are per-run — but nothing writes them, so changing what the next release will pin still means editing the shared routing.
+- ~~Whether a run should be able to edit its *own* factory config.~~ **Answered by Track 6E: yes, and only through an action that charges for it.** `run_work_centers` has exactly one writer — a capital action, which pays the run's frozen price, re-dates the rate it moved and appends to `run_capital_actions`. Free editing was never the question worth answering; a factory you can reconfigure for nothing makes every decision trivial. Pinned *steps* still have no writer, so changing what the next release will pin remains an edit to the shared routing.
 
 Answered since, kept here because the answers shaped everything after them:
 
@@ -214,7 +220,7 @@ Answered since, kept here because the answers shaped everything after them:
 - **Snapshot granularity** — per tick for observations (`run_ticks` plus a row per work centre), because WIP is mutable state and nothing else can say what it was at tick 300. WIP itself is replaced wholesale per batch, no snapshots.
 - **Master data versioned per run, or runs pin a revision** — runs pin, and pin per *work order* at release rather than per run, so a routing edit reaches only later releases while parts already in motion keep the steps they started with.
 - Whether cost rates are master data or per-run configuration — a fork that buys a machine changes the factory's cost structure, so at minimum the delta has to belong to the run and not to the shared master data.
-- Whether capital spend is amortised or charged as a lump at the moment of purchase. Lump is simpler and makes payback period obvious; amortised makes the daily P&L less lumpy.
+- ~~Whether capital spend is amortised or charged as a lump at the moment of purchase.~~ **Answered by Track 6E: a lump**, and the argument is timescale rather than simplicity. A realistically amortised machine — $20k over a five-year life — is about $11/day against a ~$1,900/day factory, so inside the days a run spans the purchase would be free and "always buy" would be right every time: the degenerate objective Track 6A exists to prevent. Amortisation only bites here by inventing an unrealistically short machine life. It also stays layerable later, since the cents are frozen per action, exactly as 6B froze a due tick without a penalty.
 
 ---
 
