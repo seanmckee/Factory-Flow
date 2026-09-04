@@ -5,6 +5,8 @@ export type RoutingStep = {
   sequence: number;
   processTimeSeconds: number;
   setupTimeSeconds: number;
+  /** chance a unit is ruined on completing this step, in basis points */
+  scrapBps: number;
 };
 
 export type Routing = {

@@ -6,7 +6,11 @@ import {
   wipMaterialValueCents,
   type CostRates,
 } from "./operatingExpense.js";
-import { simulateTick, type TickWorkCenterMetrics } from "./simulationTick.js";
+import {
+  setupKey,
+  simulateTick,
+  type TickWorkCenterMetrics,
+} from "./simulationTick.js";
 import type {
   Allocation,
   Part,
@@ -39,6 +43,14 @@ export type RunState = {
   costs: CostRates;
   /** carrying cost's sub-cent remainder as persisted; see `accrueCarrying` */
   carryRemainder: number;
+  /**
+   * (work order, step) pairs whose changeover was already paid, keyed by
+   * `setupKey` — loaded from `run_work_order_steps.setup_started_at_tick`.
+   * Persisted rather than derived, because whether setup was paid must
+   * survive a batch boundary and the paying unit may since have scrapped out
+   * of the very step it set up.
+   */
+  setupDone: ReadonlySet<string>;
   /**
    * Work order id -> units of it finished before this batch. Loaded as a
    * `GROUP BY` rather than by counting a list, so advancing a long run never
@@ -84,6 +96,8 @@ export type RunBatch = {
   wipParts: WipPart[];
   /** append-only */
   finishedParts: FinishedPartRecord[];
+  /** append-only, like the finished — a ruined unit is history, not WIP */
+  scrappedParts: ScrappedPartRecord[];
   ticks: TickRecord[];
   /**
    * `priorCounts` advanced by what finished, so a long advance can run as
@@ -92,6 +106,37 @@ export type RunBatch = {
   priorCounts: Map<number, number>;
   /** the carrying fold's remainder after the batch, carried out the same way */
   carryRemainder: number;
+  /** `setupDone` advanced by the batch's changeovers, carried like the counts */
+  setupDone: ReadonlySet<string>;
+  /**
+   * The changeovers that began in this batch, for the caller to freeze into
+   * `run_work_order_steps.setup_started_at_tick` — only the delta, so the
+   * write stays a handful of rows however long the batch ran.
+   */
+  setupsStarted: SetupStartRecord[];
+};
+
+/** One changeover as it is stored: the pinned step row it marks, and when. */
+export type SetupStartRecord = {
+  workOrderId: number;
+  stepIndex: number;
+  atTick: number;
+};
+
+/**
+ * A ruined unit as it is stored: the tick's `ScrappedPart` plus the material
+ * it consumed, frozen at scrap time exactly as a finished unit's money is —
+ * deleting the part or its order later must not rewrite what a run wasted.
+ */
+export type ScrappedPartRecord = {
+  partId: string;
+  workOrderId: number;
+  unitIndex: number;
+  releasedAtTick: number;
+  scrappedAtTick: number;
+  stepIndex: number;
+  workCenterId: number;
+  materialCostCents: number;
 };
 
 /**
@@ -116,7 +161,10 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
   }
 
   const priorCounts = new Map(state.priorCounts);
+  const setupDone = new Set(state.setupDone);
+  const setupsStarted: SetupStartRecord[] = [];
   const finishedParts: FinishedPartRecord[] = [];
+  const scrappedParts: ScrappedPartRecord[] = [];
   const tickRecords: TickRecord[] = [];
   let wipParts = state.wipParts;
   let carryRemainder = state.carryRemainder;
@@ -131,7 +179,32 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
       tickNum,
       state.workCenters,
       state.rngSeed,
+      setupDone,
     );
+
+    for (const started of result.setupsStarted) {
+      setupDone.add(setupKey(started.workOrderId, started.stepIndex));
+      setupsStarted.push({ ...started, atTick: tickNum });
+    }
+
+    for (const scrapped of result.scrappedParts) {
+      const materialCostCents = costByWorkOrder.get(scrapped.workOrderId);
+      if (materialCostCents === undefined) {
+        throw new Error(
+          `Scrapped part ${scrapped.id} belongs to work order ${scrapped.workOrderId}, which was not loaded`,
+        );
+      }
+      scrappedParts.push({
+        partId: scrapped.id,
+        workOrderId: scrapped.workOrderId,
+        unitIndex: scrapped.unitIndex,
+        releasedAtTick: scrapped.releasedAtTick,
+        scrappedAtTick: scrapped.scrappedAtTick,
+        stepIndex: scrapped.stepIndex,
+        workCenterId: scrapped.workCenterId,
+        materialCostCents,
+      });
+    }
 
     const credits = creditFinishedParts(
       result.finishedParts,
@@ -200,8 +273,11 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     tickNum: state.tickNum + ticks,
     wipParts,
     finishedParts,
+    scrappedParts,
     ticks: tickRecords,
     priorCounts,
     carryRemainder,
+    setupDone,
+    setupsStarted,
   };
 }

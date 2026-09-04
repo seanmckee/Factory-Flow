@@ -13,6 +13,7 @@ import {
   workOrders,
 } from "../db/schema.js";
 import type { RunState } from "../simulation/simulateBatch.js";
+import { setupKey } from "../simulation/simulationTick.js";
 import type { Routing, WipPart } from "../simulation/types.js";
 
 export type RunRow = typeof simulationRuns.$inferSelect;
@@ -42,6 +43,9 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
           workOrderId: runWorkOrderSteps.workOrderId,
           workCenterId: runWorkOrderSteps.workCenterId,
           processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
+          setupTimeSeconds: runWorkOrderSteps.setupTimeSeconds,
+          scrapBps: runWorkOrderSteps.scrapBps,
+          setupStartedAtTick: runWorkOrderSteps.setupStartedAtTick,
         })
         .from(runWorkOrderSteps)
         .where(eq(runWorkOrderSteps.runId, run.id))
@@ -118,11 +122,21 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
   }));
 
   const routingByWorkOrder = new Map<number, Routing>();
+  // The rows arrive ordered by (work order, sequence) and sequences are dense
+  // from 0, so a step's position in the array is its sequence — the same
+  // identity the engine uses, which is what lets the setup keys use it too.
+  const setupDone = new Set<string>();
   for (const step of storedSteps) {
     const routing = routingByWorkOrder.get(step.workOrderId);
+    const stepIndex = routing?.steps.length ?? 0;
+    if (step.setupStartedAtTick !== null) {
+      setupDone.add(setupKey(step.workOrderId, stepIndex));
+    }
     const stored = {
       workCenterId: step.workCenterId,
       processTimeSeconds: step.processTimeSeconds,
+      setupTimeSeconds: step.setupTimeSeconds,
+      scrapBps: step.scrapBps,
     };
     if (routing) routing.steps.push(stored);
     else routingByWorkOrder.set(step.workOrderId, { steps: [stored] });
@@ -156,6 +170,7 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     priorCounts: new Map(
       finishedCounts.map((row) => [row.workOrderId, Number(row.finished)]),
     ),
+    setupDone,
     costs: {
       dayTicks: run.dayTicks,
       facilityOverheadCentsPerDay: run.facilityOverheadCentsPerDay,

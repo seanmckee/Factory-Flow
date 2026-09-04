@@ -8,20 +8,23 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6B (due dates + on-time delivery) is complete** —
-planned and built 2026-09-04, units 6B.1–6B.5 below. Sales orders promise a
-calendar day, runs freeze each finished unit's due tick at credit time, and
-the dashboard reads on-time delivery overall and per order. Deliberately a
-metric, not money — netCents is unchanged. Track 6A landed the P&L: the score
-can go down, runs freeze cost rates and accrue expense per tick, and the day is
-the product-facing unit end to end (minute-per-second clock, +1h/+4h/+1 day
-streaming jumps with drain-stop, one Trends chart, windowed P&L dashboard,
-standing-cost column and Factory Settings page).
+**You are here:** **Track 6C (setup and scrap) is complete** — planned and
+built 2026-09-04, units 6C.1–6C.5 below. Changeovers are machine time paid
+once per work order per step (batch size finally trades off against carrying
+cost, and a split order costs the constraint a second setup), and scrap is a
+per-step probability drawn at step completion in its own RNG domain — ruined
+units record their frozen material, consume no allocation, and feed a Scrap
+card; netCents is untouched, the 6B metric-not-money pattern. Before it, 6B
+(due dates + on-time delivery) and 6A (the P&L: the score can go down, runs
+freeze cost rates and accrue expense per tick, the day as the product-facing
+unit end to end).
 
-**Next up:** 6C (setup and scrap), then 6D–6E — see the Track 6 section for
-the sub-track split and the time model. Track 6A made the score able to go down, which is
+**Next up:** 6D (shifts and wages), then 6E (capital actions) — both
+"re-plan when reached"; see the Track 6 section for the sub-track split and
+the time model. Track 6A made the score able to go down, which is
 what makes an agent's objective non-degenerate; 6B adds the promise the agent
-can break without buying anything with it.
+can break without buying anything with it; 6C makes batch size a real decision
+and output itself unreliable.
 
 **One refactor unit first — done** (decided and landed 2026-09-03): the read
 side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,
@@ -847,13 +850,180 @@ route for sales orders (creation-only stays the convention).
       gains a Deliveries table (order number and quantity joined client-side
       from live sales orders, like work-centre names off `/floor`).
 
-### Track 6C — Setup and scrap (`feat/setup-scrap`) — re-plan when reached
+### Track 6C — Setup and scrap (`feat/setup-scrap`)
 
-Setup cost charged when a work order's first unit reaches each step — the
-batch-size trade-off without per-machine identity. Scrap as a per-step
-probability drawn through the seeded RNG with a **domain separator** in the
-draw key, so scrap noise never aliases process-time noise; scrapped units
-record their spent material.
+Planned 2026-09-04. Two ways a unit stops being worth its routing: the
+changeover before the first one, and the draw that ruins one on the machine.
+
+**Setup is machine time, not a money charge.**
+`routing_steps.setup_time_seconds` has existed end to end — schema, zod,
+routes, the step editor — since the first migration, with the engine the only
+thing ignoring it; 6C makes that column real rather than inventing a parallel
+cents column. One changeover per **(work order, step)**: machines within a
+centre are anonymous (the stub's "without per-machine identity"), so the first
+unit of a work order **admitted to a machine** at a step pays the pinned setup
+time, folded into its `actualProcessTimeSeconds`, and every later unit of that
+work order processes clean. Admission-pays rather than arrival-pays, because
+units of one work order can *arrive* at a step out of unit-index order while
+admission follows list order — arrival-pays could hang the setup on a unit
+another unit then beats to the machine. The payer is deterministic because
+list order is: in-memory order is preserved tick to tick, and a reload orders
+by `run_wip_parts.id`, which is insert order. **No RNG on setup:** process
+variance is the variance that drives starve/block, and a noisy setup buys
+nothing but a second domain separator to maintain. Setup's cost surfaces the
+way all time does — rent and standing cost accrue per tick, and a changeover
+at the drill press eats constraint minutes — so the batch-size trade-off
+(README Phase 4's "finally makes batch-size decisions have a real trade-off")
+arrives with **no new money category**; `busy` counts a machine in setup as
+busy, which is what utilization means. A consequence worth naming: SO-2001
+spanning two work orders now costs the drill press a second changeover — an
+allocation split is not free anymore.
+
+**The setup-paid state is persisted, not derived** — nullable
+`run_work_order_steps.setup_started_at_tick`, null meaning not yet. Whether
+(work order, step) has been set up must survive a batch boundary or the
+one-batch-vs-several invariant breaks, and deriving it means consulting WIP,
+finished *and* scrapped rows together (the paying unit may have scrapped out
+of the very step it set up); a nullable tick on the pinned step row is one
+column in a read that already happens. Mutable state beside frozen config has
+precedent — `tick_num` and `carry_remainder` sit on `simulation_runs` beside
+the frozen rates — and it is written at most steps-per-route ×
+released-orders times over a run's whole life. `RunState` carries the set in,
+`RunBatch` carries it out advanced (like `priorCounts`) plus the batch's
+newly-started setups for the write.
+
+**Scrap is a per-step probability in basis points** —
+`routing_steps.scrap_bps`, integer like the carrying rate, default 0, pinned
+into `run_work_order_steps` like everything else a run reads — drawn **at
+step completion**: the machine time was spent and `busy` counted it, then the
+unit fails and leaves the floor that tick. The draw goes through the seeded
+RNG with a **domain separator**: process-time keys stay byte-identical
+(`seed:wo:unit:step`, so a pre-6C run still re-creates exactly) and scrap
+draws in a `scrap`-marked domain that cannot collide with the all-numeric
+process keys. Keyed RNG has no stream to shift — the separator exists because
+without it a unit's scrap fate would be the *same uniform* as its process
+time, and "slow units always scrap" is aliasing, not noise. A part stranded
+past a shortened routing draws no scrap — it did no work, matching the
+holds-no-machine rule (and post-3.1b stranding is unreachable anyway).
+
+**A scrapped unit is its own record, not a finished part** — new table
+`run_scrapped_parts`, append-only, freezing `material_cost_cents` at scrap
+time ("scrapped units record their spent material"). Not a flag on
+`run_finished_parts`: every reader of that table — the `priorCounts`
+`GROUP BY` that *is* the allocation cursor, cycle time, OTD, the per-order
+deliveries, the finished counts, the summary's throughput sum — depends on
+"finished = credited", and a flag would put a load-bearing `WHERE` in all of
+them. **Scrap consumes no coverage:** the credit cursor counts credited units
+only, so the next good unit takes the scrapped one's sale and a short work
+order under-delivers — which is where scrap's money bite lands, alongside the
+constraint time and rent already spent on the ruined unit.
+
+**Decided: no material write-off in 6C** — `netCents` is unchanged, the 6B
+rule again. An *uncovered* finished unit's spent material is already
+recorded-not-charged (it is inventory, not a loss booked at finish), and the
+model has never expensed material purchase anywhere; a scrap-only write-off
+would bolt a fourth money category on before the incentive needs it. Scrap
+already moves the score through lost sales, wasted constraint time and
+carrying paid en route. The write-off stays layerable later precisely because
+the material cents are frozen per scrapped unit — the same argument that made
+6B's due tick a penalty basis without a penalty.
+
+- [x] 6C.1 Schema + migration + seed retune + this ledger rewrite.
+      `routing_steps.scrap_bps` (default 0); `run_work_order_steps` gains
+      `setup_time_seconds` + `scrap_bps` (the pin — the run reads only its own
+      config; both default 0, so pre-6C releases read "no changeover, no
+      scrap", the same retroactive semantics as 6B's null `due_at_tick`) and
+      nullable `setup_started_at_tick`; new `run_scrapped_parts`
+      (run CASCADE, `part_uuid`, work order RESTRICT, `unit_index`,
+      `released_at_tick`, `scrapped_at_tick`, `sequence`, un-keyed
+      `work_center_id` frozen at scrap time, frozen `material_cost_cents`;
+      `UNIQUE(run_id, part_uuid)`, indexed
+      `(run_id, scrapped_at_tick, id)` like the finished table).
+      **Sized smaller than the plan's first guess** once the queue order was
+      walked: drill setup 600s, cutter/deburr 300s, because SO-2001's last two
+      units come from WO-1003, which queues behind *all* of WO-1001 including
+      its overage — at 15 minutes the split's second changeover blew the day.
+      As landed, brackets-first puts SO-2001's last unit at ~tick 28,100 of
+      28,800 — a ~1σ margin, a tight promise rather than the old few-sigma
+      one, which is the honest shape of a due date once changeovers exist.
+      Scrap 50/100/50 bps at cutter/drill/deburr (~2% per bracket, ~1.5% per
+      flange); WO-1001 52 units against its 50-unit allocation (overage, the
+      planned answer to scrap) while WO-1002's exact 90 leaves SO-2003 exposed
+      — both halves of the overage decision on the board. Arithmetic only so
+      far: the engine reads neither column until 6C.2/6C.3, so the live
+      verification of the due-day stories lands there.
+- [x] 6C.2 Engine: setup + tests. `RoutingStep` gains `setupTimeSeconds`
+      (required, not optional — the 6B `exactOptionalPropertyTypes` rule);
+      the admission pass charges the first fresh unit per (work order, step)
+      — every pass-two admit is fresh, since progress resets on transition and
+      a mid-process part holds its machine through pass one — and reports the
+      setups it started; `RunState` gains the setup-done set,
+      `RunBatch` the advanced set plus the batch's new setups. Tests: first
+      admitted unit pays and the second doesn't; two work orders on one
+      routing each pay their own; capacity 2 admitting two fresh units of one
+      work order in one tick charges exactly one; a transition draws clean and
+      the setup lands at the next admission; the
+      one-batch-vs-several test re-run with nonzero setup times, carrying
+      `setupDone` between chunks. **Two rules settled here:** a part already
+      mid-process never pays (so a pre-6C run reloading mid-step is never
+      retro-charged), and a zero setup time is never *recorded* as a
+      changeover — recording it would write a row per (work order, step) for
+      steps that need none. `loadRunState` and the floor read the new columns
+      already (the engine type requires them); the release pin and the
+      `setup_started_at_tick` write-back are 6C.4, which is safe to stage
+      because until release pins them every stored setup time is 0 and the
+      engine provably no-ops.
+- [x] 6C.3 Engine: scrap + tests. `unitDraw` gains a `DrawDomain` — the
+      process domain is the unmarked legacy key, asserted byte-identical
+      against a value pinned before domains existed, so a pre-6C run still
+      re-creates exactly; scrap draws under a `scrap:` mark that cannot
+      collide, the process key's second field being always numeric.
+      `RoutingStep.scrapBps` required; the quality gate sits at step
+      completion, after the progress check and before anything moves, so the
+      machine time is spent and `busy` counted it; a failed unit exits as a
+      `ScrappedPartRecord` (material frozen off the `costByWorkOrder` map the
+      batch already builds) instead of reaching `creditFinishedParts` — the
+      allocation cursor never sees it, and a test rigs the rate between two
+      units' own draws to pin the next good unit taking the scrapped unit's
+      sales order. `aggregateScrap` in `metrics.ts`
+      (count + material cents; windowed by the caller on `scrappedAtTick`;
+      empty window → zeroes, since zero scrap is a real observation, unlike
+      cycle time's nulls). Scrap at the last step scraps, never credits; a
+      50%-per-step route chunked four ways scraps identical units to one
+      batch of 40.
+- [x] 6C.4 API. `scrapBps` through the step schemas (capped at 10000,
+      **defaulted to 0** so step payloads predating 6C stay valid — which
+      leaves one known hazard until 6C.5: the routing editor round-trips steps
+      without the field, so saving a routing in the UI resets its scrap rates),
+      POST/PUT and GETs; release pins both new columns; `advanceRun` inserts
+      scrap rows, updates the batch's `setup_started_at_tick`s in the same
+      transaction, and carries `setupDone` between batches like the counts;
+      `RunMetrics` gains `scrap` windowed on `scrapped_at_tick`;
+      `AdvanceResult` gains `scrappedCount` (an agent-visible signal, cheap —
+      the batch already holds the rows). `RunSummary` deliberately unchanged,
+      as with OTD: whole-run `/metrics` answers it.
+      **Exercised over HTTP, and the 6C.1 due-day arithmetic verified live:**
+      brackets-first, SO-2001's 52nd unit landed at tick 27,067 of 28,800 with
+      one bracket scrapped *at the drill press* mid-day — the overage absorbed
+      it and the order still shipped 52 on time; the written setup ticks tell
+      the queue story (WO-1001 pays the drill changeover at tick 560, WO-1003
+      at 25,112 behind all of WO-1001, the flanges' still unpaid at day's
+      end); two runs from seed 4242 advanced as 20000+8800 and as 4×7200
+      produced identical money, scrap and completion ticks, which is the
+      setup-carry and scrap determinism proven at the service layer;
+      `scrapBps: 20000` 400s with the field's own message.
+- [x] 6C.5 UI + doc sweep. Step editor gains a scrap field — entered as a
+      percentage, sent as bps, the carrying-rate convention (the setup-time
+      field already exists), finest step 0.01% because bps are integers, and
+      the round-trip closes the 6C.4 hazard: `toDrafts` reads bps back as the
+      percentage the user typed, so saving a routing no longer resets its
+      rates; `routingSteps.ts` drafts/parse stay the pure
+      tested layer; dashboard gains a Scrap stat card (count, material cents
+      in the detail line; neutral styling — destructive stays reserved for
+      money that is *in* `netCents`). CLAUDE.md engine/cost-model sections,
+      README Phase 4 bullets, this file — plus two stale CLAUDE.md figures
+      found on the way (`TICKS_PER_BATCH` still said 500 and
+      `ROWS_PER_INSERT` still existed; both superseded in 6A.10b).
 
 ### Track 6D — Shifts and wages (`feat/shift-calendar`) — re-plan when reached
 

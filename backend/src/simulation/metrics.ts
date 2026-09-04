@@ -270,6 +270,37 @@ export function aggregateOnTimeDelivery(
 }
 
 /**
+ * What scrap needs from a stored scrapped unit; a count and the money wasted
+ * are the window's answer, and a per-centre breakdown waits until something
+ * needs it.
+ */
+export type MeasurableScrappedPart = {
+  materialCostCents: number;
+};
+
+export type ScrapAggregate = {
+  scrappedCount: number;
+  /** the frozen material the window's ruined units had consumed, summed */
+  scrappedMaterialCents: number;
+};
+
+/**
+ * The window's ruined units, windowed by the caller on `scrappedAtTick` as
+ * cycle time is on `completedAtTick`. Zeroes on an empty window, not nulls:
+ * unlike "no parts finished", zero scrap over observed ticks is a real
+ * observation — the factory ran clean.
+ */
+export function aggregateScrap(
+  scrappedParts: MeasurableScrappedPart[],
+): ScrapAggregate {
+  let scrappedMaterialCents = 0;
+  for (const part of scrappedParts) {
+    scrappedMaterialCents += part.materialCostCents;
+  }
+  return { scrappedCount: scrappedParts.length, scrappedMaterialCents };
+}
+
+/**
  * One sales order's finishes in the window. An overall fraction can't say
  * which promise broke, so the dashboard also reads this per-order view.
  */

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { CostRates } from "./operatingExpense.js";
+import { unitDraw } from "./sampleProcessTime.js";
 import { simulateBatch, type RunState } from "./simulateBatch.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
 
@@ -7,7 +8,7 @@ const SEED = 42;
 
 /** one operation at center 10, so a part finishes every 5 ticks or so */
 const oneStep: Routing = {
-  steps: [{ workCenterId: 10, processTimeSeconds: 5 }],
+  steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 }],
 };
 
 const workCenters = new Map<number, WorkCenter>([
@@ -55,6 +56,7 @@ const state = (overrides: Partial<RunState> = {}): RunState => ({
   priorCounts: new Map(),
   costs: freeCosts,
   carryRemainder: 0,
+  setupDone: new Set<string>(),
   ...overrides,
 });
 
@@ -246,6 +248,157 @@ describe("simulateBatch", () => {
     expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
   });
 
+  it("pays a changeover once, however the run is chunked", () => {
+    // the reason the paid state is persisted rather than derived: a batch
+    // boundary must not re-charge a setup an earlier batch already paid
+    const withSetup = (): Partial<RunState> => ({
+      wipParts: [part("p1"), part("p2", { unitIndex: 1 })],
+      routingByWorkOrder: new Map([
+        [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4, scrapBps: 0 }] }],
+      ]),
+    });
+    const once = simulateBatch(state(withSetup()), 30);
+
+    let carried = state(withSetup());
+    const chunks = [];
+    for (let i = 0; i < 3; i++) {
+      const batch = simulateBatch(carried, 10);
+      chunks.push(batch);
+      carried = state({
+        ...withSetup(),
+        tickNum: batch.tickNum,
+        wipParts: batch.wipParts,
+        priorCounts: batch.priorCounts,
+        setupDone: batch.setupDone,
+      });
+    }
+
+    expect(chunks.flatMap((b) => b.setupsStarted)).toEqual(once.setupsStarted);
+    expect(once.setupsStarted).toHaveLength(1);
+    expect(chunks.flatMap((b) => b.finishedParts)).toEqual(once.finishedParts);
+    expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+  });
+
+  it("stamps a changeover with the tick it began and carries the set out", () => {
+    const batch = simulateBatch(
+      state({
+        tickNum: 100,
+        wipParts: [part("p1")],
+        routingByWorkOrder: new Map([
+          [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4, scrapBps: 0 }] }],
+        ]),
+      }),
+      1,
+    );
+
+    expect(batch.setupsStarted).toEqual([
+      { workOrderId: 10, stepIndex: 0, atTick: 101 },
+    ]);
+    expect(batch.setupDone.has("10:0")).toBe(true);
+    // the input state's set is copied, not mutated
+    expect(state().setupDone.has("10:0")).toBe(false);
+  });
+
+  it("charges nothing for a changeover loaded as already paid", () => {
+    const alreadySetUp = state({
+      wipParts: [part("p1")],
+      routingByWorkOrder: new Map([
+        [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4, scrapBps: 0 }] }],
+      ]),
+      setupDone: new Set(["10:0"]),
+    });
+    const batch = simulateBatch(alreadySetUp, 6);
+
+    // 5 seconds of process and no setup: the part is done, and nothing started
+    expect(batch.finishedParts).toHaveLength(1);
+    expect(batch.finishedParts[0]?.completedAtTick).toBe(5);
+    expect(batch.setupsStarted).toEqual([]);
+  });
+
+  it("a scrapped unit consumes no allocation: the next good unit takes its sale", () => {
+    // seed 7 makes unit 0's scrap draw the low one; the rate sits between the
+    // two draws, so unit 0 dies and unit 1 survives — and must be credited to
+    // SO-20, the allocation the dead unit would have consumed
+    const seed = 7;
+    const d0 = unitDraw({ seed, workOrderId: 10, unitIndex: 0, stepIndex: 0 }, "scrap");
+    const d1 = unitDraw({ seed, workOrderId: 10, unitIndex: 1, stepIndex: 0 }, "scrap");
+    const bps = Math.floor(d0 * 10000) + 1;
+    expect(d0).toBeLessThan(d1);
+    expect(d1).toBeGreaterThanOrEqual(bps / 10000);
+
+    const batch = simulateBatch(
+      state({
+        rngSeed: seed,
+        wipParts: [part("p1"), part("p2", { unitIndex: 1 })],
+        routingByWorkOrder: new Map([
+          [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: bps }] }],
+        ]),
+      }),
+      30,
+    );
+
+    expect(batch.scrappedParts).toHaveLength(1);
+    expect(batch.scrappedParts[0]).toMatchObject({
+      partId: "p1",
+      workOrderId: 10,
+      unitIndex: 0,
+      stepIndex: 0,
+      workCenterId: 10,
+      materialCostCents: 1200,
+    });
+    expect(batch.finishedParts).toHaveLength(1);
+    expect(batch.finishedParts[0]).toMatchObject({
+      partId: "p2",
+      salesOrderId: 20,
+      throughputCents: 3800,
+    });
+    // the allocation cursor advanced by the good unit only
+    expect(batch.priorCounts.get(10)).toBe(1);
+  });
+
+  it("scraps the same units however the run is chunked", () => {
+    const scrapRoute = (): Partial<RunState> => ({
+      wipParts: [
+        part("p1"),
+        part("p2", { unitIndex: 1 }),
+        part("p3", { unitIndex: 2 }),
+      ],
+      routingByWorkOrder: new Map([
+        [
+          10,
+          {
+            steps: [
+              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 5000 },
+              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 5000 },
+            ],
+          },
+        ],
+      ]),
+    });
+    const once = simulateBatch(state(scrapRoute()), 40);
+
+    let carried = state(scrapRoute());
+    const chunks = [];
+    for (let i = 0; i < 4; i++) {
+      const batch = simulateBatch(carried, 10);
+      chunks.push(batch);
+      carried = state({
+        ...scrapRoute(),
+        tickNum: batch.tickNum,
+        wipParts: batch.wipParts,
+        priorCounts: batch.priorCounts,
+        setupDone: batch.setupDone,
+      });
+    }
+
+    // half the units die somewhere on a two-step route; where must not depend
+    // on how the advance was chunked
+    expect(once.scrappedParts.length).toBeGreaterThan(0);
+    expect(chunks.flatMap((b) => b.scrappedParts)).toEqual(once.scrappedParts);
+    expect(chunks.flatMap((b) => b.finishedParts)).toEqual(once.finishedParts);
+    expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+  });
+
   it("is the same run again from the same seed, whatever the part ids are", () => {
     // the property the seed exists for. Part uuids are minted fresh at every
     // release, so while they were the draw key a re-created run drew different
@@ -288,8 +441,8 @@ describe("simulateBatch", () => {
             10,
             {
               steps: [
-                { workCenterId: 10, processTimeSeconds: 5 },
-                { workCenterId: 20, processTimeSeconds: 1000 },
+                { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+                { workCenterId: 20, processTimeSeconds: 1000, setupTimeSeconds: 0, scrapBps: 0 },
               ],
             },
           ],

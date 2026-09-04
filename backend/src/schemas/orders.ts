@@ -150,6 +150,11 @@ const routingStepSchema = z.object({
   processTimeSeconds: positiveInt("processTimeSeconds"),
   // zero is a legitimate setup time - see the seeded Raw Material step
   setupTimeSeconds: nonNegativeInt("setupTimeSeconds"),
+  // basis points, 10000 = every unit ruined; defaulted rather than required
+  // so step payloads predating 6C stay valid
+  scrapBps: nonNegativeInt("scrapBps")
+    .max(10_000, { error: "scrapBps must be at most 10000 (100%)" })
+    .default(0),
 });
 
 const stepListSchema = z

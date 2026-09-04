@@ -12,8 +12,9 @@ function draft(
   workCenterId: string,
   processTimeSeconds = "5",
   setupTimeSeconds = "0",
+  scrapPercent = "0",
 ): StepDraft {
-  return { workCenterId, processTimeSeconds, setupTimeSeconds };
+  return { workCenterId, processTimeSeconds, setupTimeSeconds, scrapPercent };
 }
 
 describe("moveStep", () => {
@@ -65,10 +66,17 @@ describe("toDrafts", () => {
         sequence: 1,
         processTimeSeconds: 8,
         setupTimeSeconds: 2,
+        scrapBps: 50,
       },
     ]);
     expect(drafts).toEqual([
-      { workCenterId: "4", processTimeSeconds: "8", setupTimeSeconds: "2" },
+      {
+        workCenterId: "4",
+        processTimeSeconds: "8",
+        setupTimeSeconds: "2",
+        // 50 bps reads back as the percentage the user typed
+        scrapPercent: "0.5",
+      },
     ]);
   });
 });
@@ -86,8 +94,8 @@ describe("parseSteps", () => {
     expect(result).toEqual({
       ok: true,
       steps: [
-        { workCenterId: 4, processTimeSeconds: 8, setupTimeSeconds: 2 },
-        { workCenterId: 6, processTimeSeconds: 3, setupTimeSeconds: 1 },
+        { workCenterId: 4, processTimeSeconds: 8, setupTimeSeconds: 2, scrapBps: 0 },
+        { workCenterId: 6, processTimeSeconds: 3, setupTimeSeconds: 1, scrapBps: 0 },
       ],
     });
   });
@@ -122,5 +130,38 @@ describe("parseSteps", () => {
   it("rejects a fractional process time", () => {
     const result = parseSteps([draft("4", "2.5", "0")]);
     expect(result.ok).toBe(false);
+  });
+
+  it("converts a scrap percentage to basis points", () => {
+    const result = parseSteps([draft("4", "8", "0", "2.5")]);
+    expect(result).toEqual({
+      ok: true,
+      steps: [
+        { workCenterId: 4, processTimeSeconds: 8, setupTimeSeconds: 0, scrapBps: 250 },
+      ],
+    });
+  });
+
+  it("keeps a two-decimal percentage exact despite float multiplication", () => {
+    // 0.03 * 100 is 3.0000000000000004 in floats; the tolerance absorbs it
+    const result = parseSteps([draft("4", "8", "0", "0.03")]);
+    expect(result.ok && result.steps[0]?.scrapBps).toBe(3);
+  });
+
+  it("rejects a scrap percentage finer than a basis point", () => {
+    const result = parseSteps([draft("4", "8", "0", "0.005")]);
+    expect(result).toEqual({
+      ok: false,
+      message: "Step 1: scrap must be 0\u2013100%, in steps of 0.01",
+    });
+  });
+
+  it("rejects a scrap percentage above 100 or below zero", () => {
+    expect(parseSteps([draft("4", "8", "0", "101")]).ok).toBe(false);
+    expect(parseSteps([draft("4", "8", "0", "-1")]).ok).toBe(false);
+  });
+
+  it("rejects a blank scrap rate rather than reading it as zero", () => {
+    expect(parseSteps([draft("4", "8", "0", "")]).ok).toBe(false);
   });
 });

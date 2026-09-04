@@ -31,9 +31,10 @@ async function seed() {
   await db.delete(parts);
 
   // Cost rates are tuning knobs, sized against what the constraint can earn:
-  // the drill press moves ~60 units/day (28800 ticks / 480s), worth ~$1,750/day
-  // of margin at these prices, against ~$1,350/day of standing costs + overhead
-  // - profitable only while the constraint is fed, loss-making idle.
+  // the drill press moves ~60 units/day (28800 ticks / 480s, less a 600-tick
+  // changeover per work order), worth ~$1,750/day of margin at these prices,
+  // against ~$1,350/day of standing costs + overhead - profitable only while
+  // the constraint is fed, loss-making idle.
   await db.insert(factorySettings).values({
     id: 1,
     facilityOverheadCentsPerDay: 60_000, // $600/day - rent, the doors being open
@@ -100,6 +101,12 @@ async function seed() {
   // Flange: 5 steps, skips Deburr. Drill Press is the shared constraint.
   // Process times are minutes, not toy seconds, so the order book below spans
   // simulated days and per-day costs are material against the money earned.
+  //
+  // Setups (6C) are one changeover per work order per step: the drill's 10
+  // minutes is worth 1.25 units of constraint time, so splitting an order
+  // across work orders visibly costs. Scrap rates put the risk where value
+  // has accrued — worst at the drill, where the constraint minutes are
+  // already spent when the unit fails.
   await db.insert(routingSteps).values([
     {
       routingId: flangeRouting.id,
@@ -107,20 +114,23 @@ async function seed() {
       sequence: 1,
       processTimeSeconds: 60,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: cutter.id,
       sequence: 2,
       processTimeSeconds: 180,
-      setupTimeSeconds: 1,
+      setupTimeSeconds: 300,
+      scrapBps: 50,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: drillPress.id,
       sequence: 3,
       processTimeSeconds: 480,
-      setupTimeSeconds: 2,
+      setupTimeSeconds: 600,
+      scrapBps: 100,
     },
     {
       routingId: flangeRouting.id,
@@ -128,6 +138,7 @@ async function seed() {
       sequence: 4,
       processTimeSeconds: 120,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
     {
       routingId: flangeRouting.id,
@@ -135,6 +146,7 @@ async function seed() {
       sequence: 5,
       processTimeSeconds: 60,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
   ]);
 
@@ -146,27 +158,31 @@ async function seed() {
       sequence: 1,
       processTimeSeconds: 60,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: cutter.id,
       sequence: 2,
       processTimeSeconds: 240,
-      setupTimeSeconds: 1,
+      setupTimeSeconds: 300,
+      scrapBps: 50,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: drillPress.id,
       sequence: 3,
       processTimeSeconds: 480,
-      setupTimeSeconds: 2,
+      setupTimeSeconds: 600,
+      scrapBps: 100,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: deburr.id,
       sequence: 4,
       processTimeSeconds: 180,
-      setupTimeSeconds: 1,
+      setupTimeSeconds: 300,
+      scrapBps: 50,
     },
     {
       routingId: bracketRouting.id,
@@ -174,6 +190,7 @@ async function seed() {
       sequence: 5,
       processTimeSeconds: 120,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
     {
       routingId: bracketRouting.id,
@@ -181,6 +198,7 @@ async function seed() {
       sequence: 6,
       processTimeSeconds: 60,
       setupTimeSeconds: 0,
+      scrapBps: 0,
     },
   ]);
 
@@ -188,10 +206,16 @@ async function seed() {
     .insert(workOrders)
     .values([
       {
+        // 52 units against a 50-unit allocation: two units of overage, the
+        // planned answer to scrap (a bracket has a ~2% chance of dying on the
+        // way through, so an exact 50 under-delivers SO-2001 in most runs).
+        // The spares cost their material and carrying either way — that is
+        // the trade. WO-1002 stays exact, so SO-2003 wears the other half of
+        // the decision.
         orderNumber: "WO-1001",
         partId: bracket.id,
         routingId: bracketRouting.id,
-        quantity: 50,
+        quantity: 52,
       },
       {
         orderNumber: "WO-1002",
@@ -217,13 +241,17 @@ async function seed() {
     .insert(salesOrders)
     .values([
       // Due days are sized against the drill press (~480s/unit, ~60/day; the
-      // whole 170-unit book is ~2.83 drill-days): SO-2001 makes day 1 with a
-      // few-sigma margin only if brackets release immediately and run first;
-      // SO-2002 is comfortable brackets-first and late flanges-first, so the
-      // due date agrees with the price signal (the $55 order is the one to
-      // protect); SO-2003 makes day 3 only if the drill never starves, in
-      // direct tension with the carrying cost that rewards releasing WO-1002
-      // late.
+      // book is ~2.9 drill-days plus a 10-minute changeover per work order):
+      // SO-2001 makes day 1 only if brackets release immediately and run
+      // first, and 6C tightened it — its 52 units span two work orders, so
+      // the split costs a second drill setup, and WO-1001's two overage units
+      // run ahead of WO-1003 in the queue. Brackets-first the last unit lands
+      // ~tick 28,100 of 28,800, a ~1σ margin: a tight promise, not a safe
+      // one. SO-2002 stays comfortable brackets-first and late flanges-first,
+      // so the due date agrees with the price signal (the $55 order is the
+      // one to protect); SO-2003 makes day 3 only if the drill never starves,
+      // in tension with the carrying cost that rewards releasing WO-1002
+      // late — and its exact 90 means any flange scrap under-delivers it.
       {
         orderNumber: "SO-2001",
         partId: bracket.id,

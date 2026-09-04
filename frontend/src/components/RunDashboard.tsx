@@ -132,6 +132,7 @@ function RunDashboard({
     cycleTime,
     onTimeDelivery,
     salesOrderDelivery,
+    scrap,
   } = metrics;
   const salesOrderById = new Map(salesOrders.map((order) => [order.id, order]));
 
@@ -256,6 +257,17 @@ function RunDashboard({
                 (onTimeDelivery.lateCount > 0
                   ? ` · worst ${formatDurationSeconds(onTimeDelivery.maxLatenessSeconds)} late`
                   : "")
+          }
+        />
+        {/* neutral styling on purpose: the material is recorded, not charged —
+            destructive stays reserved for money that is in netCents */}
+        <StatCard
+          label="Scrap"
+          value={scrap.scrappedCount.toLocaleString()}
+          detail={
+            scrap.scrappedCount === 0
+              ? "no units ruined in the window"
+              : `${formatCents(scrap.scrappedMaterialCents)} of material lost`
           }
         />
         <StatCard

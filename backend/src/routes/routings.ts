@@ -23,6 +23,7 @@ type StepInput = {
   workCenterId: number;
   processTimeSeconds: number;
   setupTimeSeconds: number;
+  scrapBps: number;
 };
 
 /**
@@ -49,6 +50,7 @@ function sequenced(routingId: number, steps: StepInput[]) {
     sequence: index + 1,
     processTimeSeconds: step.processTimeSeconds,
     setupTimeSeconds: step.setupTimeSeconds,
+    scrapBps: step.scrapBps,
   }));
 }
 

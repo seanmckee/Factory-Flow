@@ -97,9 +97,15 @@ expense − carrying) as the score on the run summary and over any window. A
 calendar day is `shifts × 28,800` one-second ticks (one 8-hour shift today);
 rates are entered per 24h day and amortized over the day's staffed ticks.
 Track 6B added due dates and on-time delivery (a metric, deliberately not yet
-money). Still open from the list below: wages/shifts (Track 6D), setup and
-scrap (6C), capital decisions (6E), and the penalty half of 6B's bullet — see
-PROGRESS.md for the sub-track plan.
+money). Track 6C delivered setup and scrap: a changeover is machine time paid
+once per work order per step (so batch size finally trades off against
+carrying cost, and a split order costs the constraint a second setup), and
+scrap is a per-step probability drawn at step completion through the seeded
+RNG in its own domain — a ruined unit's material is recorded but not charged,
+its money bite being the lost sale, the wasted machine time and the carrying
+already paid. Still open from the list below: wages/shifts (Track 6D),
+capital decisions (6E), rework, and the penalty halves of 6B's and 6C's
+bullets — see PROGRESS.md for the sub-track plan.
 
 The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
 
@@ -111,8 +117,8 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
   - Operator wages per shift-hour, with an overtime rate for hours beyond the shift.
 - **Variable cost**
   - Material cost per part (already modelled).
-  - Setup cost per changeover, which finally makes batch-size decisions have a real trade-off.
-  - Scrap and rework cost.
+  - ~~Setup cost per changeover, which finally makes batch-size decisions have a real trade-off.~~ Delivered as machine time (6C), not a cents charge — the cost is rent against time and lost constraint minutes.
+  - ~~Scrap~~ (6C) and rework cost — rework still open, and scrapped material is recorded, not yet charged.
 - **Inventory carrying cost** — a holding charge on WIP and finished goods per unit per day, so sitting inventory is genuinely expensive rather than just a number on a chart. This is what makes "release less work" a financially visible strategy.
 - **Capital decisions** — actions that cost money up front and change the factory afterwards:
   - Buy a machine: one-off capital outlay, then a new work centre with its own standing cost.
