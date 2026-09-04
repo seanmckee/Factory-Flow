@@ -722,7 +722,7 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
-- [ ] 6A.10 UI: dashboard P&L — stat row led by net profit (destructive when
+- [x] 6A.10 UI: dashboard P&L — stat row led by net profit (destructive when
       negative), OE and carrying cards; per-centre "Standing cost" column
       derived client-side from the `/floor` frozen rate × observed ticks
       (display-only; deliberately not served — 6E invalidates the

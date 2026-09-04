@@ -833,6 +833,7 @@ function SimulationPage() {
                 // — the floor's frozen copy is where both come from
                 centers={floor?.workCenters ?? []}
                 tickNum={run.tickNum}
+                dayTicks={run.dayTicks}
                 onWindow={(fromTick, toTick) =>
                   loadMetrics(run.id, fromTick, toTick)
                 }
