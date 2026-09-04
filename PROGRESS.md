@@ -819,7 +819,7 @@ route for sales orders (creation-only stays the convention).
       brackets-first, late flanges-first — the due date agrees with the price
       signal), SO-2003 day 3 (on time iff the drill press never starves, in
       tension with carrying cost rewarding a late WO-1002 release).
-- [ ] 6B.2 Engine + tests. Structural `SalesOrder` gains `dueAtTick:
+- [x] 6B.2 Engine + tests. Structural `SalesOrder` gains `dueAtTick:
       number | null` (required-nullable — optional would leak `| undefined`
       through every credit under `exactOptionalPropertyTypes`); the credit and
       `FinishedPartRecord` carry it through; `aggregateOnTimeDelivery` in

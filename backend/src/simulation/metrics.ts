@@ -202,3 +202,70 @@ function percentile(sorted: number[], fraction: number): number | null {
   const rank = Math.ceil(fraction * sorted.length);
   return sorted[Math.max(0, rank - 1)] ?? null;
 }
+
+/**
+ * What on-time delivery needs from a finished record: deliberately not
+ * `FinishedPart` (the tick's output), which never carries a due tick — the due
+ * tick is assigned at credit time, so this takes the stored shape.
+ */
+export type MeasurableFinishedPart = {
+  completedAtTick: number;
+  /** null = never measured: an uncovered unit, or an order with no due date */
+  dueAtTick: number | null;
+};
+
+/**
+ * How the window's finishes did against their promises.
+ *
+ * Nulls follow `aggregateCycleTime`'s rule, twice over: `onTimeFraction` is
+ * null when nothing was measured, because "no promises" is not "100% kept" —
+ * and the lateness stats are over LATE units only, null when every measured
+ * unit was on time, so a clean window reads differently from an unmeasured one.
+ */
+export type OnTimeDeliveryAggregate = {
+  /** units with a due tick; uncovered units and undated orders don't count */
+  measuredCount: number;
+  /** `completedAtTick <= dueAtTick` — the due tick itself is on time */
+  onTimeCount: number;
+  lateCount: number;
+  onTimeFraction: number | null;
+  meanLatenessSeconds: number | null;
+  maxLatenessSeconds: number | null;
+};
+
+/**
+ * Windowing is the caller's job, on `completedAtTick`, sharing the cycle-time
+ * window. Unlike a negative cycle time, "due before release" is legal and does
+ * not throw — an order can already be late when its work order is released.
+ */
+export function aggregateOnTimeDelivery(
+  finishedParts: MeasurableFinishedPart[],
+): OnTimeDeliveryAggregate {
+  let measuredCount = 0;
+  let onTimeCount = 0;
+  let latenessTotal = 0;
+  let maxLateness = 0;
+
+  for (const part of finishedParts) {
+    if (part.dueAtTick === null) continue;
+    measuredCount += 1;
+    const lateness = part.completedAtTick - part.dueAtTick;
+    if (lateness <= 0) {
+      onTimeCount += 1;
+    } else {
+      latenessTotal += lateness;
+      maxLateness = Math.max(maxLateness, lateness);
+    }
+  }
+
+  const lateCount = measuredCount - onTimeCount;
+  return {
+    measuredCount,
+    onTimeCount,
+    lateCount,
+    onTimeFraction: measuredCount === 0 ? null : onTimeCount / measuredCount,
+    meanLatenessSeconds: lateCount === 0 ? null : latenessTotal / lateCount,
+    maxLatenessSeconds: lateCount === 0 ? null : maxLateness,
+  };
+}
+

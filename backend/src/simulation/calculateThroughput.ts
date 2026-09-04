@@ -15,6 +15,10 @@ import type {
  * `salesOrderId` and `unitPriceCents` are null together, and only for an
  * uncovered unit — one built beyond what anybody bought. That unit earns
  * nothing, but its material cost is real and recorded either way.
+ *
+ * `dueAtTick` does NOT share that invariant: it is null for an uncovered unit
+ * *or* for a covered unit whose sales order made no promise, so the OTD metric
+ * reads only this field and never infers from `salesOrderId`.
  */
 export type FinishedPartCredit = {
   partId: string;
@@ -23,6 +27,7 @@ export type FinishedPartCredit = {
   salesOrderId: number | null;
   unitPriceCents: number | null;
   materialCostCents: number;
+  dueAtTick: number | null;
 };
 
 /**
@@ -102,6 +107,7 @@ export function creditFinishedParts(
         salesOrderId: null,
         unitPriceCents: null,
         materialCostCents: part.materialCostCents,
+        dueAtTick: null,
       });
       continue;
     }
@@ -120,6 +126,7 @@ export function creditFinishedParts(
       salesOrderId: salesOrder.id,
       unitPriceCents: salesOrder.unitPriceCents,
       materialCostCents: part.materialCostCents,
+      dueAtTick: salesOrder.dueAtTick,
     });
   }
 

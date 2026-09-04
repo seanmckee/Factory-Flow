@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { aggregateCycleTime, aggregateMetrics } from "./metrics.js";
+import {
+  aggregateCycleTime,
+  aggregateMetrics,
+  aggregateOnTimeDelivery,
+} from "./metrics.js";
 import { simulateTick } from "./simulationTick.js";
 import type { TickMetrics } from "./simulationTick.js";
 import type { FinishedPart, Routing, WipPart, WorkCenter } from "./types.js";
@@ -316,3 +320,83 @@ describe("aggregateCycleTime", () => {
     );
   });
 });
+
+describe("aggregateOnTimeDelivery", () => {
+  const measured = (completedAtTick: number, dueAtTick: number | null) => ({
+    completedAtTick,
+    dueAtTick,
+  });
+
+  it("returns nulls, not zeroes, when nothing finished", () => {
+    expect(aggregateOnTimeDelivery([])).toEqual({
+      measuredCount: 0,
+      onTimeCount: 0,
+      lateCount: 0,
+      onTimeFraction: null,
+      meanLatenessSeconds: null,
+      maxLatenessSeconds: null,
+    });
+  });
+
+  it("measures nothing when no finished unit carried a promise", () => {
+    // "no promises" is not "100% kept" - a window of uncovered or undated
+    // units reads exactly like an empty one
+    const result = aggregateOnTimeDelivery([
+      measured(100, null),
+      measured(200, null),
+    ]);
+    expect(result.measuredCount).toBe(0);
+    expect(result.onTimeFraction).toBeNull();
+  });
+
+  it("counts a unit finishing exactly on the due tick as on time", () => {
+    const result = aggregateOnTimeDelivery([measured(28800, 28800)]);
+    expect(result.onTimeCount).toBe(1);
+    expect(result.lateCount).toBe(0);
+    expect(result.onTimeFraction).toBe(1);
+  });
+
+  it("counts one tick past the due tick as late, by one second", () => {
+    const result = aggregateOnTimeDelivery([measured(28801, 28800)]);
+    expect(result.lateCount).toBe(1);
+    expect(result.onTimeFraction).toBe(0);
+    expect(result.meanLatenessSeconds).toBe(1);
+    expect(result.maxLatenessSeconds).toBe(1);
+  });
+
+  it("partitions a mixed window and averages lateness over late units only", () => {
+    const result = aggregateOnTimeDelivery([
+      measured(100, 200), // on time
+      measured(300, 200), // 100 late
+      measured(500, 200), // 300 late
+      measured(999, null), // unmeasured
+    ]);
+    expect(result.measuredCount).toBe(3);
+    expect(result.onTimeCount).toBe(1);
+    expect(result.lateCount).toBe(2);
+    expect(result.onTimeFraction).toBeCloseTo(1 / 3);
+    expect(result.meanLatenessSeconds).toBe(200);
+    expect(result.maxLatenessSeconds).toBe(300);
+  });
+
+  it("reports all-on-time as fraction 1 with null lateness, not zero", () => {
+    // null keeps "every promise kept" distinguishable from "nothing promised"
+    // on the lateness side too
+    const result = aggregateOnTimeDelivery([
+      measured(100, 200),
+      measured(150, 200),
+    ]);
+    expect(result.onTimeFraction).toBe(1);
+    expect(result.meanLatenessSeconds).toBeNull();
+    expect(result.maxLatenessSeconds).toBeNull();
+  });
+
+  it("does not throw for a unit due before it could have started", () => {
+    // legal, unlike a negative cycle time: an order can already be late when
+    // its work order is released
+    const result = aggregateOnTimeDelivery([measured(50, 10)]);
+    expect(result.lateCount).toBe(1);
+    expect(result.maxLatenessSeconds).toBe(40);
+  });
+});
+

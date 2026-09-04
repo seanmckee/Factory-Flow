@@ -171,7 +171,17 @@ each finished unit to the allocation covering it and returns
 total and the per-part attribution must agree by construction: a run stores the
 parts and charts the total, and two code paths would eventually disagree about
 what a run earned. `salesOrderId` and `unitPriceCents` are null together and
-only for an uncovered unit, whose material cost is still recorded.
+only for an uncovered unit, whose material cost is still recorded. `dueAtTick`
+(6B) is frozen the same way but does **not** share that invariant: it is null
+for an uncovered unit *or* a covered unit whose order made no promise, and the
+row's `sales_order_id` is ON DELETE SET NULL while the due tick stays frozen —
+so on-time delivery reads only `dueAtTick`, never infers from `salesOrderId`.
+Due dates live on sales orders in **calendar days** and become ticks in exactly
+one place, `loadRunState` (`dueDay × the run's frozen day_ticks`); the engine's
+`SalesOrder` carries `dueAtTick` required-nullable, and on time means
+`completedAtTick <= dueAtTick` — the due tick itself is on time. There is
+deliberately **no money penalty**: lateness feeds the OTD metric only, and
+`netCents` is unchanged.
 
 Advancing a run is split across the pure/impure line. `simulateBatch`
 (`simulation/simulateBatch.ts`) takes a `RunState`, ticks it N times in memory
@@ -216,6 +226,12 @@ They window independently, on `TickMetrics.tickNum` and on
 `FinishedPart.completedAtTick` respectively. Empty inputs don't throw: a run
 that never advanced has no ticks, and `aggregateCycleTime` returns nulls rather
 than zeroes because zero is itself a reachable cycle time.
+`aggregateOnTimeDelivery` windows on `completedAtTick` alongside cycle time and
+follows the same null rule twice: `onTimeFraction` is null when no finished
+unit carried a promise ("no promises" is not "100% kept"), and the lateness
+stats cover late units only, null when every measured unit was on time. It
+never throws — due-before-release is legal, an order can already be late at
+release.
 
 ## Frontend architecture
 

@@ -57,6 +57,8 @@ export type FinishedPartRecord = {
   salesOrderId: number | null;
   unitPriceCents: number | null;
   materialCostCents: number;
+  /** frozen at credit time; null for an uncovered unit or an undated order */
+  dueAtTick: number | null;
 };
 
 /** One tick's row, with the per-center rows that hang off it. */
@@ -168,6 +170,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
         salesOrderId: credit.salesOrderId,
         unitPriceCents: credit.unitPriceCents,
         materialCostCents: credit.materialCostCents,
+        dueAtTick: credit.dueAtTick,
       });
     }
 

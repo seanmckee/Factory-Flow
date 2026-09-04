@@ -93,12 +93,28 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
   const salesOrderIds = [
     ...new Set(runAllocations.map((allocation) => allocation.salesOrderId)),
   ];
-  const runSalesOrders = salesOrderIds.length
+  // The demand side is read live per advance *request* — loaded once here and
+  // reused across that request's batches — so a price or due-day edit lands
+  // between advances, never mid-advance, and touches only units not yet
+  // finished. Due days convert to the run's own ticks right here, the one
+  // place calendar days become ticks: the engine speaks ticks only, and the
+  // run's frozen dayTicks is what makes "day N" mean the same promise however
+  // a run is staffed.
+  const storedSalesOrders = salesOrderIds.length
     ? await db
-        .select({ id: salesOrders.id, unitPriceCents: salesOrders.unitPriceCents })
+        .select({
+          id: salesOrders.id,
+          unitPriceCents: salesOrders.unitPriceCents,
+          dueDay: salesOrders.dueDay,
+        })
         .from(salesOrders)
         .where(inArray(salesOrders.id, salesOrderIds))
     : [];
+  const runSalesOrders = storedSalesOrders.map((so) => ({
+    id: so.id,
+    unitPriceCents: so.unitPriceCents,
+    dueAtTick: so.dueDay === null ? null : so.dueDay * run.dayTicks,
+  }));
 
   const routingByWorkOrder = new Map<number, Routing>();
   for (const step of storedSteps) {

@@ -42,9 +42,10 @@ const state = (overrides: Partial<RunState> = {}): RunState => ({
   workCenters,
   workOrders: [{ id: 10, partId: 1 }],
   parts: [{ id: 1, materialCostCents: 1200 }],
+  // SO-20 promises the end of the fixture's 10-tick day; SO-21 promises nothing
   salesOrders: [
-    { id: 20, unitPriceCents: 5000 },
-    { id: 21, unitPriceCents: 5500 },
+    { id: 20, unitPriceCents: 5000, dueAtTick: 10 },
+    { id: 21, unitPriceCents: 5500, dueAtTick: null },
   ],
   // SO-20 takes the first unit of the work order, SO-21 the next
   allocations: [
@@ -126,7 +127,42 @@ describe("simulateBatch", () => {
       salesOrderId: 20,
       unitPriceCents: 5000,
       materialCostCents: 1200,
+      dueAtTick: 10,
     });
+  });
+
+  it("freezes the covering order's due tick, null when it made no promise", () => {
+    const batch = simulateBatch(
+      state({ wipParts: [part("p1"), part("p2")] }),
+      30,
+    );
+    // p2 is covered by SO-21, which has a price but no due date — the record
+    // keeps the price and stays unmeasured
+    expect(batch.finishedParts.map((p) => p.dueAtTick)).toEqual([10, null]);
+  });
+
+  it("freezes the due tick a unit finished under, not a later edit", () => {
+    // batch 1 under a day-1 promise; the order book is then edited; batch 2
+    // reads the new promise. Frozen rows must keep what they finished under —
+    // this is the whole of the due-day edit caveat, exercised where it lives.
+    const first = simulateBatch(state({ wipParts: [part("p1")] }), 10);
+    expect(first.finishedParts[0]?.dueAtTick).toBe(10);
+
+    const second = simulateBatch(
+      state({
+        tickNum: first.tickNum,
+        wipParts: [part("p2")],
+        priorCounts: first.priorCounts,
+        salesOrders: [
+          { id: 20, unitPriceCents: 5000, dueAtTick: 20 },
+          { id: 21, unitPriceCents: 5500, dueAtTick: 20 },
+        ],
+      }),
+      10,
+    );
+
+    expect(first.finishedParts[0]?.dueAtTick).toBe(10);
+    expect(second.finishedParts[0]?.dueAtTick).toBe(20);
   });
 
   it("prices later units against later allocations within one batch", () => {
@@ -170,6 +206,7 @@ describe("simulateBatch", () => {
       salesOrderId: null,
       unitPriceCents: null,
       materialCostCents: 1200,
+      dueAtTick: null,
     });
   });
 
