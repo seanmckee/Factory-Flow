@@ -724,6 +724,23 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
+- [x] 6A.10c Whole-run charts + drain-stop (after the second hands-on: a +1
+      day jump on a raised-capacity run drained the floor at staffed hour ~5,
+      the newest-5000 window showed only the dead time after it — rate and WIP
+      flat zero — and Trends dragged rendering 3×5000 recharts points).
+      **Decided:** `/ticks` gains `?bucket=N` — money summed per bucket (the
+      opening-balance identity stays exact; verified bucket sums equal run
+      totals to the cent), WIP read at bucket end, grid aligned to absolute
+      ticks, bucket inlined into the SQL because GROUP BY and ORDER BY must be
+      the same expression and two binds are two expressions. The chart asks at
+      `chartBucket` resolution (seconds ≤ 5000 ticks → minutes → hours), so
+      Trends draws the whole run (a day = 480 points) and the cap becomes
+      practically unreachable. Rate over a bucketed series is
+      `bucketThroughputRate` — rescale, not slide. **Decided:** a jump stops
+      itself when the floor empties (toast names the Day · time) and refuses
+      an already-empty floor: the jump holds the lock, so nothing can land
+      mid-jump and every tick past a drain is rent nobody chose. Not brought
+      back: Run until idle — the drain-stop is its useful half.
 - [x] 6A.10b Advance throughput + streaming jumps (after the first day-scale
       hands-on: a simulated day took ~22s behind a blocking modal). Measured:
       the pure simulation of a day is 0.25s (~116k ticks/s) — the rest was

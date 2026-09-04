@@ -54,7 +54,9 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   frozen throughput, operating expense, carrying cost, `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
   same P&L windowed),
-  `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
+  `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
+  (bucket groups the series server-side — money summed, WIP at bucket end,
+  grid aligned to absolute ticks),
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
   `ticks` at `MAX_TICKS_PER_REQUEST` (20000) because advancing is synchronous
@@ -267,7 +269,11 @@ aborted request would only leave the page claiming a tick the run has passed.
 **A jump streams rather than blocks**: there is no modal overlay
 (`SimulatingOverlay` is deleted) — progress is inline in the transport bar
 with Stop beside it, and the page refreshes as each committed hour lands, so
-a day reads as the charts flying through it. A jump **stops the clock
+a day reads as the charts flying through it. A jump also **stops itself when
+the floor empties** (the toast names the Day · time): nothing can land
+mid-jump — the jump holds the run's lock — so every tick past a drain is rent
+on an empty factory nobody chose, which is also why a jump on an
+already-empty floor is refused. A jump **stops the clock
 first** and waits out any beat in flight, and releasing does the same wait:
 all three contend for the same lock, and letting them collide would raise the
 very 409 the unlock action is there to cure. The work-order picker lists
@@ -342,10 +348,17 @@ dashed zero is the run turning profitable), the money as a **trailing
 rate** in cents per simulated minute (`throughputRate`, 60-tick window — the
 successor to the deleted `smoothThroughput`), and per-tick **WIP** as a step
 line straight off `wipCount`. For the cumulative curve the **opening balance
-is not optional**. `/ticks` keeps only the newest 5000
-rows, so past tick 5000 the series is a *suffix* of the run and a curve
-accumulated from zero re-bases and contradicts the money in the line above it
-— one fast-forward press reaches that. It is exact rather than approximate
+is not optional**. `/ticks` keeps only the newest 5000 rows of whatever
+resolution is asked for, so an over-long series is a *suffix* of the run and a
+curve accumulated from zero re-bases and contradicts the money in the line
+above it. The Trends tab mostly avoids the cap by asking for the series
+**bucketed** (`chartBucket`: raw seconds while the run fits on screen, then
+simulated minutes, then hours — a day is 480 minute-points), which keeps the
+whole run visible and recharts fast; bucket sums keep the opening-balance
+identity exact. The rate over a bucketed series is `bucketThroughputRate` — a
+bucket already spans the rate window, so it rescales to ¢/min rather than
+sliding, since index arithmetic on a strided series would mix ticks and
+samples. It is exact rather than approximate
 because a tick's `throughputCents` is the sum of its parts' credits and the
 run's total is the sum of the same frozen per-part columns, so what the run
 earned before the window is the total minus the window's own sum, and no API
