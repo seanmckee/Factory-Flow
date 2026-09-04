@@ -53,7 +53,8 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
   frozen throughput, operating expense, carrying cost, `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
-  same P&L windowed),
+  same P&L windowed, plus `onTimeDelivery` — the summary deliberately carries
+  no OTD copy, since the whole-run `/metrics` already answers it),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
   grid aligned to absolute ticks),

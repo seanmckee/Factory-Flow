@@ -827,7 +827,7 @@ route for sales orders (creation-only stays the convention).
       is not "100%"; lateness stats over late units only, null when none; no
       throws — due-before-release is legal, an order can already be late at
       release). Windowing stays the caller's job, on `completedAtTick`.
-- [ ] 6B.3 API. `dueDay` nullish in the create schema and POST; `loadRunState`
+- [x] 6B.3 API. `dueDay` nullish in the create schema and POST; `loadRunState`
       converts day → tick (the one place); `runService` writes the frozen
       column (`chunkFor(10)`); `RunMetrics` gains `onTimeDelivery` over the
       same windowed finished rows as cycle time. `RunSummary` deliberately
