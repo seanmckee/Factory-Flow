@@ -1,4 +1,5 @@
 import { createContext, useContext } from "react";
+import type { FactorySettings } from "../api/settings";
 import type { Part } from "../types/Part";
 import type { RoutingSummary } from "../types/Routing";
 import type { WorkCenter } from "../types/WorkCenter";
@@ -7,11 +8,13 @@ export type SetupDataValue = {
   workCenters: WorkCenter[];
   parts: Part[];
   routings: RoutingSummary[];
+  settings: FactorySettings | null;
   loading: boolean;
   error: string | null;
   refetchWorkCenters: () => Promise<void>;
   refetchParts: () => Promise<void>;
   refetchRoutings: () => Promise<void>;
+  refetchSettings: () => Promise<void>;
 };
 
 export const SetupDataContext = createContext<SetupDataValue | null>(null);

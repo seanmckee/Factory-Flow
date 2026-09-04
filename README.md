@@ -87,9 +87,18 @@ The record of _what happened_, which everything downstream reads from. The time 
 - **Factory snapshots**: periodic state captures with time-series metrics attached — WIP by work centre, queue lengths, utilisation, throughput (cents), operating expense to date, cash position, cycle time, on-time performance.
 - Snapshots are the checkpoints Phase 5 forks from; the event log is what Phase 7 explains and Phase 8 predicts on. Note that forking needs less than was assumed here: a run is reproducible from its seed, so a fork can copy a few rows rather than replay a log.
 
-### Phase 4 — Operating expense and the P&L
+### Phase 4 — Operating expense and the P&L — *partly delivered*
 
-Right now the factory can only make money. It needs to be able to lose it.
+~~Right now the factory can only make money.~~ It can lose it now: Track 6A
+delivered the cost triple — per-work-centre standing cost, facility overhead,
+and a carrying charge on the material value sitting on the floor — accruing
+per tick against the run's frozen rates, with `netCents` (throughput − operating
+expense − carrying) as the score on the run summary and over any window. A
+calendar day is `shifts × 28,800` one-second ticks (one 8-hour shift today);
+rates are entered per 24h day and amortized over the day's staffed ticks.
+Still open from the list below: wages/shifts (Track 6D), setup and scrap
+(6C), capital decisions (6E), and penalties (6B) — see PROGRESS.md for the
+sub-track plan.
 
 The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
 
@@ -113,8 +122,8 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 
 **What this produces**
 
-- A **run P&L**: throughput, operating expense, carrying cost, capital spend, net profit — over the whole run and over any selected time window.
-- A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy.
+- A **run P&L**: throughput, operating expense, carrying cost, capital spend, net profit — over the whole run and over any selected time window. *Delivered for the triple (no capital spend yet): `GET /api/runs/:id` and `/metrics` both carry the breakdown.*
+- A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy. *Delivered: cumulative net profit overlaid on the cumulative-throughput chart, with a zero line.*
 - **Payback period** on capital decisions: buy the second machine at the bottleneck, and see how many simulated days until it pays for itself.
 - A break-even question worth asking every run: at this demand and this cost structure, is this factory profitable at all?
 

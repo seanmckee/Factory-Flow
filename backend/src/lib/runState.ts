@@ -48,6 +48,7 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     .select({
       workCenterId: runWorkCenters.workCenterId,
       capacity: runWorkCenters.capacity,
+      standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
     })
     .from(runWorkCenters)
     .where(eq(runWorkCenters.runId, run.id));
@@ -138,5 +139,17 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     priorCounts: new Map(
       finishedCounts.map((row) => [row.workOrderId, Number(row.finished)]),
     ),
+    costs: {
+      dayTicks: run.dayTicks,
+      facilityOverheadCentsPerDay: run.facilityOverheadCentsPerDay,
+      wipCarryingBpsPerDay: run.wipCarryingBpsPerDay,
+      standingCostByWorkCenter: new Map(
+        storedCenters.map((center) => [
+          center.workCenterId,
+          center.standingCostCentsPerDay,
+        ]),
+      ),
+    },
+    carryRemainder: run.carryRemainder,
   };
 }

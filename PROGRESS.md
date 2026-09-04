@@ -8,14 +8,18 @@ that completes it.
 
 ---
 
-**You are here:** **Track 5 (run dashboard) is complete, awaiting a browser
-pass.** The Dashboard tab is a real dashboard — stat cards over a work-centre
-table ranked by utilization, with window controls — and the Trends tab draws
-three series: cumulative money, trailing rate, and WIP, each with a hover
-hint saying what the chart answers.
+**You are here:** **Track 6A (operating expense / P&L core) is complete,
+awaiting a browser pass.** The score can go down: runs freeze cost rates and
+accrue expense per tick, the summary and every window report net profit, the
+Trends money chart overlays cumulative net with a zero line, the dashboard
+leads with the windowed P&L, and setup gained a standing-cost column and a
+Factory Settings page. Next: 6B (due dates + lateness) — see the Track 6
+section.
 
-**Next up:** Track 6 (operating expense). Track 6 is what makes the score able
-to go down and so what makes an agent's objective non-degenerate.
+**Next up:** Track 6B (due dates in calendar days + late penalties), then
+6C–6E — see the Track 6 section for the sub-track split and the time model.
+Track 6A made the score able to go down, which is what makes an agent's
+objective non-degenerate.
 
 **One refactor unit first — done** (decided and landed 2026-09-03): the read
 side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,
@@ -648,11 +652,124 @@ no per-centre *time series*, deferred until something needs it, and the
       and "Metrics" overlapped it — throughput is itself a metric shown in
       both tabs.
 
-## Track 6 onward — re-plan when reached
+## Track 6 — Operating expense & the P&L
 
-- [ ] Track 6 `feat/operating-expense` — cost accruing against simulated time,
-      carrying cost, P&L. **This is what makes the agent's objective
-      non-degenerate.**
+Planned 2026-09-03. The user decided Track 6 delivers **all** of README Phase 4,
+split into sub-tracks by dependency — 6A designed in detail, 6B–6E scoped here
+and re-planned when reached, each its own branch/PR. **6A is what makes the
+score able to go down and the agent's objective non-degenerate.**
+
+**The time model (decided 2026-09-03):** ticks are **staffed seconds**; a
+calendar day is `shifts × 28,800` ticks (8-hour shifts), frozen per run as
+`simulation_runs.day_ticks` — 28,800 in 6A, one shift. All cost rates are
+entered per true 24h calendar day and amortized over that day's staffed ticks,
+so adding a shift (6D) amortizes the same rent over more productive seconds
+while adding wages — the real economics. Overnight is not simulated and not
+skipped-with-gaps; it simply isn't ticks, nothing moving off-shift. Rejected:
+86,400-tick days (~3 wall-minutes and 4+ requests per simulated day, and the
+seeded factory drains in under 1% of one, leaving rent a rounding error) and
+redefining the tick (one tick = one simulated second is load-bearing).
+
+**Rates live in both places:** the live factory carries them
+(`work_centers.standing_cost_cents_per_day`; facility overhead + WIP carrying
+bps in the `factory_settings` singleton), `POST /api/runs` may override the
+facility-level pair, and the run freezes everything at creation — the same
+invariant capacity follows. Forks (Track 7) and capital actions (6E) vary the
+frozen copy.
+
+### Track 6A — P&L core (`feat/operating-expense` + `…-ui`)
+
+- [x] 6A.0 `refactor/run-service-reads` — read side of `runService.ts` split
+      out (see the note at the top of this file). Own PR.
+- [x] 6A.1 Ledger rewrite (this section) + schema + migration + seed retune.
+      New: `factory_settings`; standing cost on `work_centers` and frozen on
+      `run_work_centers`; frozen overhead/bps/`day_ticks`/`carry_remainder` on
+      `simulation_runs`; `operating_expense_cents` + `carrying_cost_cents` on
+      `run_ticks` (frozen cents — the P&L sums these, never re-derives from
+      rates, so a rate edit can't rewrite a finished run). Seed: process times
+      in minutes and a ~170-unit order book so a run spans days; rates sized
+      so the factory profits only while the constraint is fed.
+- [x] 6A.2 `simulation/operatingExpense.ts` + tests — `accrueRate` (exact
+      integer floor-diff, a pure function of tick number, so batch splitting
+      needs no cursor), `timeExpenseAtTick` (**accrued per rate, then summed**
+      — floor diffs on a summed rate disagree with the summed breakdown
+      mid-day), `rateWindowCents` (telescoped), `wipMaterialValueCents`
+      (throws on missing records), `accrueCarrying` (remainder fold,
+      `r ∈ [0, 10000·day_ticks)` — lifetime total is the exact floor of the
+      ideal charge regardless of chunking).
+- [x] 6A.3 `simulateBatch` wiring + tests — `RunState.costs` +
+      `carryRemainder`, `TickRecord` expense fields, remainder carried out
+      like `priorCounts`; carrying charges **end-of-tick** WIP (the set
+      `wipCount` counts — a part finishing during the tick pays no rent for
+      it). The one-batch-vs-several test re-run at nonzero rates.
+- [x] 6A.4 Live-rate API — standing cost through work-centre POST/PATCH;
+      `GET/PATCH /api/settings` over the id=1 upsert helper.
+- [x] 6A.5 Freeze at create, accrue on advance — `createRun` copies rates
+      (optional facility-level overrides in the POST body), `advanceRun`
+      writes the tick expense columns and persists `carry_remainder`;
+      `AdvanceResult` gains the two expense sums.
+- [x] 6A.6 P&L reads — `RunSummary` gains OE/carrying sums, `netCents`
+      (throughput − OE − carrying) and `dayTicks`; `RunMetrics` gains the
+      windowed breakdown; `/floor` centres gain the frozen standing rate;
+      `/ticks` rows gain the expense columns. Doc sweep.
+- [x] 6A.7 UI: cost setup — standing-cost column on the work-centres table;
+      `/setup/settings` Factory Settings page (overhead, carrying %/day);
+      settings join `SetupDataProvider`'s load.
+- [x] 6A.8 UI: pure transforms — `simTime.ts` (`ticksToDays`, `formatDays`),
+      `standingCost.ts`, `netProfit.ts` (`netPerTick`, `openingNetCents` —
+      the cumulative net curve has the same `/ticks`-suffix problem as the
+      money curve, and its opening balance is **unfloored**: net before the
+      window can legitimately be negative).
+- [x] 6A.9 UI: net-profit curve **overlaid** on the cumulative-money chart
+      (decided over a fourth card — the gap between the lines is the README's
+      "running at a loss while output looks healthy"), dashed zero line; `Net`
+      stat in the run bar.
+- [x] 6A.10a UI: transport catches up with the day scale (added after the
+      first hands-on: minute-scale process times made the 1× clock unwatchable
+      and +100/+500/+1000 ticks meaningless). **Decided:** the live clock plays
+      one simulated **minute** per real second — 60 ticks a beat, one small
+      request, nowhere near the ~500 ticks/sec that made Track 4 reject a
+      multiplier, and it restores exactly the pace the old seconds-scale seed
+      had at 1×. Presets become **+1 hour / +4 hours / +1 day**, and the run
+      bar gains a calendar readout (`formatTickTime`: "Day 2 · 3:41:05" —
+      staffed time, the only time a run simulates).
+- [x] 6A.10 UI: dashboard P&L — stat row led by net profit (destructive when
+      negative), OE and carrying cards; per-centre "Standing cost" column
+      derived client-side from the `/floor` frozen rate × observed ticks
+      (display-only; deliberately not served — 6E invalidates the
+      derivation); window label gains ≈ days. Doc sweep.
+
+### Track 6B — Due dates and lateness (`feat/due-dates`) — re-plan when reached
+
+Sales orders gain a due date in **calendar days** (`due day N` = tick
+`N × day_ticks`); a unit finishing late books a penalty as frozen per-part
+money on `run_finished_parts`, like every other credit. Lost sales deferred.
+
+### Track 6C — Setup and scrap (`feat/setup-scrap`) — re-plan when reached
+
+Setup cost charged when a work order's first unit reaches each step — the
+batch-size trade-off without per-machine identity. Scrap as a per-step
+probability drawn through the seeded RNG with a **domain separator** in the
+draw key, so scrap noise never aliases process-time noise; scrapped units
+record their spent material.
+
+### Track 6D — Shifts and wages (`feat/shift-calendar`) — re-plan when reached
+
+`day_ticks = shifts × 28,800` per run; wages accrue per staffed tick per
+operator, overtime at a multiplier when authorized; machines stop off-shift
+(off-shift time is not simulated). Rent stays per calendar day.
+
+### Track 6E — Capital actions (`feat/capital-actions`) — re-plan when reached
+
+Actions that cost money and mutate the run's **own frozen config**: buy/retire
+a machine, hire/fire an operator, authorize overtime. Operators gate effective
+capacity = `min(machines, operators)` — a new frozen per-centre column.
+Mid-run rate changes mean per-centre expense must then be stored per tick or
+effective-dated (`accrueRate` generalizes to `floor((t−t₀)·r/D)` diffs) — the
+reason 6A never serves a derived per-centre cost.
+
+## Track 7 onward — re-plan when reached
+
 - [ ] Track 7 `feat/run-forking` — fork at a checkpoint, compare on net profit.
       Depends on the seeded RNG from 1.2.
 - [ ] Track 8 `feat/agent` — tool layer: create, advance, fork, read metrics,

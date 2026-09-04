@@ -10,6 +10,7 @@ import {
   allocations,
   salesOrders,
   simulationRuns,
+  factorySettings,
 } from "./schema.js";
 
 const db = drizzle(process.env.DATABASE_URL!);
@@ -20,6 +21,7 @@ async function seed() {
   // runs first: their parts and released orders hold RESTRICT references to
   // work orders, and deleting a run cascades all of its history away
   await db.delete(simulationRuns);
+  await db.delete(factorySettings);
   await db.delete(allocations);
   await db.delete(salesOrders);
   await db.delete(workOrders);
@@ -28,15 +30,25 @@ async function seed() {
   await db.delete(workCenters);
   await db.delete(parts);
 
+  // Cost rates are tuning knobs, sized against what the constraint can earn:
+  // the drill press moves ~60 units/day (28800 ticks / 480s), worth ~$1,750/day
+  // of margin at these prices, against ~$1,350/day of standing costs + overhead
+  // - profitable only while the constraint is fed, loss-making idle.
+  await db.insert(factorySettings).values({
+    id: 1,
+    facilityOverheadCentsPerDay: 60_000, // $600/day - rent, the doors being open
+    wipCarryingBpsPerDay: 1000, // 10%/day of material value - aggressive, so releasing everything visibly costs
+  });
+
   const insertedWorkCenters = await db
     .insert(workCenters)
     .values([
-      { name: "Raw Material", capacity: 1 },
-      { name: "Cutter", capacity: 1 },
-      { name: "Drill Press", capacity: 1 },
-      { name: "Deburr", capacity: 1 },
-      { name: "Inspection", capacity: 1 },
-      { name: "Packaging", capacity: 1 },
+      { name: "Raw Material", capacity: 1, standingCostCentsPerDay: 5_000 },
+      { name: "Cutter", capacity: 1, standingCostCentsPerDay: 15_000 },
+      { name: "Drill Press", capacity: 1, standingCostCentsPerDay: 30_000 },
+      { name: "Deburr", capacity: 1, standingCostCentsPerDay: 10_000 },
+      { name: "Inspection", capacity: 1, standingCostCentsPerDay: 10_000 },
+      { name: "Packaging", capacity: 1, standingCostCentsPerDay: 5_000 },
     ])
     .returning();
 
@@ -86,40 +98,42 @@ async function seed() {
   }
 
   // Flange: 5 steps, skips Deburr. Drill Press is the shared constraint.
+  // Process times are minutes, not toy seconds, so the order book below spans
+  // simulated days and per-day costs are material against the money earned.
   await db.insert(routingSteps).values([
     {
       routingId: flangeRouting.id,
       workCenterId: rawMaterial.id,
       sequence: 1,
-      processTimeSeconds: 2,
+      processTimeSeconds: 60,
       setupTimeSeconds: 0,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: cutter.id,
       sequence: 2,
-      processTimeSeconds: 2,
+      processTimeSeconds: 180,
       setupTimeSeconds: 1,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: drillPress.id,
       sequence: 3,
-      processTimeSeconds: 8,
+      processTimeSeconds: 480,
       setupTimeSeconds: 2,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: inspection.id,
       sequence: 4,
-      processTimeSeconds: 2,
+      processTimeSeconds: 120,
       setupTimeSeconds: 0,
     },
     {
       routingId: flangeRouting.id,
       workCenterId: packaging.id,
       sequence: 5,
-      processTimeSeconds: 2,
+      processTimeSeconds: 60,
       setupTimeSeconds: 0,
     },
   ]);
@@ -130,42 +144,42 @@ async function seed() {
       routingId: bracketRouting.id,
       workCenterId: rawMaterial.id,
       sequence: 1,
-      processTimeSeconds: 2,
+      processTimeSeconds: 60,
       setupTimeSeconds: 0,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: cutter.id,
       sequence: 2,
-      processTimeSeconds: 3,
+      processTimeSeconds: 240,
       setupTimeSeconds: 1,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: drillPress.id,
       sequence: 3,
-      processTimeSeconds: 8,
+      processTimeSeconds: 480,
       setupTimeSeconds: 2,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: deburr.id,
       sequence: 4,
-      processTimeSeconds: 3,
+      processTimeSeconds: 180,
       setupTimeSeconds: 1,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: inspection.id,
       sequence: 5,
-      processTimeSeconds: 2,
+      processTimeSeconds: 120,
       setupTimeSeconds: 0,
     },
     {
       routingId: bracketRouting.id,
       workCenterId: packaging.id,
       sequence: 6,
-      processTimeSeconds: 2,
+      processTimeSeconds: 60,
       setupTimeSeconds: 0,
     },
   ]);
@@ -177,19 +191,19 @@ async function seed() {
         orderNumber: "WO-1001",
         partId: bracket.id,
         routingId: bracketRouting.id,
-        quantity: 10,
+        quantity: 50,
       },
       {
         orderNumber: "WO-1002",
         partId: flange.id,
         routingId: flangeRouting.id,
-        quantity: 25,
+        quantity: 90,
       },
       {
         orderNumber: "WO-1003",
         partId: bracket.id,
         routingId: bracketRouting.id,
-        quantity: 5,
+        quantity: 30,
       },
     ])
     .returning();
@@ -205,19 +219,19 @@ async function seed() {
       {
         orderNumber: "SO-2001",
         partId: bracket.id,
-        quantity: 12,
+        quantity: 52,
         unitPriceCents: 5000,
       },
       {
         orderNumber: "SO-2002",
         partId: bracket.id,
-        quantity: 3,
+        quantity: 28,
         unitPriceCents: 5500,
       },
       {
         orderNumber: "SO-2003",
         partId: flange.id,
-        quantity: 25,
+        quantity: 90,
         unitPriceCents: 3000,
       },
     ])
@@ -229,13 +243,13 @@ async function seed() {
   }
 
   await db.insert(allocations).values([
-    // SO-2001 needs 12 brackets  takes two work orders to cover
-    { salesOrderId: so2001.id, workOrderId: wo1001.id, quantity: 10 },
+    // SO-2001 needs 52 brackets  takes two work orders to cover
+    { salesOrderId: so2001.id, workOrderId: wo1001.id, quantity: 50 },
     { salesOrderId: so2001.id, workOrderId: wo1003.id, quantity: 2 },
-    // WO-1003 makes 5  remaining 3 go to another customer at a higher price
-    { salesOrderId: so2002.id, workOrderId: wo1003.id, quantity: 3 },
+    // WO-1003 makes 30  remaining 28 go to another customer at a higher price
+    { salesOrderId: so2002.id, workOrderId: wo1003.id, quantity: 28 },
     // SO-2003 covered by a single work order
-    { salesOrderId: so2003.id, workOrderId: wo1002.id, quantity: 25 },
+    { salesOrderId: so2003.id, workOrderId: wo1002.id, quantity: 90 },
   ]);
 
   console.log("Database Seeded");

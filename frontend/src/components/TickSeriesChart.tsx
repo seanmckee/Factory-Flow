@@ -4,6 +4,7 @@ import {
   XAxis,
   YAxis,
   CartesianGrid,
+  ReferenceLine,
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
@@ -11,6 +12,8 @@ import {
 export type TickPoint = {
   tick: number;
   value: number;
+  /** second series on the same axis; drawn only when `secondaryLabel` is set */
+  secondary?: number;
 };
 
 /**
@@ -29,6 +32,9 @@ export default function TickSeriesChart({
   formatAxis,
   stroke = "var(--chart-1)",
   type = "monotone",
+  secondaryLabel,
+  secondaryStroke = "var(--chart-4)",
+  zeroLine = false,
 }: {
   data: TickPoint[];
   yLabel: string;
@@ -38,6 +44,11 @@ export default function TickSeriesChart({
   stroke?: string;
   /** `stepAfter` for integer series like WIP — parts don't move fractionally. */
   type?: "monotone" | "stepAfter";
+  /** names the `secondary` series and turns its line on */
+  secondaryLabel?: string;
+  secondaryStroke?: string;
+  /** dashed y=0 reference, for series that can go negative */
+  zeroLine?: boolean;
 }) {
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -71,7 +82,7 @@ export default function TickSeriesChart({
           }}
         />
         <Tooltip
-          formatter={(value) => [formatValue(Number(value)), tooltipLabel]}
+          formatter={(value, name) => [formatValue(Number(value)), String(name)]}
           labelFormatter={(tick) => `Tick ${Number(tick).toLocaleString()}`}
           contentStyle={{
             backgroundColor: "var(--popover)",
@@ -80,14 +91,33 @@ export default function TickSeriesChart({
             color: "var(--popover-foreground)",
           }}
         />
+        {zeroLine && (
+          <ReferenceLine
+            y={0}
+            stroke="var(--muted-foreground)"
+            strokeDasharray="4 4"
+          />
+        )}
         <Line
           type={type}
           dataKey="value"
+          name={tooltipLabel}
           stroke={stroke}
           strokeWidth={2}
           dot={false}
           isAnimationActive={false}
         />
+        {secondaryLabel && (
+          <Line
+            type={type}
+            dataKey="secondary"
+            name={secondaryLabel}
+            stroke={secondaryStroke}
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+          />
+        )}
       </LineChart>
     </ResponsiveContainer>
   );

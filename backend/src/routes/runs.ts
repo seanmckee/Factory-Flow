@@ -59,7 +59,18 @@ router.post("/", async (req, res) => {
     // which is all replaying the run later needs
     const rngSeed = body.rngSeed ?? Math.floor(Math.random() * 2 ** 31);
 
-    res.status(201).json(await createRun(body.name, rngSeed));
+    const overrides: {
+      facilityOverheadCentsPerDay?: number;
+      wipCarryingBpsPerDay?: number;
+    } = {};
+    if (body.facilityOverheadCentsPerDay !== undefined) {
+      overrides.facilityOverheadCentsPerDay = body.facilityOverheadCentsPerDay;
+    }
+    if (body.wipCarryingBpsPerDay !== undefined) {
+      overrides.wipCarryingBpsPerDay = body.wipCarryingBpsPerDay;
+    }
+
+    res.status(201).json(await createRun(body.name, rngSeed, overrides));
   } catch (error) {
     fail(res, error, "Error creating run");
   }

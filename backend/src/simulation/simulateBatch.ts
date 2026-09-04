@@ -1,4 +1,11 @@
 import { creditFinishedParts } from "./calculateThroughput.js";
+import {
+  accrueCarrying,
+  materialCostByWorkOrder,
+  timeExpenseAtTick,
+  wipMaterialValueCents,
+  type CostRates,
+} from "./operatingExpense.js";
 import { simulateTick, type TickWorkCenterMetrics } from "./simulationTick.js";
 import type {
   Allocation,
@@ -28,6 +35,10 @@ export type RunState = {
   parts: Part[];
   salesOrders: SalesOrder[];
   allocations: Allocation[];
+  /** the run's frozen rates; a free factory is all zeroes, not an absence */
+  costs: CostRates;
+  /** carrying cost's sub-cent remainder as persisted; see `accrueCarrying` */
+  carryRemainder: number;
   /**
    * Work order id -> units of it finished before this batch. Loaded as a
    * `GROUP BY` rather than by counting a list, so advancing a long run never
@@ -53,6 +64,10 @@ export type TickRecord = {
   tickNum: number;
   throughputCents: number;
   wipCount: number;
+  /** standing costs + facility overhead accrued this tick, frozen cents */
+  operatingExpenseCents: number;
+  /** holding charge on this tick's end-of-tick WIP */
+  carryingCostCents: number;
   workCenters: TickWorkCenterMetrics[];
 };
 
@@ -73,6 +88,8 @@ export type RunBatch = {
    * several batches without re-reading the counts between them.
    */
   priorCounts: Map<number, number>;
+  /** the carrying fold's remainder after the batch, carried out the same way */
+  carryRemainder: number;
 };
 
 /**
@@ -100,6 +117,8 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
   const finishedParts: FinishedPartRecord[] = [];
   const tickRecords: TickRecord[] = [];
   let wipParts = state.wipParts;
+  let carryRemainder = state.carryRemainder;
+  const costByWorkOrder = materialCostByWorkOrder(state.workOrders, state.parts);
 
   for (let offset = 1; offset <= ticks; offset++) {
     const tickNum = state.tickNum + offset;
@@ -152,10 +171,22 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
       });
     }
 
+    // carrying charges the end-of-tick floor — the set `wipCount` counts — so
+    // a part that finished during the tick pays no rent for it
+    const carrying = accrueCarrying(
+      wipMaterialValueCents(result.wipParts, costByWorkOrder),
+      state.costs.wipCarryingBpsPerDay,
+      state.costs.dayTicks,
+      carryRemainder,
+    );
+    carryRemainder = carrying.carryRemainder;
+
     tickRecords.push({
       tickNum,
       throughputCents,
       wipCount: result.metrics.wipCount,
+      operatingExpenseCents: timeExpenseAtTick(state.costs, tickNum),
+      carryingCostCents: carrying.carryingCostCents,
       workCenters: result.metrics.workCenters,
     });
 
@@ -168,5 +199,6 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     finishedParts,
     ticks: tickRecords,
     priorCounts,
+    carryRemainder,
   };
 }

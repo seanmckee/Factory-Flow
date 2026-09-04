@@ -8,7 +8,10 @@ import {
   cumulativeThroughput,
   openingCents,
 } from "../simulation/cumulativeThroughput";
+import { netPerTick, openingNetCents } from "../simulation/netProfit";
+import { formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
 import { throughputRate } from "../simulation/throughputRate";
+import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -56,8 +59,17 @@ import {
 } from "@/components/ui/tooltip";
 import { Field } from "../components/ui/Field";
 
-/** One tick is one simulated second, so ticking once a second runs real-time. */
+/**
+ * One tick is one simulated second, but the live clock plays **one simulated
+ * minute per real second** — `CLOCK_TICKS_PER_BEAT` ticks per beat. Track 4
+ * rejected a speed multiplier because a "100×" button lies the moment it
+ * outruns the server's ~500 ticks a second; 60 a beat is one small request,
+ * nowhere near that, and it restores the visible pace the 6A seed's
+ * minute-scale process times took away — an 8-minute drill step completes in
+ * 8 real seconds, the way an 8-second step used to at 1×.
+ */
 const TICK_INTERVAL_MS = 1000;
+const CLOCK_TICKS_PER_BEAT = 60;
 
 /**
  * A jump advances in chunks of one server transaction (`TICKS_PER_BATCH`), so
@@ -66,8 +78,16 @@ const TICK_INTERVAL_MS = 1000;
  */
 const CHUNK_TICKS = 500;
 
-/** The preset jumps. Anything longer is what running until idle is for. */
-const JUMP_TICKS = [100, 500, 1000];
+/**
+ * The preset jumps, in calendar units now that rates accrue per day — a day is
+ * `TICKS_PER_DAY` staffed seconds (the run's own frozen `dayTicks` equals it
+ * for every 6A run). Anything longer is what running until idle is for.
+ */
+const JUMP_PRESETS = [
+  { label: "+1 hour", ticks: 3_600 },
+  { label: "+4 hours", ticks: 4 * 3_600 },
+  { label: "+1 day", ticks: TICKS_PER_DAY },
+];
 
 /**
  * Where running until idle gives up. A floor that never empties — a routing
@@ -127,11 +147,22 @@ function ChartCard({
 }
 
 /** One figure in the run bar's readout. */
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  negative = false,
+}: {
+  label: string;
+  value: string;
+  /** money below zero reads in the destructive tone */
+  negative?: boolean;
+}) {
   return (
     <span className="flex items-baseline gap-1.5">
       <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="font-medium">{value}</span>
+      <span className={negative ? "font-medium text-destructive" : "font-medium"}>
+        {value}
+      </span>
     </span>
   );
 }
@@ -321,7 +352,7 @@ function SimulationPage() {
       if (advancing.current) return;
       advancing.current = true;
       try {
-        await advanceRun(runId, 1);
+        await advanceRun(runId, CLOCK_TICKS_PER_BEAT);
         await refresh(runId);
       } catch (error) {
         setIsRunning(false);
@@ -337,9 +368,9 @@ function SimulationPage() {
   /**
    * A beat in flight holds the run's lock, and a jump landing on top of it
    * would be the 409 the unlock affordance exists for — raised by normal use
-   * rather than by a dead process. A beat is one tick, so waiting it out is a
-   * fraction of a second; the bound is there so a hung request can't hang the
-   * button too.
+   * rather than by a dead process. A beat is one simulated minute, still a
+   * fraction of a second of server work; the bound is there so a hung request
+   * can't hang the button too.
    */
   const awaitIdleClock = useCallback(async () => {
     for (let attempt = 0; advancing.current && attempt < 40; attempt++) {
@@ -360,7 +391,7 @@ function SimulationPage() {
    * the same server lock and the jump is the one that matters.
    */
   const runJump = useCallback(
-    async (target: number | "idle") => {
+    async (target: number | "idle", jumpLabel?: string) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
 
@@ -376,7 +407,7 @@ function SimulationPage() {
 
       const label = untilIdle
         ? "Running until the floor is empty"
-        : `Advancing ${target.toLocaleString()} ticks`;
+        : `Advancing ${jumpLabel ?? `${target.toLocaleString()} ticks`}`;
       const ticksTotal = untilIdle ? null : target;
 
       const startTick = run?.tickNum ?? 0;
@@ -498,27 +529,44 @@ function SimulationPage() {
   // above it. The rate and WIP series are local by construction, so the suffix
   // needs no such correction for them.
   const runTotalCents = run?.throughputCents ?? 0;
+  const runNetTotalCents = run?.netCents ?? 0;
   const charts = useMemo(() => {
     const history = series.map((sample) => ({
       tick: sample.tickNum,
       cents: sample.throughputCents,
     }));
+    const pnlHistory = series.map((sample) => ({
+      tick: sample.tickNum,
+      throughputCents: sample.throughputCents,
+      operatingExpenseCents: sample.operatingExpenseCents,
+      carryingCostCents: sample.carryingCostCents,
+    }));
     const toPoint = ({ tick, cents }: { tick: number; cents: number }) => ({
       tick,
       value: cents,
     });
+    // both curves come off the same /ticks response, so a zip by index is
+    // exact; the net curve's opening is deliberately unfloored — see netProfit
+    const cumulative = cumulativeThroughput(
+      history,
+      openingCents(history, runTotalCents),
+    ).map(toPoint);
+    const net = cumulativeThroughput(
+      netPerTick(pnlHistory),
+      openingNetCents(pnlHistory, runNetTotalCents),
+    );
     return {
-      cumulative: cumulativeThroughput(
-        history,
-        openingCents(history, runTotalCents),
-      ).map(toPoint),
+      cumulative: cumulative.map((point, i) => ({
+        ...point,
+        secondary: net[i]?.cents,
+      })),
       rate: throughputRate(history).map(toPoint),
       wip: series.map((sample) => ({
         tick: sample.tickNum,
         value: sample.wipCount,
       })),
     };
-  }, [series, runTotalCents]);
+  }, [series, runTotalCents, runNetTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
@@ -567,8 +615,9 @@ function SimulationPage() {
               <DialogHeader>
                 <DialogTitle>New run</DialogTitle>
                 <DialogDescription>
-                  Freezes today's work centers and draws its own seed — re-creating
-                  a run with the same seed reproduces it exactly.
+                  Freezes today's work centers and cost rates, and draws its own
+                  seed — re-creating a run with the same seed reproduces it
+                  exactly.
                 </DialogDescription>
               </DialogHeader>
               <Field label="Name">
@@ -596,12 +645,15 @@ function SimulationPage() {
 
         {run && (
           <div className="ml-auto flex flex-wrap items-center gap-4 tabular-nums">
+            <Stat label="Time" value={formatTickTime(run.tickNum, run.dayTicks)} />
             <Stat label="Tick" value={run.tickNum.toLocaleString()} />
             <Stat label="WIP" value={run.wipCount.toLocaleString()} />
             <Stat label="Finished" value={run.finishedCount.toLocaleString()} />
+            <Stat label="Throughput" value={formatCents(run.throughputCents)} />
             <Stat
-              label="Throughput"
-              value={`$${(run.throughputCents / 100).toFixed(2)}`}
+              label="Net"
+              value={formatSignedCents(run.netCents)}
+              negative={run.netCents < 0}
             />
             <span className="text-xs text-muted-foreground">
               seed {run.rngSeed}
@@ -667,16 +719,16 @@ function SimulationPage() {
         {/* Fast-forward. The clock is for watching; these are for seeing where
             a run ends up, which is what the presets and until-idle answer. */}
         <span className="text-xs text-muted-foreground">Fast-forward</span>
-        {JUMP_TICKS.map((ticks) => (
+        {JUMP_PRESETS.map((preset) => (
           <Button
-            key={ticks}
+            key={preset.label}
             size="sm"
             variant="outline"
             className="tabular-nums"
-            onClick={() => runJump(ticks)}
+            onClick={() => runJump(preset.ticks, preset.label.slice(1))}
             disabled={runId === null || jump !== null}
           >
-            +{ticks.toLocaleString()}
+            {preset.label}
           </Button>
         ))}
         <Button
@@ -744,14 +796,16 @@ function SimulationPage() {
             <div className="grid h-full min-h-[36rem] grid-cols-2 grid-rows-[3fr_2fr] gap-3">
               <div className="col-span-2 min-h-0">
                 <ChartCard
-                  title="Cumulative throughput"
-                  hint="The score: money made through sales since the run began, as a running total. It only ever climbs, so read the slope — a flat stretch is a stall, and the rate chart below shows the same thing as a shape."
+                  title="Cumulative throughput & net profit"
+                  hint="The two scores together: money made through sales as a running total, and the same money net of operating expense and carrying cost. The gap between the lines is what the doors being open cost; net crossing the dashed zero is the run turning profitable — output can look healthy while net still falls."
                 >
                   <TickSeriesChart
                     data={charts.cumulative}
-                    yLabel="Cumulative Throughput ($)"
+                    yLabel="Cumulative ($)"
                     tooltipLabel="Throughput"
-                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}`}
+                    secondaryLabel="Net profit"
+                    zeroLine
+                    formatValue={formatSignedCents}
                     formatAxis={(cents) => (cents / 100).toFixed(0)}
                   />
                 </ChartCard>
@@ -765,7 +819,7 @@ function SimulationPage() {
                     data={charts.rate}
                     yLabel="Rate ($/min)"
                     tooltipLabel="Rate"
-                    formatValue={(cents) => `$${(cents / 100).toFixed(2)}/min`}
+                    formatValue={(cents) => `${formatCents(cents)}/min`}
                     formatAxis={(cents) => (cents / 100).toFixed(0)}
                     stroke="var(--chart-2)"
                   />
@@ -798,6 +852,7 @@ function SimulationPage() {
                 // — the floor's frozen copy is where both come from
                 centers={floor?.workCenters ?? []}
                 tickNum={run.tickNum}
+                dayTicks={run.dayTicks}
                 onWindow={(fromTick, toTick) =>
                   loadMetrics(run.id, fromTick, toTick)
                 }

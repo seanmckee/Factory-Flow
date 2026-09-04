@@ -19,6 +19,11 @@ export type Run = {
   rngSeed: number;
   parentRunId: number | null;
   forkedAtTick: number | null;
+  /** the run's frozen day length in ticks — what its per-day rates accrue over */
+  dayTicks: number;
+  /** frozen facility-level rates, for display; the accrual happened server-side */
+  facilityOverheadCentsPerDay: number;
+  wipCarryingBpsPerDay: number;
 };
 
 export type RunSummary = Run & {
@@ -26,6 +31,11 @@ export type RunSummary = Run & {
   finishedCount: number;
   /** every finished unit's frozen throughput, summed */
   throughputCents: number;
+  /** every tick's frozen expense, summed */
+  operatingExpenseCents: number;
+  carryingCostCents: number;
+  /** throughput − operating expense − carrying: the score, can be negative */
+  netCents: number;
   releasedOrders: {
     workOrderId: number;
     routingId: number;
@@ -39,6 +49,8 @@ export type FloorWorkCenter = {
   name: string;
   /** the run's own frozen capacity, not the live table's */
   capacity: number;
+  /** frozen like capacity — what this run's centre costs per calendar day */
+  standingCostCentsPerDay: number;
   partsAtStation: number;
   /** one entry per machine: percent complete, or null when idle */
   slots: (number | null)[];
@@ -55,12 +67,16 @@ export type TickSample = {
   tickNum: number;
   throughputCents: number;
   wipCount: number;
+  operatingExpenseCents: number;
+  carryingCostCents: number;
 };
 
 export type AdvanceResult = {
   tickNum: number;
   ticksAdvanced: number;
   throughputCents: number;
+  operatingExpenseCents: number;
+  carryingCostCents: number;
   /** WIP still on the floor — what a jump running until idle stops on. */
   wipCount: number;
 };
@@ -87,6 +103,10 @@ export type RunMetrics = {
   fromTick: number;
   toTick: number;
   throughputCents: number;
+  /** the window's frozen per-tick expense, summed like its throughput */
+  operatingExpenseCents: number;
+  carryingCostCents: number;
+  netCents: number;
   flow: {
     fromTick: number | null;
     toTick: number | null;

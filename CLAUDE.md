@@ -49,8 +49,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   metrics, floor and tick series, and `lib/runState.ts` the `loadRunState`
   loader both sides share — and the routes validate, map an `HttpError` onto
   its status and serialise. Routes
-  are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
-  frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
+  are `POST /api/runs` (optionally overriding the facility-level cost rates it
+  freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
+  frozen throughput, operating expense, carrying cost, `netCents` — the score,
+  and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
+  same P&L windowed),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
@@ -76,8 +79,9 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - The eight `run_*` / `simulation_runs` tables are one run's history;
   everything above them in `schema.ts` is the shared factory definition.
   **The invariant: once a run exists, the engine reads that run's own config —
-  `run_work_centers` for capacity, `run_work_order_steps` for steps — and never
-  `work_centers` or `routing_steps` again.** That is what lets two runs
+  `run_work_centers` for capacity and standing cost, `run_work_order_steps` for
+  steps, `simulation_runs` for the facility rates and `day_ticks` — and never
+  `work_centers`, `routing_steps` or `factory_settings` again.** That is what lets two runs
   disagree about the drill press, and what makes forking a copy rather than a
   versioning scheme. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
@@ -106,9 +110,39 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 ### Simulation engine (`backend/src/simulation/`)
 
 The backend owns the engine: `types.ts` (narrow structural input types that
-Drizzle rows satisfy without mapping), `sampleProcessTime.ts`, `simulationTick.ts`
-and `calculateThroughput.ts`. Pure functions, no DB and no HTTP, unit-tested
-under `environment: node`. The frontend keeps a copy until it switches over.
+Drizzle rows satisfy without mapping), `sampleProcessTime.ts`,
+`simulationTick.ts`, `calculateThroughput.ts` and `operatingExpense.ts`. Pure
+functions, no DB and no HTTP, unit-tested under `environment: node`.
+
+**The cost model (Track 6A).** Ticks are **staffed seconds**; a calendar day is
+`shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` in
+`operatingExpense.ts`, frozen per run as `simulation_runs.day_ticks`, one shift
+today. Rates are entered per true 24h calendar day and amortized over the
+day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
+simply isn't ticks. Three costs, three rules:
+
+- **Time-based expense** (facility overhead + per-centre standing cost) is a
+  pure function of the tick number — `floor(t·r/D) − floor((t−1)·r/D)` — so
+  batch splitting needs no cursor and a full day sums to exactly the rate.
+  It is accrued **per rate and then summed**, never on the summed rate: floor
+  diffs on a combined rate disagree with the summed breakdown mid-day, and the
+  stored tick total must equal any per-centre breakdown by construction (the
+  same principle as `calculateThroughput` being the sum of
+  `creditFinishedParts`).
+- **Carrying cost** (basis points of on-floor material value per day) is the
+  one true accumulator, since it depends on what sat on the floor: a fold over
+  `cents · bps` numerator units with a remainder in `[0, 10000·day_ticks)`,
+  persisted as `simulation_runs.carry_remainder` and carried through
+  `RunState`/`RunBatch` like `priorCounts`. Exact, not drifting — the lifetime
+  total is the floor of the ideal charge however the run was chunked. It
+  charges the **end-of-tick** floor (the set `wipCount` counts), so a part
+  finishing during a tick pays no rent for it.
+- **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
+  `carrying_cost_cents` and every P&L read sums them — never re-derives from
+  rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
+  finished run spent. Per-centre expense over a window is deliberately *not*
+  served: `rate × window` is only valid while rates are constant per run,
+  which 6E breaks.
 
 Two rules the port established, and both matter to how failures surface:
 
@@ -183,9 +217,9 @@ than zeroes because zero is itself a reachable cycle time.
 
 ## Frontend architecture
 
-Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts` and `RoutingsPage` at `/setup/routings`. `/create` was a stub page and now redirects to `/orders/sales`.
+Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows — and the future home of calendar/shift settings). `/create` was a stub page and now redirects to `/orders/sales`.
 
-Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that loads every list the module needs in one `Promise.all` and exposes per-resource refetches, so sibling pages share one fetch and navigating between them doesn't refetch. `SetupDataProvider` loads parts and routings alongside work centers even though only work centers are editable today, because the routing editor will need all three.
+Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that loads every list the module needs in one `Promise.all` and exposes per-resource refetches, so sibling pages share one fetch and navigating between them doesn't refetch. `SetupDataProvider` loads parts, routings and the factory settings alongside work centers, because the routing editor will need the first three and the settings page edits the last.
 
 `src/api/client.ts` holds the API base URL (still hard-coded `http://localhost:3000` — no env var yet) plus `getJson`/`postJson`/`patchJson`/`putJson`/`deleteJson` and `ApiError`, which carries the status and parsed body so callers can branch on a 409 instead of only toasting. `SimulationPage` predates it and still calls `fetch` directly.
 
@@ -248,9 +282,11 @@ and an action toast lives 12 s rather than 3.5 s). It is worded as an assertion
 the user is making, not a retry: if the run really is advancing elsewhere,
 clearing the lock lets two writers rewrite the same WIP rows.
 
-`RunDashboard` (the Dashboard tab, Track 5) is what a jump lands on — stat cards
-(window throughput, finished count, cycle time, WIP) over a work-centre table
-ranked by **utilization descending**, the constraint on top; ranking is safe
+`RunDashboard` (the Dashboard tab, Track 5, P&L'd in 6A) is what a jump lands
+on — stat cards led by the window's **net profit** (signed, destructive below
+zero), then throughput, operating expense and carrying cost, ahead of finished
+count, cycle time and WIP, over a work-centre table ranked by **utilization
+descending**, the constraint on top; ranking is safe
 there because the pane redraws only when a window is asked for, unlike the
 floor, whose row order stays stable by name. The utilization bar shifts to the
 `saturated` token at 90%. It shows the whole run when a run is opened,
@@ -261,9 +297,14 @@ clock's beat: it reads and aggregates every tick row, per-centre row and
 finished part in the window. The window label comes from the *response*, so a
 dashboard left over from an earlier window states what it covers rather than
 misleading — the ledger's own case is a centre reading 10% utilization over a
-run and 52% over the ticks it worked. Work-centre *names and frozen
-capacities* come off `/floor`, since `/metrics` carries ids and a run keeps no
-copy of the names.
+run and 52% over the ticks it worked. Work-centre *names, frozen
+capacities and frozen standing rates* come off `/floor`, since `/metrics`
+carries ids and a run keeps no copy of the names. The table's Standing cost
+column is derived client-side (`windowStandingCostCents`: rate × observed
+ticks ÷ `dayTicks`) — display-only, the summed tick columns are the ledger,
+and the gap between the column's sum and the opex card is facility overhead.
+The window line shows ≈ days via the run's frozen `dayTicks`
+(`simTime.ts`, 28,800 fallback).
 
 The page is two persistent control bars (run picking/creation, then
 transport: clock, release, fast-forward) over three tabs — **Floor**,
@@ -282,14 +323,21 @@ could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 
-Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
+Throughput is measured in **cents**, not parts, and since Track 6A it is only
+half the score: a run's `netCents` is throughput minus operating expense minus
+carrying cost, computed at read time from frozen columns on both sides. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
-The Trends tab draws three series from one `GET /:id/ticks` response,
+The Trends tab draws four series from one `GET /:id/ticks` response,
 each in a titled card with a hover hint saying what the chart answers,
 each through `TickSeriesChart` (the one recharts wrapper — data plus
-formatters, token colours): the stored per-tick money **accumulated**
+formatters, token colours, and an optional named `secondary` line +
+`zeroLine`): the stored per-tick money **accumulated**
 (`openingCents(history, run.throughputCents)` →
-`cumulativeThroughput(history, opening)`), the same money as a **trailing
+`cumulativeThroughput(history, opening)`) with **cumulative net profit
+overlaid on the same axis** (`netPerTick` → the same accumulator, seeded by
+`openingNetCents(history, run.netCents)` — the overlay rather than a fourth
+card because the gap between the lines is the point, and net crossing the
+dashed zero is the run turning profitable), the money as a **trailing
 rate** in cents per simulated minute (`throughputRate`, 60-tick window — the
 successor to the deleted `smoothThroughput`), and per-tick **WIP** as a step
 line straight off `wipCount`. For the cumulative curve the **opening balance
@@ -302,7 +350,9 @@ run's total is the sum of the same frozen per-part columns, so what the run
 earned before the window is the total minus the window's own sum, and no API
 change is needed. It floors at zero: the summary and the series are two
 requests, and an advance landing between them leaves the window holding money
-the total has not counted yet.
+the total has not counted yet. `openingNetCents` is the same identity for the
+net curve with the floor deliberately **absent** — net before the window can
+legitimately be negative, and clamping would redraw a loss as break-even.
 
 The rate and WIP series are local by construction, so the suffix needs no
 opening correction for them — but the cap does create a *left edge*:

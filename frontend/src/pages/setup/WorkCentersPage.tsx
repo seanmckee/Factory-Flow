@@ -26,10 +26,11 @@ import {
 import { Field } from "../../components/ui/Field";
 import DeleteButton from "../../components/ui/DeleteButton";
 import InlineInput from "../../components/ui/InlineInput";
+import { dollarsToCents } from "../../orders/salesOrderMath";
 import type { WorkCenter } from "../../types/WorkCenter";
 
 /** The row being edited. Only one row is editable at a time. */
-type Draft = { id: number; name: string; capacity: string };
+type Draft = { id: number; name: string; capacity: string; standingCost: string };
 
 export default function WorkCentersPage() {
   const { workCenters, loading, error, refetchWorkCenters } = useSetupData();
@@ -38,6 +39,7 @@ export default function WorkCentersPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("1");
+  const [standingCost, setStandingCost] = useState("0");
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -52,18 +54,24 @@ export default function WorkCentersPage() {
     if (!Number.isInteger(parsedCapacity) || parsedCapacity < 1) {
       return showToast("Machines must be a whole number above zero", "error");
     }
+    const parsedStandingCost = dollarsToCents(standingCost);
+    if (parsedStandingCost === null || parsedStandingCost < 0) {
+      return showToast("Standing cost must be zero or more", "error");
+    }
 
     setSubmitting(true);
     try {
       const created = await postJson<WorkCenter>("/api/work-centers", {
         name: trimmed,
         capacity: parsedCapacity,
+        standingCostCentsPerDay: parsedStandingCost,
       });
 
       await refetchWorkCenters();
       showToast(`Created ${created.name}`);
       setName("");
       setCapacity("1");
+      setStandingCost("0");
       setCreateOpen(false);
     } catch (submitError) {
       showToast(
@@ -87,6 +95,7 @@ export default function WorkCentersPage() {
             id: workCenter.id,
             name: workCenter.name,
             capacity: String(workCenter.capacity),
+            standingCost: (workCenter.standingCostCentsPerDay / 100).toString(),
           },
     );
   };
@@ -101,10 +110,12 @@ export default function WorkCentersPage() {
 
     const nextName = draft.name.trim();
     const nextCapacity = Number(draft.capacity);
+    const nextStandingCost = dollarsToCents(draft.standingCost);
     const renamed = nextName !== workCenter.name;
     const recapped = nextCapacity !== workCenter.capacity;
+    const repriced = nextStandingCost !== workCenter.standingCostCentsPerDay;
 
-    if (!renamed && !recapped) return setDraft(null);
+    if (!renamed && !recapped && !repriced) return setDraft(null);
 
     if (!nextName) {
       setDraft(null);
@@ -114,10 +125,21 @@ export default function WorkCentersPage() {
       setDraft(null);
       return showToast("Machines must be a whole number above zero", "error");
     }
+    if (repriced && (nextStandingCost === null || nextStandingCost < 0)) {
+      setDraft(null);
+      return showToast("Standing cost must be zero or more", "error");
+    }
 
-    const updates: { name?: string; capacity?: number } = {};
+    const updates: {
+      name?: string;
+      capacity?: number;
+      standingCostCentsPerDay?: number;
+    } = {};
     if (renamed) updates.name = nextName;
     if (recapped) updates.capacity = nextCapacity;
+    if (repriced && nextStandingCost !== null) {
+      updates.standingCostCentsPerDay = nextStandingCost;
+    }
 
     setBusyId(workCenter.id);
     try {
@@ -210,6 +232,16 @@ export default function WorkCentersPage() {
                 />
               </Field>
 
+              <Field label="Standing cost ($/day)">
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={standingCost}
+                  onChange={(event) => setStandingCost(event.target.value)}
+                />
+              </Field>
+
               <DialogFooter>
                 <Button type="submit" disabled={submitting}>
                   {submitting ? "Creating…" : "Create Work Center"}
@@ -226,6 +258,7 @@ export default function WorkCentersPage() {
             <TableRow>
               <TableHead>Name</TableHead>
               <TableHead className="text-right">Machines</TableHead>
+              <TableHead className="text-right">Standing cost ($/day)</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -270,6 +303,32 @@ export default function WorkCentersPage() {
                       }
                       onBlur={() => commitEdit(workCenter)}
                       className="w-20"
+                    />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <InlineInput
+                      type="number"
+                      numeric
+                      min={0}
+                      step="0.01"
+                      aria-label={`Standing cost at ${workCenter.name}`}
+                      disabled={busyId === workCenter.id}
+                      value={
+                        editing
+                          ? editing.standingCost
+                          : (workCenter.standingCostCentsPerDay / 100).toFixed(2)
+                      }
+                      onFocus={() => beginEdit(workCenter)}
+                      onChange={(event) =>
+                        setDraft((current) =>
+                          current && {
+                            ...current,
+                            standingCost: event.target.value,
+                          },
+                        )
+                      }
+                      onBlur={() => commitEdit(workCenter)}
+                      className="w-28"
                     />
                   </TableCell>
                   <TableCell className="text-right">

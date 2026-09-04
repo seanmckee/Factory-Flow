@@ -6,8 +6,7 @@ import {
   Gauge,
   Package,
   Route,
-  ShoppingCart,
-} from "lucide-react";
+  ShoppingCart, SlidersHorizontal} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function Item({
@@ -79,6 +78,9 @@ function Navbar() {
       </Item>
       <Item to="/setup/routings" icon={Route}>
         Routings
+      </Item>
+      <Item to="/setup/settings" icon={SlidersHorizontal}>
+        Settings
       </Item>
     </nav>
   );

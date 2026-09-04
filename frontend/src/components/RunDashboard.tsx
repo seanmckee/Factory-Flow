@@ -11,6 +11,9 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { FloorWorkCenter, RunMetrics } from "../api/runs";
+import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
+import { formatDays, ticksToDays } from "../simulation/simTime";
+import { windowStandingCostCents } from "../simulation/standingCost";
 
 /**
  * The run dashboard — Track 5's replacement for the one-row placeholder strip.
@@ -43,17 +46,27 @@ function StatCard({
   label,
   value,
   detail,
+  negative = false,
 }: {
   label: string;
   value: string;
   detail?: string;
+  /** money below zero reads in the destructive tone */
+  negative?: boolean;
 }) {
   return (
     <div className="flex min-w-40 flex-col gap-1 rounded-lg border bg-card p-4">
       <span className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      <span className="text-lg font-medium tabular-nums">{value}</span>
+      <span
+        className={cn(
+          "text-lg font-medium tabular-nums",
+          negative && "text-destructive",
+        )}
+      >
+        {value}
+      </span>
       {detail && (
         <span className="text-xs text-muted-foreground tabular-nums">
           {detail}
@@ -90,20 +103,32 @@ function RunDashboard({
   metrics,
   centers,
   tickNum,
+  dayTicks,
   onWindow,
 }: {
   metrics: RunMetrics;
-  /** Names and frozen capacities — `/metrics` carries ids, a run keeps no names. */
+  /** Names, frozen capacities and frozen standing rates — `/metrics` carries ids. */
   centers: FloorWorkCenter[];
   /** The run's current tick, which is what "last N" is relative to. */
   tickNum: number;
+  /** The run's frozen day length — what its per-day rates accrue over. */
+  dayTicks: number;
   /** Re-fetches `/metrics` over a window; both bounds omitted is the whole run. */
   onWindow: (fromTick?: number, toTick?: number) => void;
 }) {
   const [fromDraft, setFromDraft] = useState("");
   const [toDraft, setToDraft] = useState("");
 
-  const { fromTick, toTick, throughputCents, flow, cycleTime } = metrics;
+  const {
+    fromTick,
+    toTick,
+    throughputCents,
+    operatingExpenseCents,
+    carryingCostCents,
+    netCents,
+    flow,
+    cycleTime,
+  } = metrics;
 
   const centerById = new Map(centers.map((center) => [center.workCenterId, center]));
   // utilization descending: the constraint on top is the point of the table.
@@ -126,7 +151,8 @@ function RunDashboard({
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <p className="text-sm text-muted-foreground tabular-nums">
           Ticks {fromTick.toLocaleString()}–{toTick.toLocaleString()} ·{" "}
-          {flow.tickCount.toLocaleString()} observed
+          {flow.tickCount.toLocaleString()} observed · ≈{" "}
+          {formatDays(ticksToDays(flow.tickCount, dayTicks))}
         </p>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => onWindow()}>
@@ -177,9 +203,25 @@ function RunDashboard({
 
       <div className="flex shrink-0 flex-wrap gap-3">
         <StatCard
+          label="Net profit"
+          value={formatSignedCents(netCents)}
+          detail="throughput − opex − carrying, this window"
+          negative={netCents < 0}
+        />
+        <StatCard
           label="Throughput"
-          value={`$${(throughputCents / 100).toFixed(2)}`}
+          value={formatCents(throughputCents)}
           detail="money made through sales, this window"
+        />
+        <StatCard
+          label="Operating expense"
+          value={formatCents(operatingExpenseCents)}
+          detail="standing costs + facility overhead"
+        />
+        <StatCard
+          label="Carrying cost"
+          value={formatCents(carryingCostCents)}
+          detail="WIP material value × rate, per tick"
         />
         <StatCard
           label="Finished"
@@ -211,6 +253,7 @@ function RunDashboard({
             <TableRow>
               <TableHead>Work Center</TableHead>
               <TableHead>Machines</TableHead>
+              <TableHead className="text-right">Standing cost</TableHead>
               <TableHead>Utilization</TableHead>
               <TableHead className="text-right">Busy machine-ticks</TableHead>
               <TableHead className="text-right">Queue mean</TableHead>
@@ -228,6 +271,17 @@ function RunDashboard({
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {live?.capacity ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {live
+                      ? formatCents(
+                          windowStandingCostCents(
+                            live.standingCostCentsPerDay,
+                            center.observedTicks,
+                            dayTicks,
+                          ),
+                        )
+                      : "—"}
                   </TableCell>
                   <TableCell>
                     <UtilizationBar utilization={center.utilization} />

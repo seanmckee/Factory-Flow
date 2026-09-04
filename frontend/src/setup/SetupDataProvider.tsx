@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { getJson } from "../api/client";
+import { getSettings, type FactorySettings } from "../api/settings";
 import { SetupDataContext } from "./SetupDataContext";
 import type { Part } from "../types/Part";
 import type { RoutingSummary } from "../types/Routing";
@@ -20,11 +21,16 @@ export default function SetupDataProvider({
   const [workCenters, setWorkCenters] = useState<WorkCenter[]>([]);
   const [parts, setParts] = useState<Part[]>([]);
   const [routings, setRoutings] = useState<RoutingSummary[]>([]);
+  const [settings, setSettings] = useState<FactorySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const refetchWorkCenters = useCallback(async () => {
     setWorkCenters(await getJson<WorkCenter[]>("/api/work-centers"));
+  }, []);
+
+  const refetchSettings = useCallback(async () => {
+    setSettings(await getSettings());
   }, []);
 
   const refetchRoutings = useCallback(async () => {
@@ -46,16 +52,19 @@ export default function SetupDataProvider({
 
     async function loadAll() {
       try {
-        const [workCenterData, partsData, routingsData] = await Promise.all([
-          getJson<WorkCenter[]>("/api/work-centers"),
-          getJson<Part[]>("/api/parts"),
-          getJson<RoutingSummary[]>("/api/routings"),
-        ]);
+        const [workCenterData, partsData, routingsData, settingsData] =
+          await Promise.all([
+            getJson<WorkCenter[]>("/api/work-centers"),
+            getJson<Part[]>("/api/parts"),
+            getJson<RoutingSummary[]>("/api/routings"),
+            getSettings(),
+          ]);
 
         if (cancelled) return;
         setWorkCenters(workCenterData);
         setParts(partsData);
         setRoutings(routingsData);
+        setSettings(settingsData);
         setError(null);
       } catch (loadError) {
         if (cancelled) return;
@@ -81,21 +90,25 @@ export default function SetupDataProvider({
       workCenters,
       parts,
       routings,
+      settings,
       loading,
       error,
       refetchWorkCenters,
       refetchParts,
       refetchRoutings,
+      refetchSettings,
     }),
     [
       workCenters,
       parts,
       routings,
+      settings,
       loading,
       error,
       refetchWorkCenters,
       refetchParts,
       refetchRoutings,
+      refetchSettings,
     ],
   );
 
