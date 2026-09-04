@@ -8,16 +8,18 @@ that completes it.
 
 ---
 
-**You are here:** **Track 5 (run dashboard) is complete, awaiting a browser
-pass.** The Dashboard tab is a real dashboard — stat cards over a work-centre
-table ranked by utilization, with window controls — and the Trends tab draws
-three series: cumulative money, trailing rate, and WIP, each with a hover
-hint saying what the chart answers.
+**You are here:** **Track 6A (operating expense / P&L core) is complete,
+awaiting a browser pass.** The score can go down: runs freeze cost rates and
+accrue expense per tick, the summary and every window report net profit, the
+Trends money chart overlays cumulative net with a zero line, the dashboard
+leads with the windowed P&L, and setup gained a standing-cost column and a
+Factory Settings page. Next: 6B (due dates + lateness) — see the Track 6
+section.
 
-**Next up:** Track 6A (operating expense / P&L core), planned 2026-09-03 — see
-the Track 6 section for the sub-track split and the time model. Track 6 is what
-makes the score able to go down and so what makes an agent's objective
-non-degenerate.
+**Next up:** Track 6B (due dates in calendar days + late penalties), then
+6C–6E — see the Track 6 section for the sub-track split and the time model.
+Track 6A made the score able to go down, which is what makes an agent's
+objective non-degenerate.
 
 **One refactor unit first — done** (decided and landed 2026-09-03): the read
 side of `runService.ts` — `listRuns`, `getRun`, `getRunMetrics`, `getRunFloor`,

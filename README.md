@@ -123,7 +123,7 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 **What this produces**
 
 - A **run P&L**: throughput, operating expense, carrying cost, capital spend, net profit — over the whole run and over any selected time window. *Delivered for the triple (no capital spend yet): `GET /api/runs/:id` and `/metrics` both carry the breakdown.*
-- A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy.
+- A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy. *Delivered: cumulative net profit overlaid on the cumulative-throughput chart, with a zero line.*
 - **Payback period** on capital decisions: buy the second machine at the bottleneck, and see how many simulated days until it pays for itself.
 - A break-even question worth asking every run: at this demand and this cost structure, is this factory profitable at all?
 
