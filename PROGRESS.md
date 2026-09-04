@@ -9,9 +9,10 @@ that completes it.
 ---
 
 **You are here:** **Track 6E (capital actions) is done** — planned and built
-2026-09-04, units 6E.1–6E.8 below, and **closed by 6E.8's hands-on browser
+2026-09-04, units 6E.1–6E.9 below, and **closed by 6E.8's hands-on browser
 pass**, which found the dashboard sitting stale after a capital action, two
-legibility defects and one unordered query, and fixed all of them. It is the
+legibility defects, one unordered query and a released-order list that
+crowded the floor, and fixed all of them. It is the
 first thing in the project that
 changes a run's **own frozen config** while the run is alive: buy or retire a
 machine, hire or fire an operator, each a lump capital spend frozen on an
@@ -60,7 +61,8 @@ forking is load-bearing for the agent, overtime is one more lever.
 6E's UI has now had its hands-on pass (6E.8), and the three legibility
 problems it found — the capital dialog too narrow to show a name beside its
 buttons, its rows jumping after an action, and the Trends rate series flat on
-the cumulative-money axis — are fixed.
+the cumulative-money axis — are fixed, along with the floor's released-order
+wall (6E.9).
 
 **Why Track 6 was worth it, in one line each.** Track 6A made the score able
 to go down,
@@ -1538,6 +1540,18 @@ afterwards.
       the clutter; an axis hides with its series. The rate turns out to carry
       real signal — on the playthrough it swings $0–$2,000/hr and collapses to
       zero around Day 8 as the floor drains, which was invisible before.
+- [x] 6E.9 The floor's released-order list, which listed every order with its
+      routing and revision across the bottom of the tab. Fine for the three
+      orders a hand-built book has, five wrapped lines of near-identical text
+      for the twenty-nine the playground seed releases — under the one table
+      that is supposed to *be* the page. It is now one line, "29 orders
+      released · 3,718 units", with the per-order routings behind a disclosure
+      in a capped scroll region. The count and the unit total are what a glance
+      wants; the floor's own rows say where the work *is*, and which routing a
+      work order pinned is asked rarely and precisely, so it belongs one click
+      away rather than permanently on screen. Units are summed **only** when
+      every released order resolves against the loaded work orders — a partial
+      sum stated as a total would be a quietly wrong number.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 
