@@ -706,7 +706,7 @@ frozen copy.
       (optional facility-level overrides in the POST body), `advanceRun`
       writes the tick expense columns and persists `carry_remainder`;
       `AdvanceResult` gains the two expense sums.
-- [ ] 6A.6 P&L reads — `RunSummary` gains OE/carrying sums, `netCents`
+- [x] 6A.6 P&L reads — `RunSummary` gains OE/carrying sums, `netCents`
       (throughput − OE − carrying) and `dayTicks`; `RunMetrics` gains the
       windowed breakdown; `/floor` centres gain the frozen standing rate;
       `/ticks` rows gain the expense columns. Doc sweep.

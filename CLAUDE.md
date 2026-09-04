@@ -49,8 +49,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   metrics, floor and tick series, and `lib/runState.ts` the `loadRunState`
   loader both sides share — and the routes validate, map an `HttpError` onto
   its status and serialise. Routes
-  are `POST /api/runs`, `GET /api/runs`, `GET /api/runs/:id` (with counts and
-  frozen money), `GET /api/runs/:id/metrics?fromTick&toTick`,
+  are `POST /api/runs` (optionally overriding the facility-level cost rates it
+  freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
+  frozen throughput, operating expense, carrying cost, `netCents` — the score,
+  and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
+  same P&L windowed),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick`,
   `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/unlock` and `DELETE /api/runs/:id`. `advance` caps
@@ -76,8 +79,9 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - The eight `run_*` / `simulation_runs` tables are one run's history;
   everything above them in `schema.ts` is the shared factory definition.
   **The invariant: once a run exists, the engine reads that run's own config —
-  `run_work_centers` for capacity, `run_work_order_steps` for steps — and never
-  `work_centers` or `routing_steps` again.** That is what lets two runs
+  `run_work_centers` for capacity and standing cost, `run_work_order_steps` for
+  steps, `simulation_runs` for the facility rates and `day_ticks` — and never
+  `work_centers`, `routing_steps` or `factory_settings` again.** That is what lets two runs
   disagree about the drill press, and what makes forking a copy rather than a
   versioning scheme. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
@@ -106,9 +110,39 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 ### Simulation engine (`backend/src/simulation/`)
 
 The backend owns the engine: `types.ts` (narrow structural input types that
-Drizzle rows satisfy without mapping), `sampleProcessTime.ts`, `simulationTick.ts`
-and `calculateThroughput.ts`. Pure functions, no DB and no HTTP, unit-tested
-under `environment: node`. The frontend keeps a copy until it switches over.
+Drizzle rows satisfy without mapping), `sampleProcessTime.ts`,
+`simulationTick.ts`, `calculateThroughput.ts` and `operatingExpense.ts`. Pure
+functions, no DB and no HTTP, unit-tested under `environment: node`.
+
+**The cost model (Track 6A).** Ticks are **staffed seconds**; a calendar day is
+`shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` in
+`operatingExpense.ts`, frozen per run as `simulation_runs.day_ticks`, one shift
+today. Rates are entered per true 24h calendar day and amortized over the
+day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
+simply isn't ticks. Three costs, three rules:
+
+- **Time-based expense** (facility overhead + per-centre standing cost) is a
+  pure function of the tick number — `floor(t·r/D) − floor((t−1)·r/D)` — so
+  batch splitting needs no cursor and a full day sums to exactly the rate.
+  It is accrued **per rate and then summed**, never on the summed rate: floor
+  diffs on a combined rate disagree with the summed breakdown mid-day, and the
+  stored tick total must equal any per-centre breakdown by construction (the
+  same principle as `calculateThroughput` being the sum of
+  `creditFinishedParts`).
+- **Carrying cost** (basis points of on-floor material value per day) is the
+  one true accumulator, since it depends on what sat on the floor: a fold over
+  `cents · bps` numerator units with a remainder in `[0, 10000·day_ticks)`,
+  persisted as `simulation_runs.carry_remainder` and carried through
+  `RunState`/`RunBatch` like `priorCounts`. Exact, not drifting — the lifetime
+  total is the floor of the ideal charge however the run was chunked. It
+  charges the **end-of-tick** floor (the set `wipCount` counts), so a part
+  finishing during a tick pays no rent for it.
+- **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
+  `carrying_cost_cents` and every P&L read sums them — never re-derives from
+  rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
+  finished run spent. Per-centre expense over a window is deliberately *not*
+  served: `rate × window` is only valid while rates are constant per run,
+  which 6E breaks.
 
 Two rules the port established, and both matter to how failures surface:
 
@@ -282,7 +316,9 @@ could only read 0% or 100% for a single machine.
 
 ### Throughput (money) model
 
-Throughput is measured in **cents**, not parts. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
+Throughput is measured in **cents**, not parts, and since Track 6A it is only
+half the score: a run's `netCents` is throughput minus operating expense minus
+carrying cost, computed at read time from frozen columns on both sides. `calculateThroughput` credits `salesOrder.unitPriceCents - part.materialCostCents` for a finished unit only if that unit is covered by an `allocation` linking its work order to a sales order; units beyond the allocated quantity earn nothing. Allocations for a work order are consumed in `id` order, and a unit's position is `priorFinishedCount + alreadyFinishedThisTick`, so **finish order determines which sales order (and price) a unit is credited to**.
 
 The Trends tab draws three series from one `GET /:id/ticks` response,
 each in a titled card with a hover hint saying what the chart answers,
