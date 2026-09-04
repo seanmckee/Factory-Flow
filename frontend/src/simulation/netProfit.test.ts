@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { cumulativeThroughput } from "./cumulativeThroughput";
-import { netPerTick, openingNetCents } from "./netProfit";
+import { netCentsOf, netPerTick, openingNetCents } from "./netProfit";
 import type { PnlSample } from "./netProfit";
 
 const sample = (
@@ -8,11 +8,21 @@ const sample = (
   throughputCents: number,
   operatingExpenseCents: number,
   carryingCostCents: number,
+  wageCents = 0,
 ): PnlSample => ({
   tick,
   throughputCents,
   operatingExpenseCents,
   carryingCostCents,
+  wageCents,
+});
+
+describe("netCentsOf", () => {
+  it("subtracts wages beside the other two costs", () => {
+    // the server's netCents subtracts four terms; a three-term client curve
+    // would drift above the run bar the moment anyone is paid
+    expect(netCentsOf(sample(1, 500, 5, 1, 100))).toBe(394);
+  });
 });
 
 const series: PnlSample[] = [

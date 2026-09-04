@@ -123,12 +123,13 @@ Drizzle rows satisfy without mapping), `sampleProcessTime.ts`,
 `simulationTick.ts`, `calculateThroughput.ts` and `operatingExpense.ts`. Pure
 functions, no DB and no HTTP, unit-tested under `environment: node`.
 
-**The cost model (Track 6A).** Ticks are **staffed seconds**; a calendar day is
-`shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` in
-`operatingExpense.ts`, frozen per run as `simulation_runs.day_ticks`, one shift
-today. Rates are entered per true 24h calendar day and amortized over the
+**The cost model (Tracks 6A/6D).** Ticks are **staffed seconds**; a calendar
+day is `shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` ×
+`factory_settings.shifts` (1–3, overridable in `POST /api/runs`), frozen per
+run as `simulation_runs.day_ticks`. Per-day rates are entered per true 24h
+calendar day and amortized over the
 day's staffed ticks; overnight is not simulated and not skipped-with-gaps, it
-simply isn't ticks. Three costs, three rules:
+simply isn't ticks. Four costs, and the rules per kind:
 
 - **Time-based expense** (facility overhead + per-centre standing cost) is a
   pure function of the tick number — `floor(t·r/D) − floor((t−1)·r/D)` — so
@@ -146,8 +147,22 @@ simply isn't ticks. Three costs, three rules:
   total is the floor of the ideal charge however the run was chunked. It
   charges the **end-of-tick** floor (the set `wipCount` counts), so a part
   finishing during a tick pays no rent for it.
+- **Wages (6D)** are the same floor-diff accrual but over `TICKS_PER_HOUR`
+  (3,600) rather than the day: an operator is paid per **staffed hour**, so a
+  second shift doubles a day's wage bill while amortizing the same rent —
+  which is the entire economics of adding one. The rate is
+  `work_centers.wage_cents_per_hour` per operator, frozen into
+  `run_work_centers`; operators = capacity until 6E's explicit column, and
+  `loadRunState` pre-multiplies so the engine (`wagesAtTick`) sums per-centre
+  rates without knowing about operators. Its own frozen tick column
+  (`run_ticks.wage_cents`) and its own P&L line —
+  `netCents = throughput − OE − carrying − wages` — because the wages-vs-rent
+  split is what a shift decision is about. There is deliberately no overtime
+  yet: overtime is an *authorization*, a mid-run action on frozen config,
+  which is 6E's territory.
 - **The per-tick cents are frozen** into `run_ticks.operating_expense_cents` /
-  `carrying_cost_cents` and every P&L read sums them — never re-derives from
+  `carrying_cost_cents` / `wage_cents` and every P&L read sums them — never
+  re-derives from
   rates — so a later rate edit (or a 6E capital action) cannot rewrite what a
   finished run spent. Per-centre expense over a window is deliberately *not*
   served: `rate × window` is only valid while rates are constant per run,
@@ -275,7 +290,7 @@ real observation, the factory ran clean.
 
 ## Frontend architecture
 
-Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows — and the future home of calendar/shift settings). `/create` was a stub page and now redirects to `/orders/sales`.
+Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates and the shifts-per-day setting as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows). `/create` was a stub page and now redirects to `/orders/sales`.
 
 Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that loads every list the module needs in one `Promise.all` and exposes per-resource refetches, so sibling pages share one fetch and navigating between them doesn't refetch. `SetupDataProvider` loads parts, routings and the factory settings alongside work centers, because the routing editor will need the first three and the settings page edits the last.
 
@@ -351,7 +366,8 @@ clearing the lock lets two writers rewrite the same WIP rows.
 on — stat cards led by the window's **net profit** (signed, destructive below
 zero), then throughput, operating expense and carrying cost, ahead of finished
 count, cycle time, on-time delivery (— when no promised unit finished in the
-window; destructive styling stays reserved for money), scrap (count, with the
+window; destructive styling stays reserved for money), wages, scrap (count,
+with the
 frozen material cents in the detail — neutral styling, since that money is
 recorded, not charged) and WIP, over a
 Deliveries table (per-order shipped/on-time/late — which promise broke; order

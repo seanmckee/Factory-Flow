@@ -25,6 +25,7 @@ export default function FactorySettingsPage() {
   // server values by clearing them
   const [overheadDraft, setOverheadDraft] = useState<string | null>(null);
   const [carryingPctDraft, setCarryingPctDraft] = useState<string | null>(null);
+  const [shiftsDraft, setShiftsDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const overhead =
@@ -33,6 +34,7 @@ export default function FactorySettingsPage() {
   const carryingPct =
     carryingPctDraft ??
     (settings ? (settings.wipCarryingBpsPerDay / 100).toString() : "");
+  const shifts = shiftsDraft ?? (settings ? String(settings.shifts) : "1");
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -47,16 +49,22 @@ export default function FactorySettingsPage() {
     }
     // percent to basis points is the one conversion; rounding keeps it integer
     const carryingBps = Math.round(parsedPct * 100);
+    const parsedShifts = Number(shifts);
+    if (!Number.isInteger(parsedShifts) || parsedShifts < 1 || parsedShifts > 3) {
+      return showToast("Shifts must be 1, 2 or 3", "error");
+    }
 
     setSaving(true);
     try {
       await patchSettings({
         facilityOverheadCentsPerDay: overheadCents,
         wipCarryingBpsPerDay: carryingBps,
+        shifts: parsedShifts,
       });
       await refetchSettings();
       setOverheadDraft(null);
       setCarryingPctDraft(null);
+      setShiftsDraft(null);
       showToast("Saved factory settings");
     } catch (saveError) {
       showToast(
@@ -102,6 +110,17 @@ export default function FactorySettingsPage() {
               step="0.01"
               value={carryingPct}
               onChange={(event) => setCarryingPctDraft(event.target.value)}
+            />
+          </Field>
+
+          <Field label="Shifts per day (8 staffed hours each)">
+            <Input
+              type="number"
+              min={1}
+              max={3}
+              step={1}
+              value={shifts}
+              onChange={(event) => setShiftsDraft(event.target.value)}
             />
           </Field>
 

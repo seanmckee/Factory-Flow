@@ -32,24 +32,30 @@ async function seed() {
 
   // Cost rates are tuning knobs, sized against what the constraint can earn:
   // the drill press moves ~60 units/day (28800 ticks / 480s, less a 600-tick
-  // changeover per work order), worth ~$1,750/day of margin at these prices,
-  // against ~$1,350/day of standing costs + overhead - profitable only while
-  // the constraint is fed, loss-making idle.
+  // changeover per work order). At one shift a staffed day costs ~$1,894 -
+  // $1,350/day of standing costs + overhead plus ~$544 of wages (6 operators,
+  // one per machine until 6E, 8 staffed hours). A bracket drill-day earns
+  // ~$2,900 of margin - profitable while the constraint is fed, loss-making
+  // idle - while a flange-only day earns ~$1,680: below the staffed-day line
+  // but far above zero, so flanges are worth running once staffed yet can't
+  // carry the factory. Wages are per staffed hour, so a second shift doubles
+  // the day's wage bill while amortizing the same rent.
   await db.insert(factorySettings).values({
     id: 1,
     facilityOverheadCentsPerDay: 60_000, // $600/day - rent, the doors being open
     wipCarryingBpsPerDay: 1000, // 10%/day of material value - aggressive, so releasing everything visibly costs
+    shifts: 1,
   });
 
   const insertedWorkCenters = await db
     .insert(workCenters)
     .values([
-      { name: "Raw Material", capacity: 1, standingCostCentsPerDay: 5_000 },
-      { name: "Cutter", capacity: 1, standingCostCentsPerDay: 15_000 },
-      { name: "Drill Press", capacity: 1, standingCostCentsPerDay: 30_000 },
-      { name: "Deburr", capacity: 1, standingCostCentsPerDay: 10_000 },
-      { name: "Inspection", capacity: 1, standingCostCentsPerDay: 10_000 },
-      { name: "Packaging", capacity: 1, standingCostCentsPerDay: 5_000 },
+      { name: "Raw Material", capacity: 1, standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
+      { name: "Cutter", capacity: 1, standingCostCentsPerDay: 15_000, wageCentsPerHour: 1200 },
+      { name: "Drill Press", capacity: 1, standingCostCentsPerDay: 30_000, wageCentsPerHour: 1800 },
+      { name: "Deburr", capacity: 1, standingCostCentsPerDay: 10_000, wageCentsPerHour: 1000 },
+      { name: "Inspection", capacity: 1, standingCostCentsPerDay: 10_000, wageCentsPerHour: 1200 },
+      { name: "Packaging", capacity: 1, standingCostCentsPerDay: 5_000, wageCentsPerHour: 800 },
     ])
     .returning();
 
@@ -248,29 +254,32 @@ async function seed() {
       // run ahead of WO-1003 in the queue. Brackets-first the last unit lands
       // ~tick 28,100 of 28,800, a ~1σ margin: a tight promise, not a safe
       // one. SO-2002 stays comfortable brackets-first and late flanges-first,
-      // so the due date agrees with the price signal (the $55 order is the
+      // so the due date agrees with the price signal (the $65 order is the
       // one to protect); SO-2003 makes day 3 only if the drill never starves,
       // in tension with the carrying cost that rewards releasing WO-1002
       // late — and its exact 90 means any flange scrap under-delivers it.
+      // Prices were raised with 6D's wages so a fed constraint still profits;
+      // the ordering of the price signal is unchanged (protect the brackets,
+      // and the $65 order above the $60 one).
       {
         orderNumber: "SO-2001",
         partId: bracket.id,
         quantity: 52,
-        unitPriceCents: 5000,
+        unitPriceCents: 6000,
         dueDay: 1,
       },
       {
         orderNumber: "SO-2002",
         partId: bracket.id,
         quantity: 28,
-        unitPriceCents: 5500,
+        unitPriceCents: 6500,
         dueDay: 2,
       },
       {
         orderNumber: "SO-2003",
         partId: flange.id,
         quantity: 90,
-        unitPriceCents: 3000,
+        unitPriceCents: 3600,
         dueDay: 3,
       },
     ])

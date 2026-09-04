@@ -343,6 +343,7 @@ export function useSimulationPage() {
       throughputCents: sample.throughputCents,
       operatingExpenseCents: sample.operatingExpenseCents,
       carryingCostCents: sample.carryingCostCents,
+      wageCents: sample.wageCents,
     }));
     const cumulative = cumulativeThroughput(history, openingCents(history, run?.throughputCents ?? 0));
     const net = cumulativeThroughput(netPerTick(pnlHistory), openingNetCents(pnlHistory, run?.netCents ?? 0));

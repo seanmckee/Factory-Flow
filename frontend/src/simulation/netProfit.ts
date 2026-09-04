@@ -6,13 +6,16 @@ export type PnlSample = {
   throughputCents: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
+  /** operator pay (6D); the server's netCents subtracts it, so this must too */
+  wageCents: number;
 };
 
 export function netCentsOf(sample: PnlSample): number {
   return (
     sample.throughputCents -
     sample.operatingExpenseCents -
-    sample.carryingCostCents
+    sample.carryingCostCents -
+    sample.wageCents
   );
 }
 

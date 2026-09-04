@@ -30,7 +30,13 @@ import { dollarsToCents } from "../../orders/salesOrderMath";
 import type { WorkCenter } from "../../types/WorkCenter";
 
 /** The row being edited. Only one row is editable at a time. */
-type Draft = { id: number; name: string; capacity: string; standingCost: string };
+type Draft = {
+  id: number;
+  name: string;
+  capacity: string;
+  standingCost: string;
+  wage: string;
+};
 
 export default function WorkCentersPage() {
   const { workCenters, loading, error, refetchWorkCenters } = useSetupData();
@@ -40,6 +46,7 @@ export default function WorkCentersPage() {
   const [name, setName] = useState("");
   const [capacity, setCapacity] = useState("1");
   const [standingCost, setStandingCost] = useState("0");
+  const [wage, setWage] = useState("0");
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -58,6 +65,10 @@ export default function WorkCentersPage() {
     if (parsedStandingCost === null || parsedStandingCost < 0) {
       return showToast("Standing cost must be zero or more", "error");
     }
+    const parsedWage = dollarsToCents(wage);
+    if (parsedWage === null || parsedWage < 0) {
+      return showToast("Wage must be zero or more", "error");
+    }
 
     setSubmitting(true);
     try {
@@ -65,6 +76,7 @@ export default function WorkCentersPage() {
         name: trimmed,
         capacity: parsedCapacity,
         standingCostCentsPerDay: parsedStandingCost,
+        wageCentsPerHour: parsedWage,
       });
 
       await refetchWorkCenters();
@@ -72,6 +84,7 @@ export default function WorkCentersPage() {
       setName("");
       setCapacity("1");
       setStandingCost("0");
+      setWage("0");
       setCreateOpen(false);
     } catch (submitError) {
       showToast(
@@ -96,6 +109,7 @@ export default function WorkCentersPage() {
             name: workCenter.name,
             capacity: String(workCenter.capacity),
             standingCost: (workCenter.standingCostCentsPerDay / 100).toString(),
+            wage: (workCenter.wageCentsPerHour / 100).toString(),
           },
     );
   };
@@ -111,11 +125,13 @@ export default function WorkCentersPage() {
     const nextName = draft.name.trim();
     const nextCapacity = Number(draft.capacity);
     const nextStandingCost = dollarsToCents(draft.standingCost);
+    const nextWage = dollarsToCents(draft.wage);
     const renamed = nextName !== workCenter.name;
     const recapped = nextCapacity !== workCenter.capacity;
     const repriced = nextStandingCost !== workCenter.standingCostCentsPerDay;
+    const rewaged = nextWage !== workCenter.wageCentsPerHour;
 
-    if (!renamed && !recapped && !repriced) return setDraft(null);
+    if (!renamed && !recapped && !repriced && !rewaged) return setDraft(null);
 
     if (!nextName) {
       setDraft(null);
@@ -129,16 +145,24 @@ export default function WorkCentersPage() {
       setDraft(null);
       return showToast("Standing cost must be zero or more", "error");
     }
+    if (rewaged && (nextWage === null || nextWage < 0)) {
+      setDraft(null);
+      return showToast("Wage must be zero or more", "error");
+    }
 
     const updates: {
       name?: string;
       capacity?: number;
       standingCostCentsPerDay?: number;
+      wageCentsPerHour?: number;
     } = {};
     if (renamed) updates.name = nextName;
     if (recapped) updates.capacity = nextCapacity;
     if (repriced && nextStandingCost !== null) {
       updates.standingCostCentsPerDay = nextStandingCost;
+    }
+    if (rewaged && nextWage !== null) {
+      updates.wageCentsPerHour = nextWage;
     }
 
     setBusyId(workCenter.id);
@@ -242,6 +266,16 @@ export default function WorkCentersPage() {
                 />
               </Field>
 
+              <Field label="Wage ($/hr per operator)">
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={wage}
+                  onChange={(event) => setWage(event.target.value)}
+                />
+              </Field>
+
               <DialogFooter>
                 <Button type="submit" disabled={submitting}>
                   {submitting ? "Creating…" : "Create Work Center"}
@@ -259,6 +293,7 @@ export default function WorkCentersPage() {
               <TableHead>Name</TableHead>
               <TableHead className="text-right">Machines</TableHead>
               <TableHead className="text-right">Standing cost ($/day)</TableHead>
+              <TableHead className="text-right">Wage ($/hr)</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -329,6 +364,32 @@ export default function WorkCentersPage() {
                       }
                       onBlur={() => commitEdit(workCenter)}
                       className="w-28"
+                    />
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <InlineInput
+                      type="number"
+                      numeric
+                      min={0}
+                      step="0.01"
+                      aria-label={`Wage at ${workCenter.name}`}
+                      disabled={busyId === workCenter.id}
+                      value={
+                        editing
+                          ? editing.wage
+                          : (workCenter.wageCentsPerHour / 100).toFixed(2)
+                      }
+                      onFocus={() => beginEdit(workCenter)}
+                      onChange={(event) =>
+                        setDraft((current) =>
+                          current && {
+                            ...current,
+                            wage: event.target.value,
+                          },
+                        )
+                      }
+                      onBlur={() => commitEdit(workCenter)}
+                      className="w-24"
                     />
                   </TableCell>
                   <TableCell className="text-right">

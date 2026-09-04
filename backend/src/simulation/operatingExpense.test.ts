@@ -5,6 +5,7 @@ import {
   materialCostByWorkOrder,
   rateWindowCents,
   timeExpenseAtTick,
+  wagesAtTick,
   wipMaterialValueCents,
   type CostRates,
 } from "./operatingExpense.js";
@@ -18,6 +19,7 @@ const rates = (overrides: Partial<CostRates> = {}): CostRates => ({
   facilityOverheadCentsPerDay: 0,
   wipCarryingBpsPerDay: 0,
   standingCostByWorkCenter: new Map(),
+  wageCentsPerHourByWorkCenter: new Map(),
   ...overrides,
 });
 
@@ -75,6 +77,47 @@ describe("rateWindowCents", () => {
 
   it("throws on a backwards window", () => {
     expect(() => rateWindowCents(17, 5, 4, DAY)).toThrow(/backwards/);
+  });
+});
+
+describe("wagesAtTick", () => {
+  it("sums each centre's hourly bill to the cent over a staffed hour", () => {
+    const r = rates({
+      wageCentsPerHourByWorkCenter: new Map([
+        [10, 1800],
+        [20, 833],
+      ]),
+    });
+    let total = 0;
+    for (let tick = 1; tick <= 3600; tick++) total += wagesAtTick(r, tick);
+    expect(total).toBe(2633);
+  });
+
+  it("accrues per centre and then sums, never on the summed rate", () => {
+    // two 1c/hour centres each pay their cent at tick 3600; a combined 2c
+    // rate would pay one at 1800, so mid-hour the two schedules disagree
+    const r = rates({
+      wageCentsPerHourByWorkCenter: new Map([
+        [10, 1],
+        [20, 1],
+      ]),
+    });
+    let firstHalf = 0;
+    for (let tick = 1; tick <= 1800; tick++) firstHalf += wagesAtTick(r, tick);
+    expect(firstHalf).toBe(0);
+    expect(wagesAtTick(r, 3600)).toBe(2);
+  });
+
+  it("ignores the day length: a longer day is simply more paid hours", () => {
+    // 3600c/hour is one cent every tick whatever dayTicks says — wages scale
+    // with staffed time while the per-day rates amortize thinner, which is
+    // the whole economics of a second shift
+    const r = rates({
+      dayTicks: 20,
+      wageCentsPerHourByWorkCenter: new Map([[10, 3600]]),
+    });
+    expect(wagesAtTick(r, 1)).toBe(1);
+    expect(wagesAtTick(r, 15)).toBe(1);
   });
 });
 

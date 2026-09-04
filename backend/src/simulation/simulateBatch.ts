@@ -3,6 +3,7 @@ import {
   accrueCarrying,
   materialCostByWorkOrder,
   timeExpenseAtTick,
+  wagesAtTick,
   wipMaterialValueCents,
   type CostRates,
 } from "./operatingExpense.js";
@@ -82,6 +83,8 @@ export type TickRecord = {
   operatingExpenseCents: number;
   /** holding charge on this tick's end-of-tick WIP */
   carryingCostCents: number;
+  /** operator pay accrued this tick — its own column, not folded into expense */
+  wageCents: number;
   workCenters: TickWorkCenterMetrics[];
 };
 
@@ -263,6 +266,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
       wipCount: result.metrics.wipCount,
       operatingExpenseCents: timeExpenseAtTick(state.costs, tickNum),
       carryingCostCents: carrying.carryingCostCents,
+      wageCents: wagesAtTick(state.costs, tickNum),
       workCenters: result.metrics.workCenters,
     });
 

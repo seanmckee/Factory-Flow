@@ -30,6 +30,7 @@ export async function getFactorySettings(): Promise<FactorySettingsRow> {
 export async function updateFactorySettings(updates: {
   facilityOverheadCentsPerDay?: number;
   wipCarryingBpsPerDay?: number;
+  shifts?: number;
 }): Promise<FactorySettingsRow> {
   // ensure the row exists so the first PATCH isn't a silent no-op
   await getFactorySettings();

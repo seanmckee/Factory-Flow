@@ -63,12 +63,16 @@ router.post("/", async (req, res) => {
     const overrides: {
       facilityOverheadCentsPerDay?: number;
       wipCarryingBpsPerDay?: number;
+      shifts?: number;
     } = {};
     if (body.facilityOverheadCentsPerDay !== undefined) {
       overrides.facilityOverheadCentsPerDay = body.facilityOverheadCentsPerDay;
     }
     if (body.wipCarryingBpsPerDay !== undefined) {
       overrides.wipCarryingBpsPerDay = body.wipCarryingBpsPerDay;
+    }
+    if (body.shifts !== undefined) {
+      overrides.shifts = body.shifts;
     }
 
     res.status(201).json(await createRun(body.name, rngSeed, overrides));

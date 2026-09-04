@@ -31,12 +31,16 @@ router.patch("/", async (req, res) => {
     const updates: {
       facilityOverheadCentsPerDay?: number;
       wipCarryingBpsPerDay?: number;
+      shifts?: number;
     } = {};
     if (body.facilityOverheadCentsPerDay !== undefined) {
       updates.facilityOverheadCentsPerDay = body.facilityOverheadCentsPerDay;
     }
     if (body.wipCarryingBpsPerDay !== undefined) {
       updates.wipCarryingBpsPerDay = body.wipCarryingBpsPerDay;
+    }
+    if (body.shifts !== undefined) {
+      updates.shifts = body.shifts;
     }
 
     res.json(await updateFactorySettings(updates));

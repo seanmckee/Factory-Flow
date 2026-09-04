@@ -34,7 +34,9 @@ export type RunSummary = Run & {
   /** every tick's frozen expense, summed */
   operatingExpenseCents: number;
   carryingCostCents: number;
-  /** throughput − operating expense − carrying: the score, can be negative */
+  /** operator pay, summed from the same frozen tick column */
+  wageCents: number;
+  /** throughput − expense − carrying − wages: the score, can be negative */
   netCents: number;
   releasedOrders: {
     workOrderId: number;
@@ -51,6 +53,8 @@ export type FloorWorkCenter = {
   capacity: number;
   /** frozen like capacity — what this run's centre costs per calendar day */
   standingCostCentsPerDay: number;
+  /** frozen per-operator hourly wage; operators = machines until 6E */
+  wageCentsPerHour: number;
   partsAtStation: number;
   /** one entry per machine: percent complete, or null when idle */
   slots: (number | null)[];
@@ -69,6 +73,7 @@ export type TickSample = {
   wipCount: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
+  wageCents: number;
 };
 
 export type AdvanceResult = {
@@ -77,6 +82,7 @@ export type AdvanceResult = {
   throughputCents: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
+  wageCents: number;
   /** units ruined by scrap draws over the advance */
   scrappedCount: number;
   /** WIP still on the floor after the advance — an agent's stop condition. */
@@ -108,6 +114,7 @@ export type RunMetrics = {
   /** the window's frozen per-tick expense, summed like its throughput */
   operatingExpenseCents: number;
   carryingCostCents: number;
+  wageCents: number;
   netCents: number;
   flow: {
     fromTick: number | null;

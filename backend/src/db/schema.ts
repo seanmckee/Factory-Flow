@@ -25,6 +25,14 @@ export const workCenters = pgTable("work_centers", {
   standingCostCentsPerDay: integer("standing_cost_cents_per_day")
     .notNull()
     .default(0),
+  /**
+   * One operator's pay per staffed hour. Operators = capacity until 6E adds
+   * the explicit column, so the centre's bill is `capacity × rate` — and
+   * unlike standing cost the denominator is the staffed hour, not the
+   * calendar day: a second shift doubles the day's wages while amortizing the
+   * same rent, which is the entire economics of adding one.
+   */
+  wageCentsPerHour: integer("wage_cents_per_hour").notNull().default(0),
 });
 
 /**
@@ -46,6 +54,12 @@ export const factorySettings = pgTable("factory_settings", {
   wipCarryingBpsPerDay: integer("wip_carrying_bps_per_day")
     .notNull()
     .default(0),
+  /**
+   * Staffed 8-hour shifts per calendar day (1-3). A run freezes it as
+   * `day_ticks = shifts × 28,800` at creation; off-shift time is not
+   * simulated and not skipped-with-gaps, it simply isn't ticks.
+   */
+  shifts: integer("shifts").notNull().default(1),
 });
 
 export const parts = pgTable("parts", {
@@ -305,6 +319,12 @@ export const runTicks = pgTable(
       .default(0),
     /** holding charge on the tick's end-of-tick WIP, separately reported */
     carryingCostCents: integer("carrying_cost_cents").notNull().default(0),
+    /**
+     * Operator pay accrued this tick, frozen like the other two. Its own
+     * column rather than folded into expense: the wages-vs-rent split is what
+     * a shift decision is about, and pre-6D ticks read 0 — nobody was paid.
+     */
+    wageCents: integer("wage_cents").notNull().default(0),
   },
   (table) => [primaryKey({ columns: [table.runId, table.tickNum] })],
 );
@@ -383,6 +403,8 @@ export const runWorkCenters = pgTable(
     standingCostCentsPerDay: integer("standing_cost_cents_per_day")
       .notNull()
       .default(0),
+    /** frozen copy of `work_centers.wage_cents_per_hour` (per operator) */
+    wageCentsPerHour: integer("wage_cents_per_hour").notNull().default(0),
   },
   (table) => [primaryKey({ columns: [table.runId, table.workCenterId] })],
 );

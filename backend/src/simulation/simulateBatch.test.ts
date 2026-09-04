@@ -33,6 +33,7 @@ const freeCosts: CostRates = {
   facilityOverheadCentsPerDay: 0,
   wipCarryingBpsPerDay: 0,
   standingCostByWorkCenter: new Map(),
+  wageCentsPerHourByWorkCenter: new Map(),
 };
 
 const state = (overrides: Partial<RunState> = {}): RunState => ({
@@ -538,6 +539,10 @@ describe("simulateBatch operating expense", () => {
             [10, 7],
             [20, 5],
           ]),
+          wageCentsPerHourByWorkCenter: new Map([
+            [10, 7],
+            [20, 11],
+          ]),
         }),
       });
 
@@ -594,6 +599,25 @@ describe("simulateBatch operating expense", () => {
     expect(
       batch.ticks.reduce((sum, tick) => sum + tick.operatingExpenseCents, 0),
     ).toBe(142);
+  });
+
+  it("accrues exactly the hour's wage bills over a staffed hour", () => {
+    const batch = simulateBatch(
+      state({
+        costs: costs({
+          wageCentsPerHourByWorkCenter: new Map([
+            [10, 100],
+            [20, 33],
+          ]),
+        }),
+      }),
+      3600,
+    );
+    expect(batch.ticks.reduce((sum, tick) => sum + tick.wageCents, 0)).toBe(133);
+    // and never into the expense column — the split is the point
+    expect(
+      batch.ticks.reduce((sum, tick) => sum + tick.operatingExpenseCents, 0),
+    ).toBe(0);
   });
 
   it("throws when a work order's part is missing, before any tick runs", () => {

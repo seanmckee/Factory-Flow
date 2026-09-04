@@ -56,10 +56,14 @@ router.post("/", async (req, res) => {
       name: string;
       capacity?: number;
       standingCostCentsPerDay?: number;
+      wageCentsPerHour?: number;
     } = { name: body.name };
     if (body.capacity !== undefined) values.capacity = body.capacity;
     if (body.standingCostCentsPerDay !== undefined) {
       values.standingCostCentsPerDay = body.standingCostCentsPerDay;
+    }
+    if (body.wageCentsPerHour !== undefined) {
+      values.wageCentsPerHour = body.wageCentsPerHour;
     }
 
     const [created] = await db.insert(workCenters).values(values).returning();
@@ -93,11 +97,15 @@ router.patch("/:id", async (req, res) => {
       name?: string;
       capacity?: number;
       standingCostCentsPerDay?: number;
+      wageCentsPerHour?: number;
     } = {};
     if (body.name !== undefined) updates.name = body.name;
     if (body.capacity !== undefined) updates.capacity = body.capacity;
     if (body.standingCostCentsPerDay !== undefined) {
       updates.standingCostCentsPerDay = body.standingCostCentsPerDay;
+    }
+    if (body.wageCentsPerHour !== undefined) {
+      updates.wageCentsPerHour = body.wageCentsPerHour;
     }
 
     const [updated] = await db
