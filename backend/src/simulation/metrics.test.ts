@@ -6,6 +6,7 @@ import {
   aggregateScrap,
   groupDeliveryBySalesOrder,
 } from "./metrics.js";
+import { bucketTicks } from "./observationBuckets.js";
 import { simulateTick } from "./simulationTick.js";
 import type { TickMetrics } from "./simulationTick.js";
 import type { FinishedPart, Routing, WipPart, WorkCenter } from "./types.js";
@@ -37,13 +38,25 @@ const makeTick = (
   })),
 });
 
-const at = (result: ReturnType<typeof aggregateMetrics>, workCenterId: number) =>
+/**
+ * Aggregate a hand-built tick series. `width` is the grid the observations are
+ * stored on, and defaults to 1 — a bucket per tick, the identity — because
+ * every figure below must come out the same however the same ticks were
+ * grouped. The width-invariance tests at the bottom are what pin that.
+ */
+const aggregate = (
+  series: TickMetrics[],
+  workCenters: Map<number, WorkCenter>,
+  width = 1,
+) => aggregateMetrics(bucketTicks(series, width), workCenters);
+
+const at = (result: ReturnType<typeof aggregate>, workCenterId: number) =>
   result.workCenters.find((wc) => wc.workCenterId === workCenterId);
 
 describe("aggregateMetrics", () => {
   it("divides busy machine-ticks by capacity times ticks", () => {
     const centers = makeWorkCenters([10, 2]);
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 3, { 10: [2, 1, 2] }),
         makeTick(2, 3, { 10: [2, 1, 2] }),
@@ -65,7 +78,7 @@ describe("aggregateMetrics", () => {
     // throughout, and that is what the window must say — dividing all four
     // ticks by today's two machines would read 75% and hide the constraint in
     // exactly the window opened to judge the purchase.
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 4, { 10: [1, 3, 1] }),
         makeTick(2, 4, { 10: [1, 3, 1] }),
@@ -81,7 +94,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reads a centre retired to no machines as zero, not as a division by zero", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [makeTick(1, 0, { 10: [0, 0, 0] }), makeTick(2, 0, { 10: [0, 0, 0] })],
       makeWorkCenters([10, 0]),
     );
@@ -92,7 +105,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reports a saturated center as fully utilized", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [makeTick(1, 1, { 10: [1, 0] }), makeTick(2, 1, { 10: [1, 0] })],
       makeWorkCenters([10, 1]),
     );
@@ -102,7 +115,7 @@ describe("aggregateMetrics", () => {
 
   it("gives a fraction an instantaneous snapshot cannot", () => {
     // the whole point of a window: busy on 1 of 3 ticks is 0.33, not 0 or 1
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 1, { 10: [1, 0] }),
         makeTick(2, 0, { 10: [0, 0] }),
@@ -115,7 +128,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reports the window's bounds and length", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(400, 0, { 10: [0, 0], 20: [0, 0] }),
         makeTick(401, 0, { 10: [0, 0], 20: [0, 0] }),
@@ -129,7 +142,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reports mean, peak and final WIP", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 2, { 10: [1, 1] }),
         makeTick(2, 8, { 10: [1, 7] }),
@@ -144,7 +157,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reports mean and worst queue depth", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 3, { 10: [1, 2] }),
         makeTick(2, 7, { 10: [1, 6] }),
@@ -158,7 +171,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("lists a work center the window never saw, with zeroes", () => {
-    const result = aggregateMetrics(
+    const result = aggregate(
       [makeTick(1, 1, { 10: [1, 0] })],
       testWorkCenters,
     );
@@ -177,7 +190,7 @@ describe("aggregateMetrics", () => {
   it("divides by the ticks a center was observed, not the whole window", () => {
     // work center 20 was created halfway through the run; it was not idle
     // before that, it did not exist
-    const result = aggregateMetrics(
+    const result = aggregate(
       [
         makeTick(1, 1, { 10: [1, 0] }),
         makeTick(2, 1, { 10: [1, 0] }),
@@ -195,7 +208,7 @@ describe("aggregateMetrics", () => {
   });
 
   it("reports zeroes and null bounds for a run that has not advanced", () => {
-    const result = aggregateMetrics([], testWorkCenters);
+    const result = aggregate([], testWorkCenters);
 
     expect(result).toEqual({
       fromTick: null,
@@ -229,7 +242,7 @@ describe("aggregateMetrics", () => {
 
   it("throws when a tick reports a work center that was not loaded", () => {
     expect(() =>
-      aggregateMetrics(
+      aggregate(
         [makeTick(3, 1, { 99: [1, 0] })],
         testWorkCenters,
       ),
@@ -269,13 +282,78 @@ describe("aggregateMetrics", () => {
       series.push(result.metrics);
     }
 
-    const result = aggregateMetrics(series, testWorkCenters);
+    const result = aggregate(series, testWorkCenters);
 
     expect(result.tickCount).toBe(3);
     // the part held work center 10 for all three ticks, then moved on
     expect(at(result, 10)?.utilization).toBe(1);
     expect(at(result, 20)?.utilization).toBe(0);
     expect(result.meanWip).toBe(1);
+  });
+
+  /**
+   * The property 6G's storage change rests on: bucketing is a storage
+   * resolution, not a reporting one. Every figure the aggregate reports is a
+   * sum, a count or a max, so grouping the same ticks differently cannot move
+   * any of them — which is what makes 60× fewer rows a free change rather than
+   * a precision trade.
+   */
+  describe("is invariant to the bucket width", () => {
+    // deliberately jagged: WIP peaks mid-bucket and ends elsewhere, capacity
+    // moves at tick 5 (a 6E purchase), and center 20 arrives late
+    const series: TickMetrics[] = [
+      makeTick(1, 4, { 10: [1, 0, 1] }),
+      makeTick(2, 9, { 10: [1, 3, 1] }),
+      makeTick(3, 7, { 10: [1, 5, 1] }),
+      makeTick(4, 2, { 10: [0, 0, 1] }),
+      makeTick(5, 6, { 10: [2, 1, 2], 20: [1, 4] }),
+      makeTick(6, 3, { 10: [1, 0, 2], 20: [0, 0] }),
+      makeTick(7, 8, { 10: [2, 2, 2], 20: [1, 1] }),
+    ];
+
+    const widths = [1, 2, 3, 7, 60, 1000];
+
+    it("reports the same aggregate at every width", () => {
+      const baseline = aggregate(series, testWorkCenters, 1);
+
+      for (const width of widths) {
+        expect(aggregate(series, testWorkCenters, width)).toEqual(baseline);
+      }
+    });
+
+    it("keeps mean and peak WIP exact, which a closing level alone cannot", () => {
+      // the first sketch of the bucket stored only WIP at bucket end; at width
+      // 7 that is 8, and a mean of the ends would read 8 rather than 39/7
+      for (const width of widths) {
+        const result = aggregate(series, testWorkCenters, width);
+        expect(result.meanWip).toBe(39 / 7);
+        expect(result.maxWip).toBe(9);
+        expect(result.finalWip).toBe(8);
+      }
+    });
+
+    it("keeps the window bounds on the ticks, not on the grid", () => {
+      // at width 60 the single bucket's slot is ticks 1..60, but only 1..7 were
+      // observed, and the label has to say what was actually covered
+      const result = aggregate(series, testWorkCenters, 60);
+      expect(result.fromTick).toBe(1);
+      expect(result.toTick).toBe(7);
+      expect(result.tickCount).toBe(7);
+    });
+
+    it("keeps utilization and worst queue exact across a capacity change", () => {
+      for (const width of widths) {
+        const result = aggregate(series, testWorkCenters, width);
+        // 8 busy machine-ticks over 1+1+1+1+2+2+2 = 10 capacity-ticks
+        expect(at(result, 10)?.busyMachineTicks).toBe(8);
+        expect(at(result, 10)?.capacityTicks).toBe(10);
+        expect(at(result, 10)?.utilization).toBe(0.8);
+        expect(at(result, 10)?.maxQueueDepth).toBe(5);
+        // center 20 was observed for three ticks only, and divides by those
+        expect(at(result, 20)?.observedTicks).toBe(3);
+        expect(at(result, 20)?.meanQueueDepth).toBe(5 / 3);
+      }
+    });
   });
 });
 

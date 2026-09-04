@@ -5,8 +5,8 @@ import {
   runFinishedParts,
   runReleasedOrders,
   runScrappedParts,
-  runTickWorkCenters,
-  runTicks,
+  runBucketWorkCenters,
+  runBuckets,
   runWipParts,
   runWorkCenters,
   runWorkOrderSteps,
@@ -29,10 +29,12 @@ import {
   type ScrapAggregate,
   type MetricsAggregate,
 } from "../simulation/metrics.js";
-import type {
-  TickMetrics,
-  TickWorkCenterMetrics,
-} from "../simulation/simulationTick.js";
+import {
+  TICKS_PER_BUCKET,
+  bucketStartTick,
+  type BucketWorkCenterMetrics,
+  type ObservationBucket,
+} from "../simulation/observationBuckets.js";
 import { HttpError } from "./httpError.js";
 import type { RunRow } from "./runState.js";
 import type { Routing, WipPart } from "../simulation/types.js";
@@ -62,7 +64,17 @@ function tickWindow(
   if (fromTick !== undefined && toTick !== undefined && toTick < fromTick) {
     throw new HttpError(400, `toTick ${toTick} is before fromTick ${fromTick}`);
   }
-  return { from: fromTick ?? 1, to: toTick ?? tickNum };
+  // The default window is the **whole run**, and a run begins at tick 0, not at
+  // tick 1: ticks are numbered from 1, but tick 0 is a real moment at which
+  // money can be spent — a capital action applied before the first advance,
+  // which is exactly when a machine is worth buying. Defaulting to 1 dropped
+  // that spend from every whole-run `/metrics`, so the dashboard read a run
+  // better than it was while the run bar's summary told the truth (the
+  // playground playthrough disagreed by the $3,208 it opened by spending).
+  // Nothing else moves: no tick, finished part or scrapped part is ever at 0,
+  // and `/ticks` still drops a tick-0 action from the series rather than
+  // misdating it, because no row's bucket contains it.
+  return { from: fromTick ?? 0, to: toTick ?? tickNum };
 }
 
 export type RunSummary = RunRow & {
@@ -101,7 +113,7 @@ export async function listRuns(): Promise<RunRow[]> {
 /**
  * A run and the counts that say where it got to. The money is summed from
  * frozen columns — throughput from the per-unit credits rather than from
- * `run_ticks`, so it stays the same figure the finished parts justify, and
+ * `run_buckets`, so it stays the same figure the finished parts justify, and
  * expense from the per-tick cents, so a rate edit (or 6E capital action)
  * cannot rewrite what a run already spent.
  */
@@ -127,12 +139,12 @@ export async function getRun(runId: number): Promise<RunSummary> {
       .where(eq(runFinishedParts.runId, runId)),
     db
       .select({
-        operatingExpenseCents: sum(runTicks.operatingExpenseCents),
-        carryingCostCents: sum(runTicks.carryingCostCents),
-        wageCents: sum(runTicks.wageCents),
+        operatingExpenseCents: sum(runBuckets.operatingExpenseCents),
+        carryingCostCents: sum(runBuckets.carryingCostCents),
+        wageCents: sum(runBuckets.wageCents),
       })
-      .from(runTicks)
-      .where(eq(runTicks.runId, runId)),
+      .from(runBuckets)
+      .where(eq(runBuckets.runId, runId)),
     db
       .select({ spendCents: sum(runCapitalActions.spendCents) })
       .from(runCapitalActions)
@@ -219,29 +231,42 @@ export async function getRunMetrics(
     .where(eq(simulationRuns.id, runId));
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
-  const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
+  const requested = tickWindow(fromTick, toTick, run.tickNum);
+  // Snap the window to whole buckets, since a bucket is the finest thing
+  // stored: it covers the minute containing `from` through the minute
+  // containing `to`. Every line is then windowed on the *same* range — the
+  // money from the buckets, and the finished, scrapped and capital rows on
+  // their own per-tick columns — so the response's own label describes all of
+  // them. Reporting a mid-minute label over minute-aligned money is the one
+  // way this could mislead, and the label coming from the response is the rule
+  // that stops it.
+  const from = Math.max(1, bucketStartTick(requested.from, TICKS_PER_BUCKET));
+  const to = Math.min(
+    run.tickNum,
+    bucketStartTick(requested.to, TICKS_PER_BUCKET) + TICKS_PER_BUCKET - 1,
+  );
 
-  const [tickRows, centerRows, finished, scrapped, capital, storedCenters] =
+  const [bucketRows, centerRows, finished, scrapped, capital, storedCenters] =
     await Promise.all([
     db
       .select()
-      .from(runTicks)
+      .from(runBuckets)
       .where(
         and(
-          eq(runTicks.runId, runId),
-          gte(runTicks.tickNum, from),
-          lte(runTicks.tickNum, to),
+          eq(runBuckets.runId, runId),
+          gte(runBuckets.startTick, from),
+          lte(runBuckets.startTick, to),
         ),
       )
-      .orderBy(runTicks.tickNum),
+      .orderBy(runBuckets.startTick),
     db
       .select()
-      .from(runTickWorkCenters)
+      .from(runBucketWorkCenters)
       .where(
         and(
-          eq(runTickWorkCenters.runId, runId),
-          gte(runTickWorkCenters.tickNum, from),
-          lte(runTickWorkCenters.tickNum, to),
+          eq(runBucketWorkCenters.runId, runId),
+          gte(runBucketWorkCenters.startTick, from),
+          lte(runBucketWorkCenters.startTick, to),
         ),
       ),
     db
@@ -271,7 +296,7 @@ export async function getRunMetrics(
       .where(
         and(
           eq(runCapitalActions.runId, runId),
-          gte(runCapitalActions.appliedAtTick, from),
+          gte(runCapitalActions.appliedAtTick, requested.from),
           lte(runCapitalActions.appliedAtTick, to),
         ),
       ),
@@ -286,9 +311,11 @@ export async function getRunMetrics(
       .orderBy(runWorkCenters.workCenterId),
   ]);
 
-  // effective capacity as the run stands now — the fallback for observations
-  // written before 6E recorded their own denominator. Those runs could not
-  // change capacity at all, so what it is now is what it was throughout.
+  // effective capacity as the run stands now. No longer a fallback for the
+  // observations — every stored bucket carries its own `capacity_ticks`, the
+  // pre-6E nulls having been resolved by 6G.1b's migration — but still the
+  // roster `aggregateMetrics` lists, so a centre the window never saw appears
+  // with zeroes instead of vanishing.
   const effectiveCapacity = new Map(
     storedCenters.map((center) => [
       center.workCenterId,
@@ -296,38 +323,43 @@ export async function getRunMetrics(
     ]),
   );
 
-  const centersByTick = new Map<number, TickWorkCenterMetrics[]>();
+  const centersByStart = new Map<number, BucketWorkCenterMetrics[]>();
   for (const row of centerRows) {
     const entry = {
       workCenterId: row.workCenterId,
-      busy: row.busy,
-      queued: row.queued,
-      capacity: row.capacity ?? effectiveCapacity.get(row.workCenterId) ?? 0,
+      observedTicks: row.observedTicks,
+      busyMachineTicks: row.busyMachineTicks,
+      capacityTicks: row.capacityTicks,
+      queuedPartTicks: row.queuedPartTicks,
+      maxQueueDepth: row.maxQueueDepth,
     };
-    const list = centersByTick.get(row.tickNum);
+    const list = centersByStart.get(row.startTick);
     if (list) list.push(entry);
-    else centersByTick.set(row.tickNum, [entry]);
+    else centersByStart.set(row.startTick, [entry]);
   }
 
-  const series: TickMetrics[] = tickRows.map((row) => ({
-    tickNum: row.tickNum,
-    wipCount: row.wipCount,
-    workCenters: centersByTick.get(row.tickNum) ?? [],
+  const series: ObservationBucket[] = bucketRows.map((row) => ({
+    startTick: row.startTick,
+    tickCount: row.tickCount,
+    wipPartTicks: row.wipPartTicks,
+    maxWip: row.maxWip,
+    endWip: row.endWip,
+    workCenters: centersByStart.get(row.startTick) ?? [],
   }));
 
-  const throughputCents = tickRows.reduce(
+  const throughputCents = bucketRows.reduce(
     (total, row) => total + row.throughputCents,
     0,
   );
-  const operatingExpenseCents = tickRows.reduce(
+  const operatingExpenseCents = bucketRows.reduce(
     (total, row) => total + row.operatingExpenseCents,
     0,
   );
-  const carryingCostCents = tickRows.reduce(
+  const carryingCostCents = bucketRows.reduce(
     (total, row) => total + row.carryingCostCents,
     0,
   );
-  const wageCents = tickRows.reduce((total, row) => total + row.wageCents, 0);
+  const wageCents = bucketRows.reduce((total, row) => total + row.wageCents, 0);
   // capital windows on its own column, like scrap: it is an event at a tick,
   // not an accrual across them
   const capitalSpendCents = Number(capital[0]?.spendCents ?? 0);
@@ -445,7 +477,13 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     db
       .select()
       .from(runWorkCenters)
-      .where(eq(runWorkCenters.runId, run.id)),
+      .where(eq(runWorkCenters.runId, run.id))
+      // Ordered because a capital action *updates* one of these rows, and an
+      // unordered select is free to hand the updated row back last — which
+      // moved the centre you just acted on to the bottom of every consumer's
+      // list, in the one dialog where the row you are reading and the buttons
+      // you are pressing have to be the same row.
+      .orderBy(runWorkCenters.workCenterId),
     db.select({ id: workCenters.id, name: workCenters.name }).from(workCenters),
   ]);
 
@@ -618,47 +656,63 @@ export async function getRunTicks(
   if (!run) throw new HttpError(404, `Run ${runId} not found`);
 
   const { from, to } = tickWindow(fromTick, toTick, run.tickNum);
+  // whole buckets, since a bucket is the finest thing stored: the window covers
+  // the minute containing `from` onward, and the response says so
   const inWindow = and(
-    eq(runTicks.runId, runId),
-    gte(runTicks.tickNum, from),
-    lte(runTicks.tickNum, to),
+    eq(runBuckets.runId, runId),
+    gte(runBuckets.startTick, Math.max(1, bucketStartTick(from, TICKS_PER_BUCKET))),
+    lte(runBuckets.startTick, to),
   );
 
-  if (bucket <= 1) {
+  // A row's `tickNum` is the last tick it covers, which for a partial bucket is
+  // short of its slot — so it comes off the stored count rather than the grid.
+  const lastTick = sql<number>`${runBuckets.startTick} + ${runBuckets.tickCount} - 1`;
+
+  if (bucket <= TICKS_PER_BUCKET) {
+    // already the stored resolution; nothing to regroup
     const rows = await db
       .select({
-        tickNum: runTicks.tickNum,
-        throughputCents: runTicks.throughputCents,
-        wipCount: runTicks.wipCount,
-        operatingExpenseCents: runTicks.operatingExpenseCents,
-        carryingCostCents: runTicks.carryingCostCents,
-        wageCents: runTicks.wageCents,
+        tickNum: lastTick,
+        throughputCents: runBuckets.throughputCents,
+        wipCount: runBuckets.endWip,
+        operatingExpenseCents: runBuckets.operatingExpenseCents,
+        carryingCostCents: runBuckets.carryingCostCents,
+        wageCents: runBuckets.wageCents,
       })
-      .from(runTicks)
+      .from(runBuckets)
       .where(inWindow)
-      .orderBy(desc(runTicks.tickNum))
+      .orderBy(desc(runBuckets.startTick))
       .limit(MAX_TICK_SERIES_ROWS);
 
     // read newest-first to cap at the end of the window, handed back in order
-    return withCapitalSpend(rows.reverse(), await capitalByTick(runId, from, to), 1);
+    return withCapitalSpend(
+      rows.reverse().map((row) => ({ ...row, tickNum: Number(row.tickNum) })),
+      await capitalByTick(runId, from, to),
+      TICKS_PER_BUCKET,
+    );
   }
 
-  // integer division on int columns — Postgres truncates, which is the floor
-  // for the non-negative tick numbers involved. The bucket is inlined rather
-  // than bound: GROUP BY and ORDER BY must be the *same expression*, and two
-  // occurrences of a bind parameter are two expressions to Postgres. Safe —
-  // zod has already proven it a positive integer, and the floor re-proves it.
-  const bucketGroup = sql`(${runTicks.tickNum} - 1) / ${sql.raw(String(Math.floor(bucket)))}`;
+  // Regrouping coarser: buckets group by the slot their own start falls in, so
+  // the coarse grid nests inside the stored one. Integer division on int
+  // columns — Postgres truncates, which is the floor for the non-negative tick
+  // numbers involved. The width is inlined rather than bound: GROUP BY and
+  // ORDER BY must be the *same expression*, and two occurrences of a bind
+  // parameter are two expressions to Postgres. Safe — zod has already proven it
+  // a positive integer, and the floor re-proves it.
+  const width = Math.floor(bucket);
+  const bucketGroup = sql`(${runBuckets.startTick} - 1) / ${sql.raw(String(width))}`;
   const rows = await db
     .select({
-      tickNum: sql<number>`max(${runTicks.tickNum})`,
-      throughputCents: sql<number>`sum(${runTicks.throughputCents})::int`,
-      wipCount: sql<number>`(array_agg(${runTicks.wipCount} order by ${runTicks.tickNum} desc))[1]`,
-      operatingExpenseCents: sql<number>`sum(${runTicks.operatingExpenseCents})::int`,
-      carryingCostCents: sql<number>`sum(${runTicks.carryingCostCents})::int`,
-      wageCents: sql<number>`sum(${runTicks.wageCents})::int`,
+      tickNum: sql<number>`max(${runBuckets.startTick} + ${runBuckets.tickCount} - 1)`,
+      throughputCents: sql<number>`sum(${runBuckets.throughputCents})::int`,
+      // the closing level of the newest bucket in the group, the same
+      // array_agg trick a per-tick series used for the newest tick
+      wipCount: sql<number>`(array_agg(${runBuckets.endWip} order by ${runBuckets.startTick} desc))[1]`,
+      operatingExpenseCents: sql<number>`sum(${runBuckets.operatingExpenseCents})::int`,
+      carryingCostCents: sql<number>`sum(${runBuckets.carryingCostCents})::int`,
+      wageCents: sql<number>`sum(${runBuckets.wageCents})::int`,
     })
-    .from(runTicks)
+    .from(runBuckets)
     .where(inWindow)
     .groupBy(bucketGroup)
     .orderBy(sql`${bucketGroup} desc`)
@@ -674,7 +728,7 @@ export async function getRunTicks(
       wageCents: Number(row.wageCents),
     })),
     await capitalByTick(runId, from, to),
-    Math.floor(bucket),
+    width,
   );
 }
 

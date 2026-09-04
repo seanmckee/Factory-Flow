@@ -8,9 +8,11 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6E (capital actions) is built** — planned and built
-2026-09-04, units 6E.1–6E.6 below, **one thing outstanding: nobody has driven
-the UI in a browser** (the extension was not connected; see 6E.5). It is the
+**You are here:** **Track 6E (capital actions) is done** — planned and built
+2026-09-04, units 6E.1–6E.10 below, and **closed by 6E.8's hands-on browser
+pass**, which found the dashboard sitting stale after a capital action, three
+legibility defects, one unordered query and a dropdown that opened off the
+top of the window, and fixed all of them. It is the
 first thing in the project that
 changes a run's **own frozen config** while the run is alive: buy or retire a
 machine, hire or fire an operator, each a lump capital spend frozen on an
@@ -25,16 +27,30 @@ shift changes. Both make a run's calendar day non-uniform, which is the one
 place `day_ticks` is a single frozen integer, and overtime without a wage
 premium strictly dominates every other labour lever. See the 6F section.
 
-**Next up: 6G then 6H, and both before Track 7** — added 2026-09-04 after
-driving 6E, and they are prerequisites rather than polish. **6G (simulator
-throughput):** an *empty* floor costs 8.2 s per 20,000 ticks because 140,000
-observation rows go to the database whatever happens, so per-minute buckets
-are finally worth the schema change; the O(WIP) tick loop is a second,
-independent curve that bites past ~500 parts. **6H (demand depth):** buying
-capacity always loses today, and the measured reason is the book, not the
-prices — 172 units is 1.4 drill-days at two presses, after which an idle
-factory burns 189,400c a day, so there is no horizon for a machine to pay back
-over. 6G comes first because 6H makes every run ten times longer.
+**6H.1 landed out of order (2026-09-04, user call): the playground seed.** Ten
+work centres, ten parts with full routings, 29 orders / 3,600 units across due
+days 2–18 — deep enough to drive long runs with nothing entered by hand, and
+the first book with a horizon a machine can pay back over. Verified by a full
+playthrough: expanded early it nets **+$42,444 at 100% OTD**, the drill press
+reads 82.7% *with two presses*, and one idle day costs $4,051. See 6H.1 below.
+
+**6G.1 is built (2026-09-04): observations are stored per simulated minute.**
+Advancing an empty floor went 8.9 s → 1.9 s per 20,000 ticks and the
+dashboard's own whole-run `/metrics` on the 15-day playthrough 7.4 s → 1.13 s,
+with every reported figure byte-identical across the migration. What is left of
+6G is the O(WIP) tick loop (6G.2), which the write cost was masking, and the
+jump's refresh cadence (6G.3).
+
+**Next up: 6G.2/6G.3, then the rest of 6H, and both before Track 7** — added
+2026-09-04 after driving 6E, and they are prerequisites rather than polish.
+**6G (simulator throughput):** an *empty* floor costs 8.2 s per 20,000 ticks
+because 140,000 observation rows go to the database whatever happens, so
+per-minute buckets are finally worth the schema change; the O(WIP) tick loop is
+a second, independent curve that bites past ~500 parts. 6H.1 made both bite for
+real — a 15-day playthrough is ~5 wall-minutes and ~5M observation rows, and
+WIP peaked at 865 parts. **6H.2/6H.3 (legible constraint, rolling demand):**
+buying capacity is now a decision worth making, but the dialog still shows no
+utilization, so *where* to buy is guesswork.
 
 Then **Track 7 (forking)**, whose comparison is what all of Track 6 exists to
 make meaningful — and which 6E just gave its sharpest question: fork at a
@@ -42,7 +58,12 @@ checkpoint, buy the second drill press in one branch only, and read the payback
 off the two net curves. That question needs 6H to have an answer at all.
 Track 6F (overtime, shift calendar) is scoped below and waits behind all of it:
 forking is load-bearing for the agent, overtime is one more lever.
-A hands-on pass over 6E's UI is owed before any of them.
+6E's UI has now had its hands-on pass (6E.8), and the three legibility
+problems it found — the capital dialog too narrow to show a name beside its
+buttons, its rows jumping after an action, and the Trends rate series flat on
+the cumulative-money axis — are fixed, along with the floor's released-order
+wall (6E.9), and the run picker that
+opened off the top of the window (6E.10).
 
 **Why Track 6 was worth it, in one line each.** Track 6A made the score able
 to go down,
@@ -1433,6 +1454,119 @@ afterwards.
       out. The master-data list keeps **shift calendars** and gives up wage and
       per-centre rates; Phase 5's "buy a machine, add a shift" notes that two
       of its levers already exist and what forking actually adds.
+- [x] 6E.7 Fix: a whole-run window began at tick 1, so **tick-0 capital was
+      invisible to `/metrics`**. Found during 6G.1a, by re-reading the 6H.1
+      playthrough to prove the bucket aggregate a no-op: the summary said the
+      run netted $42,444 and whole-run `/metrics` said $45,652, and the gap was
+      exactly the $3,208 the run opened by spending. `tickWindow` defaulted
+      `from` to 1 because ticks are numbered from 1 — but a capital action is an
+      **event at a tick**, not an accrual across one, and tick 0 is a real
+      moment at which money is spent: it is the moment a machine is worth
+      buying, before the first advance, which is precisely what the capital
+      dialog invites. So the P&L pane read a run better than it was while the
+      run bar beside it told the truth, and the more sensibly a run was played
+      the wider the two diverged.
+      **The fix is `from: fromTick ?? 0`** — the default window is the whole
+      run, and a run begins at tick 0. Nothing else moves: no tick, finished
+      part or scrapped part is ever numbered 0, so every other query returns
+      the same rows, and `/ticks` still drops a tick-0 action from the series
+      rather than misdating it into the first visible point (its bucket index is
+      −1, which no row has) — 6E.4's decision, left standing, with the chart's
+      opening balance carrying that spend as it was designed to.
+      **Deliberately not changed:** an *explicit* `?fromTick=1` still excludes
+      tick 0, and the dashboard's post-jump window (`startTick + 1 …`) still
+      does too. That is coherent rather than a leftover — capital committed
+      before a jump is not that jump's spend — and the bug was only ever in
+      what "whole run" defaulted to.
+      Verified over HTTP against the playthrough: summary and whole-run
+      `/metrics` now agree to the cent on all five P&L lines; `[57600, 57600]`
+      still holds that tick's $792 of cutter spend and `[57601, 60000]` none of
+      it (the action's own tick sits before the rate it bought, 6E.4's
+      arithmetic intact); a backwards window still 400s.
+- [x] 6E.8 The hands-on pass 6E.5 owed, driven 2026-09-04 once the Chrome
+      extension connected. It closes the track — and it earned its keep, which
+      is the 3.4 lesson twice over.
+      **The bug it found: a capital action left the dashboard stale.**
+      `onCapitalAction` refreshed the summary and the floor and reloaded the
+      capital **log**, but never the metrics pane — so on a fresh run the cards
+      read Net $0.00 / Capital $0.00 while the run bar above them read
+      −$1,200.00 and the log *directly beneath them* read "$1200.00 out". Three
+      figures on one screen, two of them right, and only clicking a window
+      button fixed it. Reloading the log but not the cards is what turns lag
+      into a contradiction, so the fix belongs next to it.
+      **The fix: `loadMetrics` records the window it asked for** in a
+      `metricsWindow` ref (null until the dashboard is first opened, cleared by
+      `selectRun`), and a capital action re-reads *that* window. Recording the
+      request rather than reusing the response's `fromTick..toTick` is
+      load-bearing: whole-run means undefined bounds and must stay undefined,
+      since a run still at tick 0 answers `1..0`, and echoing that back is a
+      backwards window and a 400. A pane never opened has nothing to
+      invalidate; `changeTab` still loads it fresh.
+      **Verified in the browser, both halves:** buying at the Drill Press
+      without hiring left the floor reading `0/1 +1 unstaffed` in the starved
+      tone (the machine called out, not hidden behind a smaller number) and the
+      dashboard stale; after the fix, hiring the operator moved Net to
+      −$1,488.00 in the cards *as the action landed*, the floor to `0/2` with
+      the callout gone, and every figure agreed. The whole-run reads on the
+      15-day playthrough are right too — dashboard and run bar to the cent,
+      Drill Press 83% on 2/2, deliveries all on time, the four Day 1 actions in
+      the log, and the Trends chart drawing net crossing zero around Day 4 with
+      the tooltip speaking Day · time.
+      **Three legibility fixes, all found by looking** (user call: fix them
+      here rather than book them):
+      (a) the **capital dialog was too narrow for its own argument** — at no
+      horizontal scroll position were a centre's *name* and its *buttons* both
+      visible, so the buy was made blind. Two causes, both fixed. The width was
+      `max-w-4xl` *unprefixed* against shadcn's own `sm:max-w-lg`, and a
+      responsive variant beats a bare utility at every width the dialog is ever
+      seen at — so it had been rendering at 512px, not 896. It is
+      `sm:max-w-6xl` now, which fits all seven columns with no horizontal
+      scroll at all, and the name cell is `sticky left-0` so a genuinely narrow
+      viewport still keeps the name beside its price. And the rows now sort by
+      name, as `WorkCenterTable` already did.
+      (b) **the row you just acted on jumped to the bottom.** `getRunFloor`'s
+      `run_work_centers` select had no `ORDER BY`, and a capital action
+      *updates* one of those rows — so Postgres was free to return the updated
+      row last, in the one dialog where the row being read and the buttons
+      being pressed have to be the same row. Ordered by `work_center_id` at the
+      source; the dialog's sort is the second belt.
+      (c) the **Trends rate series was unreadable**: `$/hr` shared the left
+      axis with *cumulative* money, so $900/hr against a $135,000 scale was a
+      flat line on zero and the tooltip was the only place the number existed.
+      The premise in the old comment — that cumulative and per-hour money "sit
+      within a decade of each other" — holds for about a day and then doesn't,
+      so the axis went rather than the series. Rate now has its own right-hand
+      axis, and the two single-series axes are drawn in their own line's
+      colour, which is what makes three axes readable rather than three times
+      the clutter; an axis hides with its series. The rate turns out to carry
+      real signal — on the playthrough it swings $0–$2,000/hr and collapses to
+      zero around Day 8 as the floor drains, which was invisible before.
+- [x] 6E.9 The floor's released-order list, which listed every order with its
+      routing and revision across the bottom of the tab. Fine for the three
+      orders a hand-built book has, five wrapped lines of near-identical text
+      for the twenty-nine the playground seed releases — under the one table
+      that is supposed to *be* the page. It is now one line, "29 orders
+      released · 3,718 units", with the per-order routings behind a disclosure
+      in a capped scroll region. The count and the unit total are what a glance
+      wants; the floor's own rows say where the work *is*, and which routing a
+      work order pinned is asked rarely and precisely, so it belongs one click
+      away rather than permanently on screen. Units are summed **only** when
+      every released order resolves against the loaded work orders — a partial
+      sum stated as a total would be a quietly wrong number.
+- [x] 6E.10 The run picker opened off the top of the window. Radix's
+      `item-aligned` positioning — shadcn's default in our `select.tsx`, and
+      the default this repo had never overridden — centres the **selected**
+      item over the trigger, so a picker whose selected run is last in the list
+      opens upward and puts the earlier runs above the viewport, unreachable
+      without scrolling inside a menu that gives no sign it has more above it.
+      Hit twice while driving 6E.8. The default is `position="popper"` now,
+      which anchors to the trigger and flips or shrinks to stay on screen.
+      **Changed in `select.tsx` rather than at the call site** because all
+      eight `<SelectContent>` in the app take the default and every one of them
+      has a list that can outgrow its space — the work-order picker holds a
+      release's worth of orders, the setup pickers every part and routing. The
+      file already carried the `position === "popper"` styling branches, so
+      this turns on a path that was written and never used.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — re-plan when reached
 
@@ -1483,29 +1617,146 @@ observation rows go to Neon whatever is happening, and at today's book the
 database is ~97% of the wall clock. WIP is a second, independent curve — the
 pure tick loop is O(WIP) and reads 465k ticks/s empty, 68k at 172, 22k at 500
 and 4.8k at 2,000 — so it only becomes comparable past ~500 parts, which is
-exactly where 6H's deeper book would put it. Reads are fine and stay fine:
-`/floor` 124 ms, summary 92 ms, whole-run `/metrics` 460 ms over 20,000 ticks,
-`/ticks?bucket=60` 133 ms.
+exactly where 6H's deeper book would put it.
 
-- [ ] 6G.1 Per-minute observation buckets — the lever 6A.10b named and
-      deferred. `run_ticks` and `run_tick_work_centers` become one row per
-      **simulated minute**: 60× fewer rows, so a day of writes goes from
-      ~200k rows to ~3.5k and ~12 s to well under a second.
-      **Every aggregate stays exact**, which is what makes this safe rather
-      than a resolution compromise: a bucket stores *sums* (throughput,
-      expense, carrying, wages; per centre, busy machine-ticks, capacity-ticks
-      and queued part-ticks), a *max* (worst queue depth) and one *level* (WIP
-      at bucket end) — and every figure `aggregateMetrics` reports is built
-      from precisely those, so utilization, mean and worst queue and mean WIP
-      come out identical. What actually coarsens is **window resolution**: a
-      window whose bounds fall mid-minute covers the containing minutes, and
-      the label already comes from the response, which is the rule that makes
-      that honest. Also gone is the per-*second* series, which
-      `chartBucket` already stops asking for past 5,000 ticks.
-      Open when this is built: whether `run_ticks` keeps its name (the row is
-      no longer a tick), and whether the bucket width is a constant or frozen
-      per run like `day_ticks` — a fork comparing two runs must bucket both
-      the same way.
+**Re-measured on the 6H.1 playground seed (2026-09-04), and one conclusion
+flips.** Ten centres means eleven observation rows a tick, so a 20,000-tick
+advance now writes **220,000** rows: an empty floor costs **8.9 s**, ~326 WIP
+11.2 s, ~1,300 WIP 13.0 s. The write cost is confirmed as the dominant term and
+the per-part curve is real but secondary, as before.
+
+What flips is **"reads are fine and stay fine"** — that was measured over a
+20,000-tick run and does not survive a book with a horizon, because
+`/metrics` reads every tick row and every per-centre row in its window:
+
+| run length | rows in a whole-run window | `GET /:id/metrics` |
+| --- | --- | --- |
+| 20,000 ticks | 220,000 | **1.7 s** |
+| 432,000 ticks (the 6H.1 playthrough) | 4,752,000 | **7.4 s** |
+
+7.4 s is the **Dashboard tab's own fetch**, so on a run long enough for capital
+decisions to pay back, the pane that judges them takes seven seconds to draw.
+Buckets fix the read and the write with one change — 60× fewer rows on both
+sides — which makes 6G.1 the unit that pays for itself twice, and is why it
+stays first. (`/floor` 89 ms, summary 704 ms, `/ticks?bucket=3600` 450 ms and
+`/actions` 80 ms are all fine at 432,000 ticks.)
+
+**6G.1 is split three ways** (2026-09-04, on reaching it): the storage change
+renames the two observation tables, and a rename cannot be staged behind a
+compiling intermediate the way 6E's additive columns could. So the pure layer
+goes first and lands as a provable no-op, storage follows, and the UI last.
+
+**One correction to the plan below, found by writing it.** The sketch said a
+bucket stores "one *level* (WIP at bucket end)" and that every figure would
+come out identical. It would not: `aggregateMetrics` reports `meanWip` as a sum
+over ticks divided by the tick count, and `maxWip` as a peak — neither of which
+a closing level can reconstruct. WIP is a **level, not a flow**, so it needs
+three fields where money needs one: `wipPartTicks` (the mean's numerator),
+`maxWip` (the peak) and `endWip` (the closing level). Per centre the same rule
+adds `observedTicks` beside the three sums and the max. Rows still fall 60×;
+columns grow by about half, which is the trade that keeps the change exact
+instead of merely close.
+
+- [x] 6G.1a Pure layer: `simulation/observationBuckets.ts` —
+      `TICKS_PER_BUCKET`, the `ObservationBucket` / `BucketWorkCenterMetrics`
+      shapes, and `bucketTicks(series, width)`; `aggregateMetrics` becomes
+      **bucket-native**, taking buckets rather than ticks.
+      **Decided: `simulateBatch` is not touched at all.** The first sketch had
+      the batch emit buckets, which would have rewritten the 36 tests that are
+      the determinism contract (one batch vs several, the RNG replay, the
+      accrual splits). Bucketing is instead a pure function that
+      `runService` calls on its way to the write — which keeps
+      "`runService` holds no arithmetic" true, since the arithmetic is a tested
+      pure function, and leaves `TickRecord` as the batch's own shape. A batch
+      is 3,600 ticks, so holding them before grouping costs nothing.
+      **Decided: the width is a constant, not frozen per run** (the open
+      question above). Track 7 compares two runs' observations and can only do
+      it if both are bucketed the same way, and a constant makes that
+      structural rather than a check a comparison has to remember; `day_ticks`
+      is frozen because shifts change what a run's money *means*, where
+      resolution changes nothing about the run. `?bucket=N` already coarsens
+      further at read time, so per-run width would buy only what the read path
+      offers anyway.
+      **Decided: a bucket needs no stored `firstTick`/`lastTick`.** Observed
+      ticks fill a bucket in ascending order, so they are always a prefix of
+      its slot: `lastTick = startTick + tickCount − 1`, and `bucketLastTick`
+      is that one line. A series that goes backwards **throws** rather than
+      being re-ordered — the 1.2 rule, since a silently mis-bucketed series
+      reads as a policy that behaved oddly rather than as a bug.
+      **Proved a no-op two ways.** All 184 existing tests pass untouched (the
+      13 `aggregateMetrics` call sites in `metrics.test.ts` route through an
+      `aggregate(ticks, centers, width = 1)` helper, so every assertion is the
+      original one), and 15 new tests pin the property the storage change rests
+      on: the same jagged series — WIP peaking mid-bucket, a capacity change at
+      tick 5, a centre arriving late — aggregates **identically at widths 1, 2,
+      3, 7, 60 and 1000**, with `meanWip` staying `39/7` where a mean of
+      closing levels would read 8. Empirically too: whole-run `/metrics` on the
+      6H.1 playthrough returned all ten centres' utilization, busy and capacity
+      ticks byte for byte unchanged.
+      **The name question is deferred to 6G.1b**, where the table is actually
+      renamed and the answer has consequences.
+- [x] 6G.1b Storage on the grid. `run_buckets` / `run_bucket_work_centers`
+      replace `run_ticks` / `run_tick_work_centers`, one row per simulated
+      minute; `runService` writes them, and `getRun`, `getRunMetrics` and
+      `getRunTicks` read them.
+      **Measured, which is the whole point** (ten-centre seed, 20,000 ticks per
+      advance): advancing an empty floor **8.9 s → 1.9 s**, ~326 WIP
+      11.2 s → 3.3 s, ~1,300 WIP 13.0 s → 6.1 s; whole-run `/metrics` on the
+      432,000-tick playthrough **7.4 s → 1.13 s**, `GET /:id` 344 ms → 83 ms.
+      At heavy WIP the remaining cost is now the O(WIP) tick loop rather than
+      the write, which is 6G.2 and is no longer masked.
+      **Decided: the tables are renamed, not kept** (the open question). A row
+      is no longer a tick, and this project deletes rather than keeps a name
+      that has stopped being true — the same call as the Trends tab rename and
+      `standingCost.ts`. `start_tick` is the key rather than a bucket index, so
+      the grid reads in the same units as every other tick column.
+      **Decided: an accumulating upsert, and it is the one genuinely new
+      mechanic.** Per-tick rows were insert-only because a tick is complete when
+      written; a bucket is not, since an advance of a tick count 60 does not
+      divide leaves a partial one for the next advance to finish. So the write
+      is `ON CONFLICT … DO UPDATE` with sums adding, `greatest()` for the two
+      maxima and the closing level simply overwritten — batches arrive in tick
+      order, so the newer last tick *is* the bucket's last tick. Rejected:
+      forcing advances onto bucket boundaries (changes the API contract for a
+      storage detail) and carrying a partial bucket in `RunState` (more mutable
+      state to persist, when the row already is the accumulator).
+      **Decided: the migration aggregates the existing rows rather than dropping
+      them** — an `INSERT … SELECT … GROUP BY` per table, hand-added to the
+      generated file like 6E.1's backfill. A finished run's series is history,
+      and the claim being made is that resolution costs no reported figure, so
+      the migration ought to demonstrate that on real data instead of starting
+      empty. The pre-6E null `capacity` is resolved here with
+      `least(machines, operators)` — such runs could never change capacity, so
+      what it is now is what it was throughout — which lets `capacity_ticks` be
+      NOT NULL and **removes the read-side fallback entirely** rather than
+      carrying it forever.
+      **Decided: the window snaps to whole buckets, and every line snaps with
+      it.** `/metrics` covers the minute containing `from` through the minute
+      containing `to`, and the finished, scrapped and capital rows are windowed
+      on that same snapped range rather than the raw request — otherwise the
+      response's single label would describe minute-aligned money and
+      tick-exact OTD at once. The label coming from the response (4.4) is what
+      makes the coarsening honest. Capital still windows from the *requested*
+      start so 6E.7's tick-0 spend survives the snap.
+      **Verified over HTTP.** The migrated playthrough returns net, all five
+      P&L lines, `tickCount`, `meanWip` (358.4043), `maxWip` (1082) and all ten
+      centres' utilization, busy, capacity and observed ticks **byte for byte
+      unchanged**. And the accumulation is exact: one 300-tick advance, five
+      aligned 60s, and a jagged `7, 23, 30, 1, 99, 40, 100` produce identical
+      summaries, identical flow aggregates and identical stored series; a
+      310-tick run leaves a six-row series whose last bucket holds 10 ticks and
+      whose sums still equal the run's totals.
+- [x] 6G.1c Frontend + docs. `chartBucket` never asks finer than the stored
+      minute, and that is a **correctness fix rather than tidying**: its value
+      doubles as `trailingRate`'s sample spacing, so asking for seconds while
+      the server returns minute rows divided the rate by 60× too few ticks and
+      would have drawn the earning rate a sixtieth of its real height on every
+      run under 5,000 ticks. `seriesBucket` starts at `TICKS_PER_BUCKET` for
+      the same reason. `TickSample` needed no change, since `/ticks` keeps its
+      shape — `wipCount` was already a bucket-end level on the bucketed path.
+      CLAUDE.md's schema pointers, cost-model freeze paragraph, `/ticks`
+      contract and chart pipeline; the `ticksQuerySchema` comment.
+
 - [ ] 6G.2 Clone on write in the tick loop. Every tick copies **every** WIP
       part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
       20,000 ticks is 40 million object clones — and a part that sits queued
@@ -1559,16 +1810,56 @@ routing visits it, so it can never produce — and `operators` defaults to 1, so
 it draws a wage immediately. Buying capacity anywhere but the constraint has
 the same shape. The model is right; the UI gives no signal at all.
 
-- [ ] 6H.1 A book that spans a horizon — seed only, no engine change, so it
-      lands before the harder half. Roughly ten staffed days of demand with
-      due days spread across it, keeping 6B's and 6C's tuned stories intact as
-      the first days of it (SO-2001 day 1 tight, SO-2003 day 3 contingent on
-      the drill never starving) and adding depth behind them. Verifies what
-      6E.1 could only assert on paper: a second drill press bought early pays
-      back and keeps earning, bought late does not, and releasing the whole
-      book at once buries the floor in carrying cost. **Depends on 6G**: this
-      makes runs ten times longer and WIP an order of magnitude heavier, which
-      is precisely the region where both measured costs bite.
+- [x] 6H.1 A book that spans a horizon — seed only, no engine change. **Taken
+      out of order, ahead of 6G** (user call 2026-09-04: "i wanna deviate from
+      the track and make my seeded data have more parts many orders and stuff
+      so i can do long runs without having to manually create orders"), and
+      scoped wider than this entry planned: a **playground** default, not a
+      tuned three-order lesson. As landed: **ten** work centres (Lathe, CNC
+      Mill, Welding and Paint Booth join the original six), **ten** parts each
+      with a full routing, and **29 sales orders / 3,600 sold units** in three
+      demand waves across due days 2–18.
+      **Decided: the 6B/6C tuned stories are gone, not preserved.** This entry
+      asked to keep SO-2001's tight day-1 promise and SO-2003's starve-contingent
+      day 3 as the book's first days. They could not survive a ten-centre floor
+      — every one of those margins was computed against a six-centre factory's
+      ~$1,894 staffed day, and the new floor's base burn is ~$3,340 — so the
+      whole book was retuned rather than half-retuned. What replaces them is a
+      *ladder* rather than a single tight promise: drill demand is ~23.5
+      press-days against an 18-day book, so wave 1 (due 2–6) is makeable on the
+      starting factory, wave 2 (8–12) needs the second press and mill, and wave
+      3 (14–18) needs them bought early. The 6C setup and scrap stories carry
+      over intact in shape — spares are now sized per work order at 1.5× the
+      routing's expected loss plus one, so overage is a rule rather than one
+      hand-picked pair.
+      **The seed is data-driven now** — `CENTER_SPECS`, `PART_SPECS`,
+      `ORDER_BOOK` and a `spareUnits` rule — because at ten centres and 29
+      orders the hand-written form had the failure mode `workCenterFields.ts`
+      was built to kill: a column or an order edited in one of four places.
+      Capital prices are *computed* from 6E.1's rules (4 days of standing cost
+      to buy, half back as salvage, 16 wage-hours to hire) rather than typed,
+      so retuning a rate can no longer leave a price behind.
+      **Verified live, and it answers what 6E.1 could only assert on paper.**
+      One full playthrough (run "Playground shakedown", seed 4243, ~432,000
+      ticks): second press + mill bought at tick 0 and a second cutter on day 2
+      ($4,000 of capital), releases staged wave by wave — **net +$42,444 on
+      $120,815 of throughput, 100% OTD, all 29 orders shipped in full**, floor
+      drained end of day 15. Net went **negative on day 1** (−$1,707, paying for
+      the machines), crossed zero on day 2, then ran ~$5–6k a day. Drill Press
+      read **82.7% utilization with two presses**, so one press is ~1.65×
+      overloaded and the late waves cannot ship on time without the buy — the
+      payback horizon 6H exists to create. Two honest counterweights showed up
+      unasked: the second **mill** ran only 32.3%, so it was due-date insurance
+      rather than a profit machine, and a thin patch in my own release schedule
+      left the floor **empty most of day 8**, which burned $4,051 of net against
+      $495 earned — an idle expanded factory is the most expensive thing in the
+      game, exactly 6A's lesson at ten times the scale.
+      **6G is now owed rather than assumed.** This entry said "depends on 6G";
+      it landed first, and the cost is measurable but not blocking: ~14,400
+      ticks per 8–13 s (~5 minutes of wall clock for the 15-day playthrough),
+      with WIP peaking at 865 parts — past the ~500 where 6G.2's clone-on-write
+      curve bites, and ~5M observation rows where 6G.1's buckets would have
+      written ~85k.
 - [ ] 6H.2 Buy at the constraint, not at random — the affordances that make
       the decision legible. The capital dialog gains each centre's
       **utilization over the run so far** (it already fetches `/metrics` for

@@ -326,73 +326,113 @@ export const runFinishedParts = pgTable(
   ],
 );
 
-/** The series the chart reads. Not recomputable — WIP is mutable state. */
-export const runTicks = pgTable(
-  "run_ticks",
+/**
+ * The observation series the chart and the metrics read: **one row per
+ * simulated minute**, not per tick (6G). Not recomputable — WIP is mutable
+ * state, and no stored table can say what it was at tick 300 once it has moved
+ * on.
+ *
+ * A row per tick was 220,000 rows for a 20,000-tick advance of the seeded
+ * ten-centre factory, which made the write ~97% of a fast-forward's wall clock
+ * and a whole-run `/metrics` on a 15-day run a 4.75M-row read taking 7.4s. A
+ * row per minute is 60× fewer of both.
+ *
+ * **Every reported figure stays exact**, which is what makes the resolution a
+ * storage choice rather than a reporting one: each column below is a sum, a
+ * count or a max, and `aggregateMetrics` divides once at the end. What
+ * coarsens is only *window resolution* — a window whose bounds fall mid-minute
+ * covers the containing minutes, and the response says which, since the label
+ * comes from the response.
+ *
+ * Written by an **accumulating upsert**, not an insert: an advance of a tick
+ * count the width does not divide leaves a partial bucket, and the next
+ * advance completes it. `simulation_runs.tick_num` is what says how far the run
+ * got; `tick_count` says how much of this slot has been observed.
+ */
+export const runBuckets = pgTable(
+  "run_buckets",
   {
     runId: integer("run_id")
       .references(() => simulationRuns.id, { onDelete: "cascade" })
       .notNull(),
-    tickNum: integer("tick_num").notNull(),
-    throughputCents: integer("throughput_cents").notNull(),
-    wipCount: integer("wip_count").notNull(),
     /**
-     * Standing costs + facility overhead accrued this tick. Frozen cents, like
-     * the money on `run_finished_parts`: the P&L sums these rather than
-     * re-deriving from rates, so a later rate edit (or 6E capital action)
-     * cannot rewrite a finished run's expenses.
+     * First tick of the bucket's slot, `index × TICKS_PER_BUCKET + 1`. Ticks
+     * are numbered from 1, so the first bucket of a run covers ticks 1…60.
+     */
+    startTick: integer("start_tick").notNull(),
+    /** Ticks observed in this slot so far; below the width while it fills. */
+    tickCount: integer("tick_count").notNull(),
+    throughputCents: integer("throughput_cents").notNull(),
+    /**
+     * Standing costs + facility overhead accrued over this bucket's ticks.
+     * Frozen cents, like the money on `run_finished_parts`: the P&L sums these
+     * rather than re-deriving from rates, so a later rate edit (or 6E capital
+     * action) cannot rewrite a finished run's expenses.
      */
     operatingExpenseCents: integer("operating_expense_cents")
       .notNull()
       .default(0),
-    /** holding charge on the tick's end-of-tick WIP, separately reported */
+    /** holding charge on each tick's end-of-tick WIP, separately reported */
     carryingCostCents: integer("carrying_cost_cents").notNull().default(0),
     /**
-     * Operator pay accrued this tick, frozen like the other two. Its own
+     * Operator pay accrued over this bucket, frozen like the other two. Its own
      * column rather than folded into expense: the wages-vs-rent split is what
      * a shift decision is about, and pre-6D ticks read 0 — nobody was paid.
      */
     wageCents: integer("wage_cents").notNull().default(0),
+    /**
+     * Σ parts on the floor across this bucket's ticks — the mean-WIP numerator.
+     * WIP takes three columns where money takes one because it is a **level,
+     * not a flow**: a mean needs this sum, a peak needs `max_wip`, and neither
+     * can be recovered from `end_wip`.
+     */
+    wipPartTicks: integer("wip_part_ticks").notNull().default(0),
+    maxWip: integer("max_wip").notNull().default(0),
+    /** Parts on the floor at the bucket's last observed tick. */
+    endWip: integer("end_wip").notNull(),
   },
-  (table) => [primaryKey({ columns: [table.runId, table.tickNum] })],
+  (table) => [primaryKey({ columns: [table.runId, table.startTick] })],
 );
 
 /**
- * What each work center did during a tick, one row per center **including idle
+ * What each work center did over a bucket, one row per center **including idle
  * ones**: utilization divides by the centre's own observed ticks, so a gap
- * would report it idle for time it wasn't watched. `busy` counts machines.
+ * would report it idle for time it wasn't watched. `busy_machine_ticks` counts
+ * machine-ticks, not parts.
+ *
+ * `capacity_ticks` is the utilization denominator and is **not null**: it is
+ * summed per observation, because 6E moves capacity mid-run and a bucket is 60
+ * ticks wide. The pre-6E null that `run_tick_work_centers.capacity` carried was
+ * resolved by the migration — such runs could not change capacity at all, so
+ * the run's frozen effective capacity is what it was throughout — which is why
+ * there is no fallback left to apply at read time.
  */
-export const runTickWorkCenters = pgTable(
-  "run_tick_work_centers",
+export const runBucketWorkCenters = pgTable(
+  "run_bucket_work_centers",
   {
     runId: integer("run_id").notNull(),
-    tickNum: integer("tick_num").notNull(),
+    startTick: integer("start_tick").notNull(),
     /** un-keyed on purpose: see the note above `runWorkOrderSteps` */
     workCenterId: integer("work_center_id").notNull(),
-    busy: integer("busy").notNull(),
-    /** parts that wanted a machine here and didn't get one */
-    queued: integer("queued").notNull(),
-    /**
-     * The effective capacity this tick gated admission on — the observation's
-     * own denominator, since 6E made capacity a thing that moves mid-run.
-     * Utilization divides by summed capacity-ticks, so a window spanning a
-     * purchase no longer measures the days before it against the machine count
-     * after it. **Null means pre-6E**: capacity never changed in that run, so
-     * the run's frozen `run_work_centers.capacity` is the right denominator —
-     * the same retroactive rule as 6B's null `due_at_tick`.
-     */
-    capacity: integer("capacity"),
+    /** ticks in this bucket that observed this center at all */
+    observedTicks: integer("observed_ticks").notNull(),
+    busyMachineTicks: integer("busy_machine_ticks").notNull(),
+    capacityTicks: integer("capacity_ticks").notNull(),
+    /** Σ parts that wanted a machine here and didn't get one */
+    queuedPartTicks: integer("queued_part_ticks").notNull(),
+    /** the worst single tick in the bucket — a sum cannot recover a peak */
+    maxQueueDepth: integer("max_queue_depth").notNull(),
   },
   (table) => [
     primaryKey({
-      columns: [table.runId, table.tickNum, table.workCenterId],
+      columns: [table.runId, table.startTick, table.workCenterId],
     }),
     // named explicitly: drizzle-kit gives a composite key a random suffix that
     // churns on every regeneration
     foreignKey({
-      name: "run_tick_work_centers_run_id_tick_num_run_ticks_fkey",
-      columns: [table.runId, table.tickNum],
-      foreignColumns: [runTicks.runId, runTicks.tickNum],
+      name: "run_bucket_work_centers_run_id_start_tick_run_buckets_fkey",
+      columns: [table.runId, table.startTick],
+      foreignColumns: [runBuckets.runId, runBuckets.startTick],
     }).onDelete("cascade"),
   ],
 );
@@ -489,7 +529,7 @@ export const runWorkCenters = pgTable(
  * Without this, `PUT /api/routings/:id/steps` re-plans parts already halfway
  * through a route, and shortening a list strands them past its end.
  *
- * `work_center_id` here and in `run_work_centers` / `run_tick_work_centers` is
+ * `work_center_id` here and in `run_work_centers` / `run_bucket_work_centers` is
  * **un-keyed** — don't add FKs. A pinned copy and a set of observations exist
  * to outlive edits to what they copied, and an FK would either erase a
  * finished run's history or add a 500 path to work-centre deletion that

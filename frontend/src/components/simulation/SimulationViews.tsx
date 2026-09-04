@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Info, LoaderCircle } from "lucide-react";
+import { ChevronRight, Info, LoaderCircle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import WorkCenterTable from "../WorkCenterTable";
@@ -40,10 +40,7 @@ export function SimulationViews(props: Props) {
         <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">{floor && <WorkCenterTable centers={floor.workCenters} />}</div>
         <div className="shrink-0 text-xs text-muted-foreground">
           {run.releasedOrders.length === 0 ? <p>Nothing released yet — pick a work order in the bar above and release it onto the floor.</p> : (
-            <div className="flex flex-wrap gap-x-4 gap-y-0.5">{run.releasedOrders.map((released) => {
-              const order = workOrderById.get(released.workOrderId);
-              return <span key={released.workOrderId}>{order?.orderNumber ?? `WO ${released.workOrderId}`}{order?.partName ? ` (${order.partName})` : ""} · routing {released.routingId} rev {released.routingRevision}</span>;
-            })}</div>
+            <ReleasedOrders released={run.releasedOrders} workOrderById={workOrderById} />
           )}
           <p className="mt-1 text-muted-foreground/70">Machine counts are frozen when a run is created. Change them in Factory Setup and they apply to the next run.</p>
         </div>
@@ -57,6 +54,56 @@ export function SimulationViews(props: Props) {
         ) : <p className="text-sm text-muted-foreground">No metrics yet — advance the run to observe some ticks.</p>}
       </TabsContent>
     </Tabs>
+  );
+}
+
+/**
+ * What has been released, as one line that stays one line.
+ *
+ * It used to list every order with its routing and revision, wrapped across the
+ * bottom of the floor. That is fine for the three orders a hand-built book has
+ * and unreadable for the twenty-nine the playground seed releases: five lines
+ * of near-identical text under the one table that is supposed to be the page.
+ * The count and the unit total are what a glance actually wants — the floor's
+ * own rows say where the work *is* — and the pinned routing per order is a
+ * question asked rarely and precisely, so it belongs one click away rather than
+ * permanently on screen.
+ *
+ * Units are summed only when every released order resolved against the loaded
+ * work orders; a partial sum stated as a total would be a quietly wrong number.
+ */
+function ReleasedOrders({
+  released,
+  workOrderById,
+}: {
+  released: NonNullable<SimulationPageController["run"]>["releasedOrders"];
+  workOrderById: SimulationPageController["workOrderById"];
+}) {
+  const orders = released.map((row) => workOrderById.get(row.workOrderId));
+  const units = orders.every((order) => order !== undefined)
+    ? orders.reduce((total, order) => total + order.quantity, 0)
+    : null;
+
+  return (
+    <details className="group">
+      <summary className="flex w-fit cursor-pointer items-center gap-1 hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="size-3 transition-transform group-open:rotate-90" />
+        {released.length.toLocaleString()} order{released.length === 1 ? "" : "s"} released
+        {units !== null && <> · {units.toLocaleString()} unit{units === 1 ? "" : "s"}</>}
+      </summary>
+      <div className="mt-1 flex max-h-20 flex-wrap gap-x-4 gap-y-0.5 overflow-auto pl-4">
+        {released.map((row) => {
+          const order = workOrderById.get(row.workOrderId);
+          return (
+            <span key={row.workOrderId}>
+              {order?.orderNumber ?? `WO ${row.workOrderId}`}
+              {order?.partName ? ` (${order.partName})` : ""} · routing {row.routingId} rev{" "}
+              {row.routingRevision}
+            </span>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 

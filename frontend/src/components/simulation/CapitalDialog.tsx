@@ -51,10 +51,15 @@ export function CapitalDialog({
   disabled: boolean;
 }) {
   const shiftsPerDay = dayTicks / 28_800;
+  // By name, the order `WorkCenterTable` shows the same centres in. The floor
+  // query is ordered too, so this is belt and braces rather than the fix — but
+  // a table whose rows move while you are deciding which row to act on is the
+  // one kind of instability this dialog cannot afford.
+  const sorted = [...centers].sort((a, b) => a.name.localeCompare(b.name));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl">
+      <DialogContent className="sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>Capital actions</DialogTitle>
           <DialogDescription>
@@ -73,7 +78,7 @@ export function CapitalDialog({
           <Table>
             <TableHeader className="sticky top-0 bg-card">
               <TableRow>
-                <TableHead>Work Center</TableHead>
+                <TableHead className="sticky left-0 z-20 bg-card">Work Center</TableHead>
                 <TableHead className="text-right">Machines</TableHead>
                 <TableHead className="text-right">Operators</TableHead>
                 <TableHead className="text-right">Rent / day</TableHead>
@@ -83,11 +88,16 @@ export function CapitalDialog({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {centers.map((center) => {
+              {sorted.map((center) => {
                 const idle = center.machines !== center.operators;
                 return (
                   <TableRow key={center.workCenterId}>
-                    <TableCell className="font-medium">{center.name}</TableCell>
+                    {/* sticky, so the name a row's prices and buttons belong
+                        to survives a narrow viewport: a buy made against a row
+                        whose name has scrolled away is a buy made blind */}
+                    <TableCell className="sticky left-0 z-10 bg-card font-medium">
+                      {center.name}
+                    </TableCell>
                     {/* the pair, not the min: which of the two is short is
                         exactly what the next action should fix */}
                     <TableCell className="text-right tabular-nums">

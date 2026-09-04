@@ -24,7 +24,12 @@ import {
 import { CAPITAL_LABELS, formatSpend } from "./capital";
 import { cumulativeThroughput, openingCents } from "./cumulativeThroughput";
 import { netPerTick, openingNetCents } from "./netProfit";
-import { chartBucket, formatTickTime, TICKS_PER_DAY } from "./simTime";
+import {
+  chartBucket,
+  formatTickTime,
+  TICKS_PER_BUCKET,
+  TICKS_PER_DAY,
+} from "./simTime";
 import { trailingRate } from "./throughputRate";
 import { useToast } from "../toast/ToastContext";
 import type { SalesOrder } from "../types/SalesOrder";
@@ -58,7 +63,7 @@ export function useSimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
-  const [seriesBucket, setSeriesBucket] = useState(1);
+  const [seriesBucket, setSeriesBucket] = useState(TICKS_PER_BUCKET);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [actions, setActions] = useState<CapitalAction[]>([]);
   const [capitalOpen, setCapitalOpen] = useState(false);
@@ -78,6 +83,17 @@ export function useSimulationPage() {
   const [stopping, setStopping] = useState(false);
   const stopJumpRef = useRef(false);
   const advancing = useRef(false);
+  /**
+   * The window `loadMetrics` last asked for, or null while the dashboard has
+   * never been opened for this run. It is what makes a capital action able to
+   * re-read the pane on the window the pane itself claims to cover: undefined
+   * bounds mean the whole run and stay that way, rather than being frozen into
+   * the explicit `fromTick..toTick` the response came back with — which for a
+   * run still at tick 0 would be the backwards `1..0` and a 400.
+   */
+  const metricsWindow = useRef<{ from: number | undefined; to: number | undefined } | null>(
+    null,
+  );
 
   const report = useCallback(
     (error: unknown, fallback: string) => {
@@ -137,6 +153,7 @@ export function useSimulationPage() {
 
   const loadMetrics = useCallback(
     async (id: number, fromTick?: number, toTick?: number) => {
+      metricsWindow.current = { from: fromTick, to: toTick };
       setMetricsLoading(true);
       try {
         setMetrics(await getRunMetrics(id, fromTick, toTick));
@@ -204,6 +221,7 @@ export function useSimulationPage() {
     setFloor(null);
     setSeries([]);
     setMetrics(null);
+    metricsWindow.current = null;
     setActions([]);
     setActiveTab("floor");
   }, []);
@@ -380,6 +398,14 @@ export function useSimulationPage() {
         const applied = await applyCapitalAction(runId, kind, workCenterId);
         await refresh(runId);
         await loadActions(runId);
+        // An action is money spent, so every figure the dashboard is showing is
+        // now wrong — and the capital log directly beneath those figures has
+        // just been reloaded, which is what makes a stale pane read as a
+        // contradiction rather than as lag. Re-read the window it states; a
+        // pane that was never opened has nothing to invalidate, and `changeTab`
+        // loads it fresh.
+        const shown = metricsWindow.current;
+        if (shown) await loadMetrics(runId, shown.from, shown.to);
         const name =
           floor?.workCenters.find((center) => center.workCenterId === workCenterId)
             ?.name ?? `WC ${workCenterId}`;
@@ -395,7 +421,10 @@ export function useSimulationPage() {
         setPendingAction(null);
       }
     },
-    [runId, jump, awaitIdleClock, refresh, loadActions, floor, report, showToast],
+    [
+      runId, jump, awaitIdleClock, refresh, loadActions, loadMetrics, floor, report,
+      showToast,
+    ],
   );
 
   const trend = useMemo(() => {

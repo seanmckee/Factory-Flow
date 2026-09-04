@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "../db/index.js";
 import {
   routingSteps,
@@ -7,8 +7,8 @@ import {
   runFinishedParts,
   runReleasedOrders,
   runScrappedParts,
-  runTickWorkCenters,
-  runTicks,
+  runBucketWorkCenters,
+  runBuckets,
   runWipParts,
   runWorkCenters,
   runWorkOrderSteps,
@@ -21,6 +21,11 @@ import {
   PROCESS_TIME_DEVIATION,
   sampleProcessTime,
 } from "../simulation/sampleProcessTime.js";
+import {
+  TICKS_PER_BUCKET,
+  bucketMoney,
+  bucketTicks,
+} from "../simulation/observationBuckets.js";
 import { simulateBatch } from "../simulation/simulateBatch.js";
 import { getFactorySettings } from "./factorySettings.js";
 import { HttpError } from "./httpError.js";
@@ -425,33 +430,89 @@ export async function advanceRun(
             );
         }
 
-        for (const slice of chunked(batch.ticks, chunkFor(7))) {
-          await tx.insert(runTicks).values(
-            slice.map((tick) => ({
-              runId,
-              tickNum: tick.tickNum,
-              throughputCents: tick.throughputCents,
-              wipCount: tick.wipCount,
-              operatingExpenseCents: tick.operatingExpenseCents,
-              carryingCostCents: tick.carryingCostCents,
-              wageCents: tick.wageCents,
-            })),
-          );
+        // Observations go onto the minute grid (6G). The arithmetic is the
+        // pure `bucketTicks`/`bucketMoney` pair; this only shapes rows.
+        const flowBuckets = bucketTicks(batch.ticks, TICKS_PER_BUCKET);
+        const moneyByStart = bucketMoney(batch.ticks, TICKS_PER_BUCKET);
+        const bucketRows = flowBuckets.map((bucket) => {
+          const money = moneyByStart.get(bucket.startTick);
+          if (!money) {
+            // the two walk the same grid over the same ticks, so a slot with
+            // observations and no money is a bug in one of them, not a run
+            // that earned nothing
+            throw new Error(
+              `Bucket at tick ${bucket.startTick} has observations but no money`,
+            );
+          }
+          return {
+            runId,
+            startTick: bucket.startTick,
+            tickCount: bucket.tickCount,
+            throughputCents: money.throughputCents,
+            operatingExpenseCents: money.operatingExpenseCents,
+            carryingCostCents: money.carryingCostCents,
+            wageCents: money.wageCents,
+            wipPartTicks: bucket.wipPartTicks,
+            maxWip: bucket.maxWip,
+            endWip: bucket.endWip,
+          };
+        });
+
+        // An **accumulating** upsert, not an insert: an advance of a tick count
+        // 60 does not divide leaves a partial bucket that this advance's first
+        // slot continues. Sums add, the peak takes the greater, and the closing
+        // level is simply the newer one — batches arrive in tick order, so the
+        // later batch's last tick is the bucket's last tick.
+        for (const slice of chunked(bucketRows, chunkFor(10))) {
+          await tx
+            .insert(runBuckets)
+            .values(slice)
+            .onConflictDoUpdate({
+              target: [runBuckets.runId, runBuckets.startTick],
+              set: {
+                tickCount: sql`${runBuckets.tickCount} + excluded.tick_count`,
+                throughputCents: sql`${runBuckets.throughputCents} + excluded.throughput_cents`,
+                operatingExpenseCents: sql`${runBuckets.operatingExpenseCents} + excluded.operating_expense_cents`,
+                carryingCostCents: sql`${runBuckets.carryingCostCents} + excluded.carrying_cost_cents`,
+                wageCents: sql`${runBuckets.wageCents} + excluded.wage_cents`,
+                wipPartTicks: sql`${runBuckets.wipPartTicks} + excluded.wip_part_ticks`,
+                maxWip: sql`greatest(${runBuckets.maxWip}, excluded.max_wip)`,
+                endWip: sql`excluded.end_wip`,
+              },
+            });
         }
 
-        // the per-center rows key the tick rows above, so they go in after
-        const centerRows = batch.ticks.flatMap((tick) =>
-          tick.workCenters.map((center) => ({
+        // the per-center rows key the bucket rows above, so they go in after
+        const centerRows = flowBuckets.flatMap((bucket) =>
+          bucket.workCenters.map((center) => ({
             runId,
-            tickNum: tick.tickNum,
+            startTick: bucket.startTick,
             workCenterId: center.workCenterId,
-            busy: center.busy,
-            queued: center.queued,
-            capacity: center.capacity,
+            observedTicks: center.observedTicks,
+            busyMachineTicks: center.busyMachineTicks,
+            capacityTicks: center.capacityTicks,
+            queuedPartTicks: center.queuedPartTicks,
+            maxQueueDepth: center.maxQueueDepth,
           })),
         );
-        for (const slice of chunked(centerRows, chunkFor(6))) {
-          await tx.insert(runTickWorkCenters).values(slice);
+        for (const slice of chunked(centerRows, chunkFor(8))) {
+          await tx
+            .insert(runBucketWorkCenters)
+            .values(slice)
+            .onConflictDoUpdate({
+              target: [
+                runBucketWorkCenters.runId,
+                runBucketWorkCenters.startTick,
+                runBucketWorkCenters.workCenterId,
+              ],
+              set: {
+                observedTicks: sql`${runBucketWorkCenters.observedTicks} + excluded.observed_ticks`,
+                busyMachineTicks: sql`${runBucketWorkCenters.busyMachineTicks} + excluded.busy_machine_ticks`,
+                capacityTicks: sql`${runBucketWorkCenters.capacityTicks} + excluded.capacity_ticks`,
+                queuedPartTicks: sql`${runBucketWorkCenters.queuedPartTicks} + excluded.queued_part_ticks`,
+                maxQueueDepth: sql`greatest(${runBucketWorkCenters.maxQueueDepth}, excluded.max_queue_depth)`,
+              },
+            });
         }
 
         await tx
