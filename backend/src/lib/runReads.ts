@@ -72,7 +72,9 @@ export type RunSummary = RunRow & {
   /** every tick's frozen expense, summed — never re-derived from rates */
   operatingExpenseCents: number;
   carryingCostCents: number;
-  /** throughput − operating expense − carrying: the run's score, and it can go negative */
+  /** operator pay, summed from the same frozen tick column */
+  wageCents: number;
+  /** throughput − expense − carrying − wages: the score, and it can go negative */
   netCents: number;
   releasedOrders: {
     workOrderId: number;
@@ -115,6 +117,7 @@ export async function getRun(runId: number): Promise<RunSummary> {
       .select({
         operatingExpenseCents: sum(runTicks.operatingExpenseCents),
         carryingCostCents: sum(runTicks.carryingCostCents),
+        wageCents: sum(runTicks.wageCents),
       })
       .from(runTicks)
       .where(eq(runTicks.runId, runId)),
@@ -133,6 +136,7 @@ export async function getRun(runId: number): Promise<RunSummary> {
   const throughputCents = Number(finished?.throughputCents ?? 0);
   const operatingExpenseCents = Number(expense?.operatingExpenseCents ?? 0);
   const carryingCostCents = Number(expense?.carryingCostCents ?? 0);
+  const wageCents = Number(expense?.wageCents ?? 0);
 
   return {
     ...run,
@@ -141,7 +145,9 @@ export async function getRun(runId: number): Promise<RunSummary> {
     throughputCents,
     operatingExpenseCents,
     carryingCostCents,
-    netCents: throughputCents - operatingExpenseCents - carryingCostCents,
+    wageCents,
+    netCents:
+      throughputCents - operatingExpenseCents - carryingCostCents - wageCents,
     releasedOrders,
   };
 }
@@ -153,6 +159,7 @@ export type RunMetrics = {
   /** the window's frozen per-tick expense, summed like its throughput */
   operatingExpenseCents: number;
   carryingCostCents: number;
+  wageCents: number;
   netCents: number;
   flow: MetricsAggregate;
   cycleTime: CycleTimeAggregate;
@@ -273,6 +280,7 @@ export async function getRunMetrics(
     (total, row) => total + row.carryingCostCents,
     0,
   );
+  const wageCents = tickRows.reduce((total, row) => total + row.wageCents, 0);
 
   return {
     fromTick: from,
@@ -280,7 +288,9 @@ export async function getRunMetrics(
     throughputCents,
     operatingExpenseCents,
     carryingCostCents,
-    netCents: throughputCents - operatingExpenseCents - carryingCostCents,
+    wageCents,
+    netCents:
+      throughputCents - operatingExpenseCents - carryingCostCents - wageCents,
     flow: aggregateMetrics(
       series,
       new Map(
@@ -323,6 +333,8 @@ export type RunFloor = {
     capacity: number;
     /** frozen, like capacity — what this run's centre costs per calendar day */
     standingCostCentsPerDay: number;
+    /** frozen per-operator hourly wage; operators = capacity until 6E */
+    wageCentsPerHour: number;
   })[];
 };
 
@@ -367,6 +379,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
         workCenterId: runWorkCenters.workCenterId,
         capacity: runWorkCenters.capacity,
         standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
+        wageCentsPerHour: runWorkCenters.wageCentsPerHour,
       })
       .from(runWorkCenters)
       .where(eq(runWorkCenters.runId, run.id)),
@@ -408,6 +421,9 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       center.standingCostCentsPerDay,
     ]),
   );
+  const wageRates = new Map(
+    storedCenters.map((center) => [center.workCenterId, center.wageCentsPerHour]),
+  );
 
   const view = deriveFloorView(
     wipParts,
@@ -423,6 +439,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       name: names.get(center.workCenterId) ?? `Work center ${center.workCenterId}`,
       capacity: centerMap.get(center.workCenterId)?.capacity ?? 0,
       standingCostCentsPerDay: standingCosts.get(center.workCenterId) ?? 0,
+      wageCentsPerHour: wageRates.get(center.workCenterId) ?? 0,
     })),
   };
 }
@@ -433,6 +450,7 @@ export type TickSeriesRow = {
   wipCount: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
+  wageCents: number;
 };
 
 /**
@@ -475,6 +493,7 @@ export async function getRunTicks(
         wipCount: runTicks.wipCount,
         operatingExpenseCents: runTicks.operatingExpenseCents,
         carryingCostCents: runTicks.carryingCostCents,
+        wageCents: runTicks.wageCents,
       })
       .from(runTicks)
       .where(inWindow)
@@ -498,6 +517,7 @@ export async function getRunTicks(
       wipCount: sql<number>`(array_agg(${runTicks.wipCount} order by ${runTicks.tickNum} desc))[1]`,
       operatingExpenseCents: sql<number>`sum(${runTicks.operatingExpenseCents})::int`,
       carryingCostCents: sql<number>`sum(${runTicks.carryingCostCents})::int`,
+      wageCents: sql<number>`sum(${runTicks.wageCents})::int`,
     })
     .from(runTicks)
     .where(inWindow)
@@ -511,5 +531,6 @@ export async function getRunTicks(
     wipCount: Number(row.wipCount),
     operatingExpenseCents: Number(row.operatingExpenseCents),
     carryingCostCents: Number(row.carryingCostCents),
+    wageCents: Number(row.wageCents),
   }));
 }

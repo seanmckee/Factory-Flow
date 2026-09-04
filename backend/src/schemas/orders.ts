@@ -55,6 +55,8 @@ export const createWorkCenterSchema = z.object({
   capacity: positiveInt("capacity").optional(),
   // omitted means "take the column default of 0" — a free machine
   standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
+  // per operator per staffed hour; omitted means the default of 0
+  wageCentsPerHour: nonNegativeInt("wageCentsPerHour").optional(),
 });
 
 /**
@@ -66,30 +68,39 @@ export const updateWorkCenterSchema = z
     name: workCenterName().optional(),
     capacity: positiveInt("capacity").optional(),
     standingCostCentsPerDay: nonNegativeInt("standingCostCentsPerDay").optional(),
+    wageCentsPerHour: nonNegativeInt("wageCentsPerHour").optional(),
   })
   .refine(
     (body) =>
       body.name !== undefined ||
       body.capacity !== undefined ||
-      body.standingCostCentsPerDay !== undefined,
-    { error: "provide name, capacity or standingCostCentsPerDay" },
+      body.standingCostCentsPerDay !== undefined ||
+      body.wageCentsPerHour !== undefined,
+    { error: "provide name, capacity, standingCostCentsPerDay or wageCentsPerHour" },
   );
 
 // Factory settings
 
-/** Both facility-level rates a run freezes at creation; see factory_settings. */
+/** The facility-level settings a run freezes at creation; see factory_settings. */
+const shiftsInt = z
+  .int({ error: "shifts must be a whole number" })
+  .min(1, { error: "a day needs at least one shift" })
+  .max(3, { error: "a day holds at most three 8-hour shifts" });
+
 export const updateFactorySettingsSchema = z
   .object({
     facilityOverheadCentsPerDay: nonNegativeInt(
       "facilityOverheadCentsPerDay",
     ).optional(),
     wipCarryingBpsPerDay: nonNegativeInt("wipCarryingBpsPerDay").optional(),
+    shifts: shiftsInt.optional(),
   })
   .refine(
     (body) =>
       body.facilityOverheadCentsPerDay !== undefined ||
-      body.wipCarryingBpsPerDay !== undefined,
-    { error: "provide facilityOverheadCentsPerDay or wipCarryingBpsPerDay" },
+      body.wipCarryingBpsPerDay !== undefined ||
+      body.shifts !== undefined,
+    { error: "provide facilityOverheadCentsPerDay, wipCarryingBpsPerDay or shifts" },
   );
 
 // Parts
@@ -227,6 +238,8 @@ export const createRunSchema = z.object({
     "facilityOverheadCentsPerDay",
   ).optional(),
   wipCarryingBpsPerDay: nonNegativeInt("wipCarryingBpsPerDay").optional(),
+  // one-shift vs two-shift is exactly the comparison a fork wants to run
+  shifts: shiftsInt.optional(),
 });
 
 export const releaseWorkOrderSchema = z.object({

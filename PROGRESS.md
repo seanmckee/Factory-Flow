@@ -1093,7 +1093,7 @@ balance it yet.
       sums — per rate then summed, mid-hour split-vs-whole tests like
       `timeExpenseAtTick`'s; `TickRecord.wageCents`; batch wiring; the
       one-batch-vs-several test re-run with wages on.
-- [ ] 6D.3 API. `shifts` through settings GET/PATCH; `wageCentsPerHour`
+- [x] 6D.3 API. `shifts` through settings GET/PATCH; `wageCentsPerHour`
       through work-centre POST/PATCH; `createRun` freezes
       `day_ticks = shifts × 28,800` (override in the POST body) and the wage
       rates; `advanceRun` writes the tick column; `AdvanceResult`,
@@ -1103,7 +1103,11 @@ balance it yet.
       derivations stay client-side). Exercise over HTTP: a two-shift run's
       day-1 due tick is 57,600; a staffed hour sums to exactly
       `Σ capacity × rate`; the P&L identity across summary, metrics and tick
-      sums.
+      sums. All verified live: one staffed hour of a two-shift run accrued
+      exactly 6,800c of wages (Σ capacity × rate) beside 8,436c of rent — the
+      same rates that accrue ~16,875c/hour at one shift, the amortization
+      visible in one number; SO-2001's due tick froze at 57,600; a
+      `shifts: 1` override under two-shift settings froze 28,800.
 - [ ] 6D.4 UI + doc sweep. Factory Settings gains Shifts; work-centres table
       gains a Wage column; dashboard gains a Wages card and the net stat
       subtracts it (server-side already — but `netPerTick`/`netCentsOf` in

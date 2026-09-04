@@ -108,6 +108,8 @@ async function withRunLock<T>(
 export type CreateRunOverrides = {
   facilityOverheadCentsPerDay?: number;
   wipCarryingBpsPerDay?: number;
+  /** staffed 8-hour shifts per calendar day; frozen as `day_ticks` */
+  shifts?: number;
 };
 
 /**
@@ -132,7 +134,9 @@ export async function createRun(
       .values({
         name,
         rngSeed,
-        dayTicks: TICKS_PER_DAY,
+        // the day's width is frozen here and never reinterpreted: a second
+        // shift is a longer day of the same one-second ticks
+        dayTicks: (overrides.shifts ?? settings.shifts) * TICKS_PER_DAY,
         facilityOverheadCentsPerDay:
           overrides.facilityOverheadCentsPerDay ??
           settings.facilityOverheadCentsPerDay,
@@ -147,6 +151,7 @@ export async function createRun(
         id: workCenters.id,
         capacity: workCenters.capacity,
         standingCostCentsPerDay: workCenters.standingCostCentsPerDay,
+        wageCentsPerHour: workCenters.wageCentsPerHour,
       })
       .from(workCenters);
 
@@ -157,6 +162,7 @@ export async function createRun(
           workCenterId: center.id,
           capacity: center.capacity,
           standingCostCentsPerDay: center.standingCostCentsPerDay,
+          wageCentsPerHour: center.wageCentsPerHour,
         })),
       );
     }
@@ -298,6 +304,8 @@ export type AdvanceResult = {
   operatingExpenseCents: number;
   /** the holding charge over the advance */
   carryingCostCents: number;
+  /** operator pay over the advance — the fourth line of the P&L */
+  wageCents: number;
   /**
    * Units ruined over the advance — an agent-visible signal beside the money,
    * costing nothing to report since the batches already hold the rows.
@@ -332,6 +340,7 @@ export async function advanceRun(
     let throughputCents = 0;
     let operatingExpenseCents = 0;
     let carryingCostCents = 0;
+    let wageCents = 0;
     let scrappedCount = 0;
 
     for (let remaining = ticks; remaining > 0; ) {
@@ -404,7 +413,7 @@ export async function advanceRun(
             );
         }
 
-        for (const slice of chunked(batch.ticks, chunkFor(6))) {
+        for (const slice of chunked(batch.ticks, chunkFor(7))) {
           await tx.insert(runTicks).values(
             slice.map((tick) => ({
               runId,
@@ -413,6 +422,7 @@ export async function advanceRun(
               wipCount: tick.wipCount,
               operatingExpenseCents: tick.operatingExpenseCents,
               carryingCostCents: tick.carryingCostCents,
+              wageCents: tick.wageCents,
             })),
           );
         }
@@ -441,6 +451,7 @@ export async function advanceRun(
         throughputCents += tick.throughputCents;
         operatingExpenseCents += tick.operatingExpenseCents;
         carryingCostCents += tick.carryingCostCents;
+        wageCents += tick.wageCents;
       }
       scrappedCount += batch.scrappedParts.length;
       state = {
@@ -460,6 +471,7 @@ export async function advanceRun(
       throughputCents,
       operatingExpenseCents,
       carryingCostCents,
+      wageCents,
       scrappedCount,
       wipCount: state.wipParts.length,
     };
