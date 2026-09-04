@@ -202,8 +202,8 @@ describe("aggregateMetrics", () => {
         1,
         {
           steps: [
-            { workCenterId: 10, processTimeSeconds: 5 },
-            { workCenterId: 20, processTimeSeconds: 5 },
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
+            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
           ],
         },
       ],

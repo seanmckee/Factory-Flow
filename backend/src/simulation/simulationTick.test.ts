@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { simulateTick } from "./simulationTick.js";
+import { setupKey, simulateTick } from "./simulationTick.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
 
 const SEED = 42;
 
 const testRouting: Routing = {
   steps: [
-    { workCenterId: 10, processTimeSeconds: 5 },
-    { workCenterId: 20, processTimeSeconds: 5 },
+    { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
+    { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
   ],
 };
 
@@ -141,8 +141,8 @@ describe("simulateTick", () => {
         1,
         {
           steps: [
-            { workCenterId: 10, processTimeSeconds: 5 },
-            { workCenterId: 20, processTimeSeconds: 1000 },
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
+            { workCenterId: 20, processTimeSeconds: 1000, setupTimeSeconds: 0 },
           ],
         },
       ],
@@ -170,7 +170,7 @@ describe("simulateTick", () => {
 
   describe("when a routing has been shortened under an in-flight part", () => {
     const shortened = new Map<number, Routing>([
-      [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5 }] }],
+      [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] }],
     ]);
 
     it("finishes the stranded part at the current tick", () => {
@@ -216,11 +216,11 @@ describe("simulateTick", () => {
     const pinned = new Map<number, Routing>([
       [
         1,
-        { steps: [{ workCenterId: 10, processTimeSeconds: 5 }] },
+        { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] },
       ],
       [
         2,
-        { steps: [{ workCenterId: 20, processTimeSeconds: 5 }] },
+        { steps: [{ workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 }] },
       ],
     ]);
     const before = makeWipPart("part-before", { workOrderId: 1 });
@@ -260,6 +260,152 @@ describe("simulateTick", () => {
     expect(result.finishedParts).toEqual([
       { id: "part-1", workOrderId: 1, releasedAtTick: 12, completedAtTick: 20 },
     ]);
+  });
+
+  describe("setup", () => {
+    // step 0 carries a 3-second changeover; step 1 carries none
+    const withSetup = new Map<number, Routing>([
+      [
+        1,
+        {
+          steps: [
+            { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 },
+            { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0 },
+          ],
+        },
+      ],
+    ]);
+    const setupTick = (
+      wipParts: WipPart[],
+      workCenters = testWorkCenters,
+      setupDone?: ReadonlySet<string>,
+    ) => simulateTick(wipParts, withSetup, 1, workCenters, SEED, setupDone);
+
+    it("folds the changeover into the first admitted unit's process time", () => {
+      const result = setupTick([makeWipPart("part-1")]);
+
+      expect(result.wipParts[0]?.actualProcessTimeSeconds).toBe(8);
+      // the setup consumes machine time, but admission still progresses it
+      expect(result.wipParts[0]?.progressSeconds).toBe(1);
+      expect(result.setupsStarted).toEqual([{ workOrderId: 1, stepIndex: 0 }]);
+    });
+
+    it("lets every later unit of the work order process clean", () => {
+      const result = setupTick(
+        [makeWipPart("part-1"), makeWipPart("part-2", { unitIndex: 1 })],
+        makeWorkCenters(2),
+      );
+
+      expect(result.wipParts.map((p) => p.actualProcessTimeSeconds)).toEqual([
+        8, 5,
+      ]);
+      expect(result.setupsStarted).toHaveLength(1);
+    });
+
+    it("charges nothing to a unit still waiting for a machine", () => {
+      const result = setupTick([
+        makeWipPart("part-1"),
+        makeWipPart("part-2", { unitIndex: 1 }),
+      ]);
+
+      const queued = result.wipParts.find((p) => p.id === "part-2");
+      expect(queued?.actualProcessTimeSeconds).toBe(5);
+      expect(result.setupsStarted).toHaveLength(1);
+    });
+
+    it("never re-charges a changeover already recorded as paid", () => {
+      const result = setupTick(
+        [makeWipPart("part-1")],
+        testWorkCenters,
+        new Set([setupKey(1, 0)]),
+      );
+
+      expect(result.wipParts[0]?.actualProcessTimeSeconds).toBe(5);
+      expect(result.setupsStarted).toEqual([]);
+    });
+
+    it("never charges a part already mid-process at the step", () => {
+      // a pre-6C run reloads with parts mid-step and no setup rows at all;
+      // a unit that has already started is by definition past any changeover
+      const result = setupTick([makeWipPart("part-1", { progressSeconds: 2 })]);
+
+      expect(result.wipParts[0]?.actualProcessTimeSeconds).toBe(5);
+      expect(result.setupsStarted).toEqual([]);
+    });
+
+    it("charges each work order its own changeover at a shared center", () => {
+      const pinned = new Map<number, Routing>([
+        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 }] }],
+        [2, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 3 }] }],
+      ]);
+      const result = simulateTick(
+        [makeWipPart("part-1"), makeWipPart("part-2", { workOrderId: 2 })],
+        pinned,
+        1,
+        makeWorkCenters(2),
+        SEED,
+      );
+
+      expect(result.wipParts.map((p) => p.actualProcessTimeSeconds)).toEqual([
+        8, 8,
+      ]);
+      expect(result.setupsStarted).toEqual([
+        { workOrderId: 1, stepIndex: 0 },
+        { workOrderId: 2, stepIndex: 0 },
+      ]);
+    });
+
+    it("charges one changeover when capacity admits two fresh units at once", () => {
+      const result = setupTick(
+        [makeWipPart("part-1"), makeWipPart("part-2", { unitIndex: 1 })],
+        makeWorkCenters(2),
+      );
+
+      expect(result.setupsStarted).toEqual([{ workOrderId: 1, stepIndex: 0 }]);
+    });
+
+    it("reports no changeover for a zero setup time", () => {
+      // zero is a legitimate setup time meaning "none", and recording it would
+      // write a row per (work order, step) for steps that need no changeover
+      const result = tick([makeWipPart("part-1")]);
+      expect(result.setupsStarted).toEqual([]);
+    });
+
+    it("draws a transition clean and charges the setup at the next admission", () => {
+      const twoSetups = new Map<number, Routing>([
+        [
+          1,
+          {
+            steps: [
+              { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
+              { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 3 },
+            ],
+          },
+        ],
+      ]);
+      const first = simulateTick(
+        [makeWipPart("part-1", { progressSeconds: 4 })],
+        twoSetups,
+        1,
+        testWorkCenters,
+        SEED,
+      );
+      // the transition drew the step's own time; no machine at 20 was claimed
+      const drawn = first.wipParts[0]?.actualProcessTimeSeconds ?? 0;
+      expect(first.setupsStarted).toEqual([]);
+      expect(drawn).toBeGreaterThanOrEqual(4);
+      expect(drawn).toBeLessThanOrEqual(7);
+
+      const second = simulateTick(
+        first.wipParts,
+        twoSetups,
+        2,
+        testWorkCenters,
+        SEED,
+      );
+      expect(second.setupsStarted).toEqual([{ workOrderId: 1, stepIndex: 1 }]);
+      expect(second.wipParts[0]?.actualProcessTimeSeconds).toBe(drawn + 3);
+    });
   });
 
   describe("metrics", () => {
@@ -315,7 +461,7 @@ describe("simulateTick", () => {
 
     it("counts a part stranded by a shortened routing as neither", () => {
       const shortened = new Map<number, Routing>([
-        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5 }] }],
+        [1, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }] }],
       ]);
       const result = simulateTick(
         [makeWipPart("stranded", { stepIndex: 1, progressSeconds: 3 })],

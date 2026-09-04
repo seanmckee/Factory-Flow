@@ -59,12 +59,20 @@ export type FinishedPart = {
 /**
  * One operation. The engine identifies a step by its position in `steps`, not
  * by the `sequence` column — `PUT /api/routings/:id/steps` renumbers sequences
- * from array order, so the two agree by construction. `setupTimeSeconds` is
- * omitted: nothing in the engine has ever read it.
+ * from array order, so the two agree by construction.
  */
 export type RoutingStep = {
   workCenterId: number;
   processTimeSeconds: number;
+  /**
+   * The changeover before the work order's first unit at this step, paid once
+   * per (work order, step) by whichever unit is admitted to a machine first —
+   * folded into that unit's `actualProcessTimeSeconds`. Deterministic, no
+   * draw: process variance is the variance that drives starve/block, and a
+   * noisy setup would only buy a second RNG domain to maintain. Zero means no
+   * changeover, and is never recorded as one.
+   */
+  setupTimeSeconds: number;
 };
 
 /**

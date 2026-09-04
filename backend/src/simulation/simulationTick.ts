@@ -57,11 +57,28 @@ export type TickMetrics = {
   workCenters: TickWorkCenterMetrics[];
 };
 
+/**
+ * A changeover that began this tick: the first unit of `workOrderId` was
+ * admitted to a machine at step `stepIndex` and its process time absorbed the
+ * step's setup time. The caller marks the pair done so it is never paid again.
+ */
+export type SetupStart = {
+  workOrderId: number;
+  stepIndex: number;
+};
+
+/** The key `setupDone` speaks: one changeover per (work order, step). */
+export function setupKey(workOrderId: number, stepIndex: number): string {
+  return `${workOrderId}:${stepIndex}`;
+}
+
 export type SimulationTickResult = {
   /** the parts still on the floor, as of the end of the tick */
   wipParts: WipPart[];
   /** only those that completed during *this* tick, not the run's history */
   finishedParts: FinishedPart[];
+  /** changeovers that began this tick; empty on most ticks */
+  setupsStarted: SetupStart[];
   /** what the floor was doing while it happened */
   metrics: TickMetrics;
 };
@@ -121,8 +138,11 @@ export function simulateTick(
   tickNum: number,
   workCenters: Map<number, WorkCenter>,
   rngSeed: number,
+  /** (work order, step) pairs whose changeover is already paid; see `setupKey` */
+  setupDone: ReadonlySet<string> = new Set(),
 ): SimulationTickResult {
   const finishedParts: FinishedPart[] = [];
+  const setupsStarted: SetupStart[] = [];
   const claims: Claim[] = [];
 
   for (const source of wipParts) {
@@ -148,12 +168,26 @@ export function simulateTick(
     inUse.set(step.workCenterId, (inUse.get(step.workCenterId) ?? 0) + 1);
   }
 
-  // admit waiting parts onto whatever machines are still free
+  // Admit waiting parts onto whatever machines are still free. Every part
+  // here is fresh at its step (progress resets on transition and a part in
+  // service holds its machine through pass one), so this is where a work
+  // order's one changeover per step happens: the first of its units admitted
+  // pays the setup time, folded into its own process time — admission-pays,
+  // not arrival-pays, because units can *arrive* out of admission order and
+  // the setup belongs with the unit that actually reaches a machine first.
+  const startedThisTick = new Set<string>();
   for (const { part, step, workCenter } of claims) {
     if (inService.has(part.id)) continue;
     if ((inUse.get(step.workCenterId) ?? 0) >= workCenter.capacity) continue;
     inService.add(part.id);
     inUse.set(step.workCenterId, (inUse.get(step.workCenterId) ?? 0) + 1);
+
+    if (step.setupTimeSeconds <= 0) continue;
+    const key = setupKey(part.workOrderId, part.stepIndex);
+    if (setupDone.has(key) || startedThisTick.has(key)) continue;
+    startedThisTick.add(key);
+    part.actualProcessTimeSeconds += step.setupTimeSeconds;
+    setupsStarted.push({ workOrderId: part.workOrderId, stepIndex: part.stepIndex });
   }
 
   const finishedIds = new Set<string>();
@@ -191,6 +225,7 @@ export function simulateTick(
   return {
     wipParts: remaining,
     finishedParts,
+    setupsStarted,
     metrics: collectMetrics(
       claims,
       inUse,

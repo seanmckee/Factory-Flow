@@ -951,15 +951,27 @@ the material cents are frozen per scrapped unit — the same argument that made
       — both halves of the overage decision on the board. Arithmetic only so
       far: the engine reads neither column until 6C.2/6C.3, so the live
       verification of the due-day stories lands there.
-- [ ] 6C.2 Engine: setup + tests. `RoutingStep` gains `setupTimeSeconds`
+- [x] 6C.2 Engine: setup + tests. `RoutingStep` gains `setupTimeSeconds`
       (required, not optional — the 6B `exactOptionalPropertyTypes` rule);
       the admission pass charges the first fresh unit per (work order, step)
-      and reports the setups it started; `RunState` gains the setup-done set,
+      — every pass-two admit is fresh, since progress resets on transition and
+      a mid-process part holds its machine through pass one — and reports the
+      setups it started; `RunState` gains the setup-done set,
       `RunBatch` the advanced set plus the batch's new setups. Tests: first
       admitted unit pays and the second doesn't; two work orders on one
       routing each pay their own; capacity 2 admitting two fresh units of one
-      work order in one tick charges exactly one; the
-      one-batch-vs-several test re-run with nonzero setup times.
+      work order in one tick charges exactly one; a transition draws clean and
+      the setup lands at the next admission; the
+      one-batch-vs-several test re-run with nonzero setup times, carrying
+      `setupDone` between chunks. **Two rules settled here:** a part already
+      mid-process never pays (so a pre-6C run reloading mid-step is never
+      retro-charged), and a zero setup time is never *recorded* as a
+      changeover — recording it would write a row per (work order, step) for
+      steps that need none. `loadRunState` and the floor read the new columns
+      already (the engine type requires them); the release pin and the
+      `setup_started_at_tick` write-back are 6C.4, which is safe to stage
+      because until release pins them every stored setup time is 0 and the
+      engine provably no-ops.
 - [ ] 6C.3 Engine: scrap + tests. `unitDraw` gains the domain (process keys
       byte-for-byte unchanged — assert that in a test); `RoutingStep.scrapBps`
       required; the completion path draws, and a failed unit exits as a

@@ -7,7 +7,7 @@ const SEED = 42;
 
 /** one operation at center 10, so a part finishes every 5 ticks or so */
 const oneStep: Routing = {
-  steps: [{ workCenterId: 10, processTimeSeconds: 5 }],
+  steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 }],
 };
 
 const workCenters = new Map<number, WorkCenter>([
@@ -55,6 +55,7 @@ const state = (overrides: Partial<RunState> = {}): RunState => ({
   priorCounts: new Map(),
   costs: freeCosts,
   carryRemainder: 0,
+  setupDone: new Set<string>(),
   ...overrides,
 });
 
@@ -246,6 +247,73 @@ describe("simulateBatch", () => {
     expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
   });
 
+  it("pays a changeover once, however the run is chunked", () => {
+    // the reason the paid state is persisted rather than derived: a batch
+    // boundary must not re-charge a setup an earlier batch already paid
+    const withSetup = (): Partial<RunState> => ({
+      wipParts: [part("p1"), part("p2", { unitIndex: 1 })],
+      routingByWorkOrder: new Map([
+        [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4 }] }],
+      ]),
+    });
+    const once = simulateBatch(state(withSetup()), 30);
+
+    let carried = state(withSetup());
+    const chunks = [];
+    for (let i = 0; i < 3; i++) {
+      const batch = simulateBatch(carried, 10);
+      chunks.push(batch);
+      carried = state({
+        ...withSetup(),
+        tickNum: batch.tickNum,
+        wipParts: batch.wipParts,
+        priorCounts: batch.priorCounts,
+        setupDone: batch.setupDone,
+      });
+    }
+
+    expect(chunks.flatMap((b) => b.setupsStarted)).toEqual(once.setupsStarted);
+    expect(once.setupsStarted).toHaveLength(1);
+    expect(chunks.flatMap((b) => b.finishedParts)).toEqual(once.finishedParts);
+    expect(chunks.flatMap((b) => b.ticks)).toEqual(once.ticks);
+  });
+
+  it("stamps a changeover with the tick it began and carries the set out", () => {
+    const batch = simulateBatch(
+      state({
+        tickNum: 100,
+        wipParts: [part("p1")],
+        routingByWorkOrder: new Map([
+          [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4 }] }],
+        ]),
+      }),
+      1,
+    );
+
+    expect(batch.setupsStarted).toEqual([
+      { workOrderId: 10, stepIndex: 0, atTick: 101 },
+    ]);
+    expect(batch.setupDone.has("10:0")).toBe(true);
+    // the input state's set is copied, not mutated
+    expect(state().setupDone.has("10:0")).toBe(false);
+  });
+
+  it("charges nothing for a changeover loaded as already paid", () => {
+    const alreadySetUp = state({
+      wipParts: [part("p1")],
+      routingByWorkOrder: new Map([
+        [10, { steps: [{ workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 4 }] }],
+      ]),
+      setupDone: new Set(["10:0"]),
+    });
+    const batch = simulateBatch(alreadySetUp, 6);
+
+    // 5 seconds of process and no setup: the part is done, and nothing started
+    expect(batch.finishedParts).toHaveLength(1);
+    expect(batch.finishedParts[0]?.completedAtTick).toBe(5);
+    expect(batch.setupsStarted).toEqual([]);
+  });
+
   it("is the same run again from the same seed, whatever the part ids are", () => {
     // the property the seed exists for. Part uuids are minted fresh at every
     // release, so while they were the draw key a re-created run drew different
@@ -288,8 +356,8 @@ describe("simulateBatch", () => {
             10,
             {
               steps: [
-                { workCenterId: 10, processTimeSeconds: 5 },
-                { workCenterId: 20, processTimeSeconds: 1000 },
+                { workCenterId: 10, processTimeSeconds: 5, setupTimeSeconds: 0 },
+                { workCenterId: 20, processTimeSeconds: 1000, setupTimeSeconds: 0 },
               ],
             },
           ],

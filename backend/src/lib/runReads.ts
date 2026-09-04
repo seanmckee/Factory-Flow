@@ -340,6 +340,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
         workOrderId: runWorkOrderSteps.workOrderId,
         workCenterId: runWorkOrderSteps.workCenterId,
         processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
+        setupTimeSeconds: runWorkOrderSteps.setupTimeSeconds,
       })
       .from(runWorkOrderSteps)
       .where(eq(runWorkOrderSteps.runId, run.id))
@@ -361,6 +362,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     const pinnedStep = {
       workCenterId: step.workCenterId,
       processTimeSeconds: step.processTimeSeconds,
+      setupTimeSeconds: step.setupTimeSeconds,
     };
     if (routing) routing.steps.push(pinnedStep);
     else routingByWorkOrder.set(step.workOrderId, { steps: [pinnedStep] });
