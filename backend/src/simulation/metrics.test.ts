@@ -17,18 +17,23 @@ const makeWorkCenters = (...centers: [id: number, capacity: number][]) =>
 
 const testWorkCenters = makeWorkCenters([10, 1], [20, 1]);
 
-/** One tick's observations. `at` is `[busy, queued]` per work center. */
+/**
+ * One tick's observations. `at` is `[busy, queued, capacity]` per work center,
+ * capacity defaulting to the single machine most of these tests want — it is
+ * per observation because 6E lets it move mid-run.
+ */
 const makeTick = (
   tickNum: number,
   wipCount: number,
-  at: Record<number, [busy: number, queued: number]>,
+  at: Record<number, [busy: number, queued: number, capacity?: number]>,
 ): TickMetrics => ({
   tickNum,
   wipCount,
-  workCenters: Object.entries(at).map(([id, [busy, queued]]) => ({
+  workCenters: Object.entries(at).map(([id, [busy, queued, capacity = 1]]) => ({
     workCenterId: Number(id),
     busy,
     queued,
+    capacity,
   })),
 });
 
@@ -40,17 +45,50 @@ describe("aggregateMetrics", () => {
     const centers = makeWorkCenters([10, 2]);
     const result = aggregateMetrics(
       [
-        makeTick(1, 3, { 10: [2, 1] }),
-        makeTick(2, 3, { 10: [2, 1] }),
-        makeTick(3, 2, { 10: [1, 0] }),
-        makeTick(4, 0, { 10: [0, 0] }),
+        makeTick(1, 3, { 10: [2, 1, 2] }),
+        makeTick(2, 3, { 10: [2, 1, 2] }),
+        makeTick(3, 2, { 10: [1, 0, 2] }),
+        makeTick(4, 0, { 10: [0, 0, 2] }),
       ],
       centers,
     );
 
     // 5 machine-ticks worked out of 2 machines x 4 ticks
     expect(at(result, 10)?.busyMachineTicks).toBe(5);
+    expect(at(result, 10)?.capacityTicks).toBe(8);
     expect(at(result, 10)?.utilization).toBe(5 / 8);
+  });
+
+  it("divides by each observation's own capacity, not the current one", () => {
+    // the centre ran one machine flat out for two ticks, then a purchase gave
+    // it a second and both ran flat out for two more. It was saturated
+    // throughout, and that is what the window must say — dividing all four
+    // ticks by today's two machines would read 75% and hide the constraint in
+    // exactly the window opened to judge the purchase.
+    const result = aggregateMetrics(
+      [
+        makeTick(1, 4, { 10: [1, 3, 1] }),
+        makeTick(2, 4, { 10: [1, 3, 1] }),
+        makeTick(3, 4, { 10: [2, 2, 2] }),
+        makeTick(4, 4, { 10: [2, 2, 2] }),
+      ],
+      makeWorkCenters([10, 2]),
+    );
+
+    expect(at(result, 10)?.busyMachineTicks).toBe(6);
+    expect(at(result, 10)?.capacityTicks).toBe(6);
+    expect(at(result, 10)?.utilization).toBe(1);
+  });
+
+  it("reads a centre retired to no machines as zero, not as a division by zero", () => {
+    const result = aggregateMetrics(
+      [makeTick(1, 0, { 10: [0, 0, 0] }), makeTick(2, 0, { 10: [0, 0, 0] })],
+      makeWorkCenters([10, 0]),
+    );
+
+    expect(at(result, 10)?.capacityTicks).toBe(0);
+    expect(at(result, 10)?.utilization).toBe(0);
+    expect(at(result, 10)?.observedTicks).toBe(2);
   });
 
   it("reports a saturated center as fully utilized", () => {
@@ -129,6 +167,7 @@ describe("aggregateMetrics", () => {
       workCenterId: 20,
       utilization: 0,
       busyMachineTicks: 0,
+      capacityTicks: 0,
       meanQueueDepth: 0,
       maxQueueDepth: 0,
       observedTicks: 0,
@@ -170,6 +209,7 @@ describe("aggregateMetrics", () => {
           workCenterId: 10,
           utilization: 0,
           busyMachineTicks: 0,
+          capacityTicks: 0,
           meanQueueDepth: 0,
           maxQueueDepth: 0,
           observedTicks: 0,
@@ -178,6 +218,7 @@ describe("aggregateMetrics", () => {
           workCenterId: 20,
           utilization: 0,
           busyMachineTicks: 0,
+          capacityTicks: 0,
           meanQueueDepth: 0,
           maxQueueDepth: 0,
           observedTicks: 0,

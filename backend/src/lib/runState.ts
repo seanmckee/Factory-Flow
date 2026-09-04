@@ -162,10 +162,17 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     rngSeed: run.rngSeed,
     wipParts,
     routingByWorkOrder,
+    // effective capacity, not the machine count: a machine with nobody on it
+    // runs nothing, and an operator with no machine runs nothing either. The
+    // min is taken here so the engine never learns what an operator is — the
+    // same boundary the pre-multiplied wage rates sit on.
     workCenters: new Map(
       storedCenters.map((center) => [
         center.workCenterId,
-        { id: center.workCenterId, capacity: center.capacity },
+        {
+          id: center.workCenterId,
+          capacity: Math.min(center.capacity, center.operators),
+        },
       ]),
     ),
     workOrders: runWorkOrders,

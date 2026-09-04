@@ -435,9 +435,10 @@ export async function advanceRun(
             workCenterId: center.workCenterId,
             busy: center.busy,
             queued: center.queued,
+            capacity: center.capacity,
           })),
         );
-        for (const slice of chunked(centerRows, chunkFor(5))) {
+        for (const slice of chunked(centerRows, chunkFor(6))) {
           await tx.insert(runTickWorkCenters).values(slice);
         }
 

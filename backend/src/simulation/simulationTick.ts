@@ -35,6 +35,15 @@ export type TickWorkCenterMetrics = {
    * in the engine, so this is the only place it is visible.
    */
   queued: number;
+  /**
+   * The effective capacity this tick admitted against — the observation's own
+   * denominator. Emitted rather than read live because 6E's capital actions
+   * make capacity a thing that moves mid-run: a window spanning a purchase
+   * would otherwise divide the ticks *before* it by the machine count after
+   * it, and report the constraint half as busy in exactly the window someone
+   * opens to judge the purchase.
+   */
+  capacity: number;
 };
 
 /** One tick's observations, the raw material `metrics.ts` aggregates. */
@@ -322,6 +331,7 @@ function collectMetrics(
       workCenterId: workCenter.id,
       busy: inUse.get(workCenter.id) ?? 0,
       queued: queued.get(workCenter.id) ?? 0,
+      capacity: workCenter.capacity,
     })),
   };
 }

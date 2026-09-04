@@ -267,16 +267,25 @@ advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
 
 `simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
-`wipCount`, and a `{ workCenterId, busy, queued }` entry **per work center in
+`wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry **per work
+center in
 the map, idle ones included**. `busy` counts machines, not parts. This is
 emitted rather than derived afterwards because a part that finished during the
 tick held a machine for all of it and is gone from `wipParts` by the time
 anything could look — so a centre's busiest ticks are exactly what a post-tick
-snapshot undercounts. Keep the list total: `aggregateMetrics` in `metrics.ts`
-reduces a window of these to utilization (busy machine-ticks ÷ capacity ×
-observed ticks), queue depth and WIP, and per-centre `observedTicks` is the
-denominator so a work center created mid-run isn't reported idle for time it
-did not exist.
+snapshot undercounts. `capacity` is emitted for the same reason since 6E: it is
+the **effective** capacity the tick admitted against (`min(machines,
+operators)`, taken at the load boundary so the engine never learns what an
+operator is), and a capital action moves it mid-run, so the observation has to
+carry its own denominator. Keep the list total: `aggregateMetrics` in
+`metrics.ts` reduces a window of these to utilization (busy machine-ticks ÷
+**summed capacity-ticks**, reported as `capacityTicks`), queue depth and WIP.
+Per-centre `observedTicks` is what makes that denominator right rather than
+being it — a work center created mid-run isn't reported idle for time it did
+not exist — and a centre retired to no machines contributes no capacity-ticks,
+so it reads 0 instead of dividing by zero. Stored observations from before 6E
+have a null `capacity` column and fall back to the run's frozen capacity,
+which is exactly what it was throughout a run that could not change it.
 
 Cycle time comes from the other series: `WipPart` carries `releasedAtTick` for
 its whole life and `finish()` copies it onto the `FinishedPart`, so

@@ -549,7 +549,12 @@ describe("simulateTick", () => {
         10, 20,
       ]);
       expect(result.metrics.tickNum).toBe(1);
-      expect(at(result, 20)).toEqual({ workCenterId: 20, busy: 0, queued: 0 });
+      expect(at(result, 20)).toEqual({
+        workCenterId: 20,
+        busy: 0,
+        queued: 0,
+        capacity: 1,
+      });
     });
 
     it("counts machines in use, not parts at the center", () => {
@@ -558,13 +563,23 @@ describe("simulateTick", () => {
         makeWorkCenters(2),
       );
 
-      expect(at(result, 10)).toEqual({ workCenterId: 10, busy: 2, queued: 1 });
+      expect(at(result, 10)).toEqual({
+        workCenterId: 10,
+        busy: 2,
+        queued: 1,
+        capacity: 2,
+      });
     });
 
     it("counts a part that claimed no machine as queued", () => {
       const result = tick([makeWipPart("part-1"), makeWipPart("part-2")]);
 
-      expect(at(result, 10)).toEqual({ workCenterId: 10, busy: 1, queued: 1 });
+      expect(at(result, 10)).toEqual({
+        workCenterId: 10,
+        busy: 1,
+        queued: 1,
+        capacity: 1,
+      });
     });
 
     it("counts the machine a part finished on as busy", () => {
@@ -604,8 +619,8 @@ describe("simulateTick", () => {
       expect(result.finishedParts.length).toBe(1);
       expect(result.metrics.wipCount).toBe(0);
       expect(result.metrics.workCenters).toEqual([
-        { workCenterId: 10, busy: 0, queued: 0 },
-        { workCenterId: 20, busy: 0, queued: 0 },
+        { workCenterId: 10, busy: 0, queued: 0, capacity: 1 },
+        { workCenterId: 20, busy: 0, queued: 0, capacity: 1 },
       ]);
     });
   });

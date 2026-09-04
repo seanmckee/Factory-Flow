@@ -1276,12 +1276,29 @@ afterwards.
       dated *inside* a batch splits identically one-batch-vs-three, so
       chunking stays safe even though the lock means a real batch never spans
       a change.
-- [ ] 6E.3 Engine: effective capacity + the observed denominator + tests.
+- [x] 6E.3 Engine: effective capacity + the observed denominator + tests.
       `min(machines, operators)` at the loader; `TickWorkCenterMetrics` gains
       `capacity`; `aggregateMetrics` divides by summed capacity-ticks with the
       null fallback. A centre retired to zero machines observes zero
       capacity-ticks, so its utilization follows the empty-window rule already
       in the aggregate rather than dividing by zero.
+      **`WorkCenterAggregate` gains `capacityTicks`** — the denominator,
+      reported beside `busyMachineTicks` for the same auditing reason, and
+      `observedTicks` stays as what makes it *right* (a centre created mid-run
+      is not idle for time it did not exist) rather than as the denominator
+      itself. The test that pins the point: a centre saturated on one machine
+      for two ticks and on two machines for two more reads **100%**, where
+      dividing all four by today's two machines reads 75% and hides the
+      constraint in the very window opened to judge the purchase.
+      **The floor takes the min too**, so the cards draw slots a part can
+      actually be admitted to — a machine nobody is standing at is not a slot.
+      **A consequence for 6E.5, recorded here:** the dashboard's per-centre
+      Standing cost column is `rate × observedTicks ÷ dayTicks` client-side,
+      and 6E makes it wrong twice over — the rate is per machine now, and both
+      the rate and the machine count can move mid-window. `capacityTicks` is
+      *not* the fix: rent is owed on machines whether or not anyone staffs
+      them, so effective capacity-ticks is the wrong basis. Either the column
+      goes or machine-ticks become their own observation; decided in 6E.5.
 - [ ] 6E.4 Live master data + the action API. `operators` and the three prices
       through work-centre POST/PATCH and the GETs;
       `POST /api/runs/:id/actions` — one endpoint with a discriminated-union

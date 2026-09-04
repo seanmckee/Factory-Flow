@@ -89,8 +89,8 @@ describe("simulateBatch", () => {
   it("reports every work center every tick, idle ones included", () => {
     const batch = simulateBatch(state({ wipParts: [part("p1")] }), 1);
     expect(batch.ticks[0]?.workCenters).toEqual([
-      { workCenterId: 10, busy: 1, queued: 0 },
-      { workCenterId: 20, busy: 0, queued: 0 },
+      { workCenterId: 10, busy: 1, queued: 0, capacity: 1 },
+      { workCenterId: 20, busy: 0, queued: 0, capacity: 1 },
     ]);
   });
 

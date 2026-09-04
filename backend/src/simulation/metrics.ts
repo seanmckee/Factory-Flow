@@ -13,21 +13,28 @@ import type { FinishedPart, WorkCenter } from "./types.js";
 export type WorkCenterAggregate = {
   workCenterId: number;
   /**
-   * Busy machine-ticks ÷ (capacity × observed ticks), in `[0, 1]`. 1 means
-   * every machine ran every tick — the signature of the constraint.
+   * Busy machine-ticks ÷ capacity-ticks, in `[0, 1]`. 1 means every machine
+   * ran every tick — the signature of the constraint.
    */
   utilization: number;
   /** Machine-ticks actually worked, the numerator above, kept for auditing. */
   busyMachineTicks: number;
+  /**
+   * Machine-ticks *available*, the denominator: each observation's own
+   * capacity, summed. Not `observedTicks × capacity`, because 6E's capital
+   * actions move capacity mid-run and the ticks before a purchase were
+   * genuinely observed against fewer machines.
+   */
+  capacityTicks: number;
   /** Mean parts waiting at this center per tick. */
   meanQueueDepth: number;
   /** The worst it got in the window — a mean hides the pile-up that caused it. */
   maxQueueDepth: number;
   /**
-   * Ticks in the window that reported this center at all, which is the
-   * denominator above rather than `tickCount`. A center created mid-run has no
-   * observations before it existed, and dividing those in would report it as
-   * idle for time it did not exist.
+   * Ticks in the window that reported this center at all — not the utilization
+   * denominator (that is `capacityTicks`), but what makes it right: a center
+   * created mid-run has no observations before it existed, and dividing those
+   * in would report it as idle for time it did not exist.
    */
   observedTicks: number;
 };
@@ -67,6 +74,7 @@ export function aggregateMetrics(
   workCenters: Map<number, WorkCenter>,
 ): MetricsAggregate {
   const busyMachineTicks = new Map<number, number>();
+  const capacityTicks = new Map<number, number>();
   const queuedPartTicks = new Map<number, number>();
   const maxQueueDepth = new Map<number, number>();
   const observedTicks = new Map<number, number>();
@@ -87,6 +95,10 @@ export function aggregateMetrics(
       }
       observedTicks.set(id, (observedTicks.get(id) ?? 0) + 1);
       busyMachineTicks.set(id, (busyMachineTicks.get(id) ?? 0) + observation.busy);
+      capacityTicks.set(
+        id,
+        (capacityTicks.get(id) ?? 0) + observation.capacity,
+      );
       queuedPartTicks.set(id, (queuedPartTicks.get(id) ?? 0) + observation.queued);
       maxQueueDepth.set(
         id,
@@ -109,11 +121,15 @@ export function aggregateMetrics(
     workCenters: [...workCenters.values()].map((workCenter) => {
       const observed = observedTicks.get(workCenter.id) ?? 0;
       const busy = busyMachineTicks.get(workCenter.id) ?? 0;
-      const machineTicks = observed * workCenter.capacity;
+      // each observation's own capacity, summed — so a centre retired to zero
+      // machines contributes no capacity-ticks and reads 0 rather than
+      // dividing by zero, the same answer an unobserved centre gives
+      const machineTicks = capacityTicks.get(workCenter.id) ?? 0;
       return {
         workCenterId: workCenter.id,
         utilization: machineTicks === 0 ? 0 : busy / machineTicks,
         busyMachineTicks: busy,
+        capacityTicks: machineTicks,
         meanQueueDepth:
           observed === 0 ? 0 : (queuedPartTicks.get(workCenter.id) ?? 0) / observed,
         maxQueueDepth: maxQueueDepth.get(workCenter.id) ?? 0,

@@ -244,11 +244,22 @@ export async function getRunMetrics(
       .select({
         workCenterId: runWorkCenters.workCenterId,
         capacity: runWorkCenters.capacity,
+        operators: runWorkCenters.operators,
       })
       .from(runWorkCenters)
       .where(eq(runWorkCenters.runId, runId))
       .orderBy(runWorkCenters.workCenterId),
   ]);
+
+  // effective capacity as the run stands now — the fallback for observations
+  // written before 6E recorded their own denominator. Those runs could not
+  // change capacity at all, so what it is now is what it was throughout.
+  const effectiveCapacity = new Map(
+    storedCenters.map((center) => [
+      center.workCenterId,
+      Math.min(center.capacity, center.operators),
+    ]),
+  );
 
   const centersByTick = new Map<number, TickWorkCenterMetrics[]>();
   for (const row of centerRows) {
@@ -256,6 +267,7 @@ export async function getRunMetrics(
       workCenterId: row.workCenterId,
       busy: row.busy,
       queued: row.queued,
+      capacity: row.capacity ?? effectiveCapacity.get(row.workCenterId) ?? 0,
     };
     const list = centersByTick.get(row.tickNum);
     if (list) list.push(entry);
@@ -291,12 +303,17 @@ export async function getRunMetrics(
     wageCents,
     netCents:
       throughputCents - operatingExpenseCents - carryingCostCents - wageCents,
+    // the roster only: utilization's denominator now comes from each
+    // observation's own capacity, not from this map
     flow: aggregateMetrics(
       series,
       new Map(
         storedCenters.map((center) => [
           center.workCenterId,
-          { id: center.workCenterId, capacity: center.capacity },
+          {
+            id: center.workCenterId,
+            capacity: effectiveCapacity.get(center.workCenterId) ?? 0,
+          },
         ]),
       ),
     ),
@@ -378,6 +395,7 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
       .select({
         workCenterId: runWorkCenters.workCenterId,
         capacity: runWorkCenters.capacity,
+        operators: runWorkCenters.operators,
         standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
         wageCentsPerHour: runWorkCenters.wageCentsPerHour,
       })
@@ -408,10 +426,16 @@ export async function getRunFloor(runId: number): Promise<RunFloor> {
     progressSeconds: part.progressSeconds,
     actualProcessTimeSeconds: part.actualProcessTimeSeconds,
   }));
+  // effective capacity, as the loader does: the floor draws the slots parts
+  // can actually be admitted to, so a machine nobody is standing at is not a
+  // slot
   const centerMap = new Map(
     storedCenters.map((center) => [
       center.workCenterId,
-      { id: center.workCenterId, capacity: center.capacity },
+      {
+        id: center.workCenterId,
+        capacity: Math.min(center.capacity, center.operators),
+      },
     ]),
   );
   const names = new Map(liveCenters.map((center) => [center.id, center.name]));
