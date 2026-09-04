@@ -9,8 +9,8 @@ import {
   openingCents,
 } from "../simulation/cumulativeThroughput";
 import { netPerTick, openingNetCents } from "../simulation/netProfit";
-import { formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
-import { throughputRate } from "../simulation/throughputRate";
+import { chartBucket, formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
+import { bucketThroughputRate, throughputRate } from "../simulation/throughputRate";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
 import {
@@ -168,6 +168,7 @@ function SimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
+  const [seriesBucket, setSeriesBucket] = useState(1);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
 
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -220,17 +221,25 @@ function SimulationPage() {
     [report, showToast],
   );
 
-  /** Everything the page draws, in one place, so a tick refreshes it together. */
+  /**
+   * Everything the page draws, in one place, so a tick refreshes it together.
+   * The summary lands first because its tick number picks the chart bucket —
+   * raw seconds while the run fits on screen, then minutes, then hours — so
+   * the Trends tab always holds the whole run at chart resolution instead of
+   * the newest-5000-tick suffix that once hid a drained floor entirely.
+   */
   const refresh = useCallback(
     async (id: number) => {
-      const [summary, runFloor, ticks] = await Promise.all([
-        getRun(id),
+      const summary = await getRun(id);
+      const bucket = chartBucket(summary.tickNum);
+      const [runFloor, ticks] = await Promise.all([
         getRunFloor(id),
-        getRunTicks(id),
+        getRunTicks(id, bucket),
       ]);
       setRun(summary);
       setFloor(runFloor);
       setSeries(ticks);
+      setSeriesBucket(bucket);
       // keep the picker's tick number honest as the run advances
       setRuns((prev) =>
         prev.map((option) =>
@@ -379,6 +388,9 @@ function SimulationPage() {
     async (target: number, jumpLabel: string) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
+      if ((run?.wipCount ?? 0) === 0) {
+        return showToast("Nothing on the floor — release a work order first", "error");
+      }
 
       setIsRunning(false);
       if (!(await awaitIdleClock())) {
@@ -407,6 +419,15 @@ function SimulationPage() {
             await refresh(runId);
           } catch (error) {
             report(error, "Failed to load run");
+          }
+          // nothing can land on the floor mid-jump (the jump holds the run's
+          // lock), so every tick past a drain is rent on an empty factory the
+          // user didn't choose — stop, and say where
+          if (result.wipCount === 0) {
+            showToast(
+              `Floor emptied at ${formatTickTime(result.tickNum, run?.dayTicks ?? TICKS_PER_DAY)} — stopped the jump`,
+            );
+            break;
           }
         }
       } catch (error) {
@@ -525,13 +546,19 @@ function SimulationPage() {
         ...point,
         secondary: net[i]?.cents,
       })),
-      rate: throughputRate(history).map(toPoint),
+      // a bucketed sample already spans the rate window, so it rescales
+      // instead of sliding — index arithmetic on a strided series would mix
+      // ticks and samples
+      rate:
+        seriesBucket > 1
+          ? bucketThroughputRate(history, seriesBucket).map(toPoint)
+          : throughputRate(history).map(toPoint),
       wip: series.map((sample) => ({
         tick: sample.tickNum,
         value: sample.wipCount,
       })),
     };
-  }, [series, runTotalCents, runNetTotalCents]);
+  }, [series, seriesBucket, runTotalCents, runNetTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker

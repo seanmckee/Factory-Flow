@@ -39,3 +39,20 @@ export function throughputRate(
     return { tick: sample.tick, cents: (windowSum / covered) * 60 };
   });
 }
+
+/**
+ * The rate series for a **bucketed** history: each sample's cents are already
+ * a whole bucket's money, so the rate is that sum rescaled to cents per
+ * simulated minute — no trailing window, because a minute bucket *is* the
+ * window `throughputRate` slides over the raw series, and index arithmetic on
+ * a strided series would mix ticks and samples.
+ */
+export function bucketThroughputRate(
+  history: ThroughputSample[],
+  bucketTicks: number,
+): ThroughputSample[] {
+  return history.map((sample) => ({
+    tick: sample.tick,
+    cents: (sample.cents * 60) / bucketTicks,
+  }));
+}

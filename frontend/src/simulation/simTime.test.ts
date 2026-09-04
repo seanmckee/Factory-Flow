@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatDays, formatTickTime, ticksToDays, TICKS_PER_DAY } from "./simTime";
+import { chartBucket, formatDays, formatTickTime, ticksToDays, MAX_CHART_POINTS, TICKS_PER_DAY } from "./simTime";
 
 describe("ticksToDays", () => {
   it("converts a whole day exactly", () => {
@@ -40,5 +40,22 @@ describe("formatTickTime", () => {
   it("rolls to the next day at ticksPerDay", () => {
     expect(formatTickTime(TICKS_PER_DAY)).toBe("Day 2 · 0:00:00");
     expect(formatTickTime(25, 10)).toBe("Day 3 · 0:00:05");
+  });
+});
+
+describe("chartBucket", () => {
+  it("stays at raw seconds while the run fits on screen", () => {
+    expect(chartBucket(0)).toBe(1);
+    expect(chartBucket(MAX_CHART_POINTS)).toBe(1);
+  });
+
+  it("coarsens to minutes, then hours, as the run outgrows the screen", () => {
+    expect(chartBucket(MAX_CHART_POINTS + 1)).toBe(60);
+    expect(chartBucket(MAX_CHART_POINTS * 60)).toBe(60);
+    expect(chartBucket(MAX_CHART_POINTS * 60 + 1)).toBe(3_600);
+  });
+
+  it("keeps a full day at minute resolution", () => {
+    expect(chartBucket(TICKS_PER_DAY)).toBe(60);
   });
 });
