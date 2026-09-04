@@ -20,6 +20,7 @@ import {
   createRunSchema,
   idParamSchema,
   metricsWindowSchema,
+  ticksQuerySchema,
   releaseWorkOrderSchema,
 } from "../schemas/orders.js";
 
@@ -130,10 +131,10 @@ router.get("/:id/ticks", async (req, res) => {
     const params = parseOr400(idParamSchema, req.params, res);
     if (!params) return;
 
-    const query = parseOr400(metricsWindowSchema, req.query, res);
+    const query = parseOr400(ticksQuerySchema, req.query, res);
     if (!query) return;
 
-    res.json(await getRunTicks(params.id, query.fromTick, query.toTick));
+    res.json(await getRunTicks(params.id, query.fromTick, query.toTick, query.bucket));
   } catch (error) {
     fail(res, error, "Error getting run ticks");
   }

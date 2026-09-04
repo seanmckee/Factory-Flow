@@ -252,3 +252,18 @@ export const metricsWindowSchema = z.object({
     .positive({ error: "toTick must be greater than zero" })
     .optional(),
 });
+
+/**
+ * `/ticks` takes the window plus an optional bucket: rows grouped per `bucket`
+ * ticks, money summed, WIP read at bucket end. 1 (the default) is the raw
+ * series; the chart asks in simulated minutes or hours once a run outgrows
+ * per-second resolution.
+ */
+export const ticksQuerySchema = metricsWindowSchema.extend({
+  bucket: z.coerce
+    .number({ error: "bucket must be a number" })
+    .int({ error: "bucket must be a whole number" })
+    .positive({ error: "bucket must be greater than zero" })
+    .max(86_400, { error: "bucket must be at most 86400 ticks" })
+    .optional(),
+});

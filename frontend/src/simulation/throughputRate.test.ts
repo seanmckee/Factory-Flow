@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { throughputRate } from "./throughputRate";
+import { throughputRate, bucketThroughputRate} from "./throughputRate";
 import type { ThroughputSample } from "./cumulativeThroughput";
 
 /** n ticks numbered from `firstTick`, each earning `cents`. */
@@ -49,5 +49,23 @@ describe("throughputRate", () => {
     expect(suffixRate.at(-1)).toEqual(wholeRate.at(-1));
     // and the left edge is flat, not a ramp up from zero
     expect(suffixRate[0].cents).toBe(25 * 60);
+  });
+});
+
+describe("bucketThroughputRate", () => {
+  it("rescales a minute bucket's cents to itself", () => {
+    expect(
+      bucketThroughputRate([{ tick: 60, cents: 500 }], 60),
+    ).toEqual([{ tick: 60, cents: 500 }]);
+  });
+
+  it("rescales an hour bucket to cents per minute", () => {
+    expect(
+      bucketThroughputRate([{ tick: 3_600, cents: 6_000 }], 3_600),
+    ).toEqual([{ tick: 3_600, cents: 100 }]);
+  });
+
+  it("maps an empty series to an empty series", () => {
+    expect(bucketThroughputRate([], 60)).toEqual([]);
   });
 });

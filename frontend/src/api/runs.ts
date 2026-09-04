@@ -77,7 +77,7 @@ export type AdvanceResult = {
   throughputCents: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
-  /** WIP still on the floor — what a jump running until idle stops on. */
+  /** WIP still on the floor after the advance — an agent's stop condition. */
   wipCount: number;
 };
 
@@ -146,8 +146,13 @@ export const getRun = (runId: number) =>
 export const getRunFloor = (runId: number) =>
   getJson<RunFloor>(`/api/runs/${runId}/floor`);
 
-export const getRunTicks = (runId: number) =>
-  getJson<TickSample[]>(`/api/runs/${runId}/ticks`);
+/** `bucket` groups the series server-side — money summed, WIP at bucket end. */
+export const getRunTicks = (runId: number, bucket = 1) =>
+  getJson<TickSample[]>(
+    bucket > 1
+      ? `/api/runs/${runId}/ticks?bucket=${bucket}`
+      : `/api/runs/${runId}/ticks`,
+  );
 
 /**
  * Omitting the window asks for the whole run. Not called per tick: it reads

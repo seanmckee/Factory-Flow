@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FastForward, Info, Play, Plus, Square, Trash2 } from "lucide-react";
+import { Info, Play, Plus, Square, Trash2 } from "lucide-react";
 import WorkCenterTable from "../components/WorkCenterTable";
-import SimulatingOverlay from "../components/SimulatingOverlay";
+import { Progress } from "@/components/ui/progress";
 import RunDashboard from "../components/RunDashboard";
 import TickSeriesChart from "../components/TickSeriesChart";
 import {
@@ -9,8 +9,8 @@ import {
   openingCents,
 } from "../simulation/cumulativeThroughput";
 import { netPerTick, openingNetCents } from "../simulation/netProfit";
-import { formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
-import { throughputRate } from "../simulation/throughputRate";
+import { chartBucket, formatTickTime, TICKS_PER_DAY } from "../simulation/simTime";
+import { bucketThroughputRate, throughputRate } from "../simulation/throughputRate";
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { ApiError, getJson } from "../api/client";
 import {
@@ -72,16 +72,17 @@ const TICK_INTERVAL_MS = 1000;
 const CLOCK_TICKS_PER_BEAT = 60;
 
 /**
- * A jump advances in chunks of one server transaction (`TICKS_PER_BATCH`), so
- * stopping one always lands on a committed tick boundary — a partly-advanced
- * run is not a state that exists.
+ * A jump advances in chunks of one server transaction (`TICKS_PER_BATCH` — one
+ * staffed hour), so stopping one always lands on a committed tick boundary — a
+ * partly-advanced run is not a state that exists — and the page refreshes as
+ * each chunk lands, so a day streams in hour by hour instead of blocking.
  */
-const CHUNK_TICKS = 500;
+const CHUNK_TICKS = 3600;
 
 /**
  * The preset jumps, in calendar units now that rates accrue per day — a day is
  * `TICKS_PER_DAY` staffed seconds (the run's own frozen `dayTicks` equals it
- * for every 6A run). Anything longer is what running until idle is for.
+ * for every 6A run).
  */
 const JUMP_PRESETS = [
   { label: "+1 hour", ticks: 3_600 },
@@ -89,26 +90,11 @@ const JUMP_PRESETS = [
   { label: "+1 day", ticks: TICKS_PER_DAY },
 ];
 
-/**
- * Where running until idle gives up. A floor that never empties — a routing
- * nothing can finish, demand that outruns the constraint — would otherwise
- * advance until the tab was closed.
- */
-const IDLE_TICK_CEILING = 100_000;
-
-/**
- * How long a jump has to be running before the overlay appears. Every preset
- * clears this, so it behaves as "always" for real work; it exists so a jump
- * that returns immediately doesn't flash a modal for a frame.
- */
-const OVERLAY_DELAY_MS = 200;
-
 /** A jump in flight: what it is doing and how far it has got. */
 type JumpProgress = {
   label: string;
   ticksDone: number;
-  /** null while running until idle — the end is unknown until WIP hits zero. */
-  ticksTotal: number | null;
+  ticksTotal: number;
   tickNum: number | null;
 };
 
@@ -182,6 +168,7 @@ function SimulationPage() {
   const [run, setRun] = useState<RunSummary | null>(null);
   const [floor, setFloor] = useState<RunFloor | null>(null);
   const [series, setSeries] = useState<TickSample[]>([]);
+  const [seriesBucket, setSeriesBucket] = useState(1);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
 
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
@@ -193,7 +180,6 @@ function SimulationPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   const [jump, setJump] = useState<JumpProgress | null>(null);
-  const [showOverlay, setShowOverlay] = useState(false);
   const [stopping, setStopping] = useState(false);
   const stopJump = useRef(false);
 
@@ -235,17 +221,25 @@ function SimulationPage() {
     [report, showToast],
   );
 
-  /** Everything the page draws, in one place, so a tick refreshes it together. */
+  /**
+   * Everything the page draws, in one place, so a tick refreshes it together.
+   * The summary lands first because its tick number picks the chart bucket —
+   * raw seconds while the run fits on screen, then minutes, then hours — so
+   * the Trends tab always holds the whole run at chart resolution instead of
+   * the newest-5000-tick suffix that once hid a drained floor entirely.
+   */
   const refresh = useCallback(
     async (id: number) => {
-      const [summary, runFloor, ticks] = await Promise.all([
-        getRun(id),
+      const summary = await getRun(id);
+      const bucket = chartBucket(summary.tickNum);
+      const [runFloor, ticks] = await Promise.all([
         getRunFloor(id),
-        getRunTicks(id),
+        getRunTicks(id, bucket),
       ]);
       setRun(summary);
       setFloor(runFloor);
       setSeries(ticks);
+      setSeriesBucket(bucket);
       // keep the picker's tick number honest as the run advances
       setRuns((prev) =>
         prev.map((option) =>
@@ -391,12 +385,10 @@ function SimulationPage() {
    * the same server lock and the jump is the one that matters.
    */
   const runJump = useCallback(
-    async (target: number | "idle", jumpLabel?: string) => {
+    async (target: number, jumpLabel: string) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
-
-      const untilIdle = target === "idle";
-      if (untilIdle && (run?.wipCount ?? 0) === 0) {
+      if ((run?.wipCount ?? 0) === 0) {
         return showToast("Nothing on the floor — release a work order first", "error");
       }
 
@@ -405,56 +397,50 @@ function SimulationPage() {
         return showToast("The run is still advancing — try again", "error");
       }
 
-      const label = untilIdle
-        ? "Running until the floor is empty"
-        : `Advancing ${jumpLabel ?? `${target.toLocaleString()} ticks`}`;
-      const ticksTotal = untilIdle ? null : target;
+      const label = `Advancing ${jumpLabel}`;
 
       const startTick = run?.tickNum ?? 0;
       advancing.current = true;
       stopJump.current = false;
       setStopping(false);
-      setJump({ label, ticksDone: 0, ticksTotal, tickNum: null });
-      const gate = window.setTimeout(() => setShowOverlay(true), OVERLAY_DELAY_MS);
+      setJump({ label, ticksDone: 0, ticksTotal: target, tickNum: null });
 
-      const ceiling = ticksTotal ?? IDLE_TICK_CEILING;
       let done = 0;
-      let hitCeiling = false;
       try {
-        while (done < ceiling && !stopJump.current) {
-          const size = Math.min(CHUNK_TICKS, ceiling - done);
+        while (done < target && !stopJump.current) {
+          const size = Math.min(CHUNK_TICKS, target - done);
           const result = await advanceRun(runId, size);
           done += result.ticksAdvanced;
-          setJump({ label, ticksDone: done, ticksTotal, tickNum: result.tickNum });
-          if (untilIdle && result.wipCount === 0) break;
-          if (untilIdle && done >= ceiling) hitCeiling = true;
+          setJump({ label, ticksDone: done, ticksTotal: target, tickNum: result.tickNum });
+          // stream the chunk in: the floor, the charts and the run bar move
+          // as each committed hour lands, so a jump reads as the day flying
+          // by rather than a frozen screen
+          try {
+            await refresh(runId);
+          } catch (error) {
+            report(error, "Failed to load run");
+          }
+          // nothing can land on the floor mid-jump (the jump holds the run's
+          // lock), so every tick past a drain is rent on an empty factory the
+          // user didn't choose — stop, and say where
+          if (result.wipCount === 0) {
+            showToast(
+              `Floor emptied at ${formatTickTime(result.tickNum, run?.dayTicks ?? TICKS_PER_DAY)} — stopped the jump`,
+            );
+            break;
+          }
         }
       } catch (error) {
         reportAdvance(error, runId);
       } finally {
-        window.clearTimeout(gate);
-        setShowOverlay(false);
         setJump(null);
         setStopping(false);
         advancing.current = false;
       }
 
-      try {
-        await refresh(runId);
-      } catch (error) {
-        report(error, "Failed to load run");
-      }
-
-      // the strip re-windows onto exactly what the jump covered, which is the
-      // question a jump asks: what happened over *those* ticks
+      // the dashboard re-windows onto exactly what the jump covered, which is
+      // the question a jump asks: what happened over *those* ticks
       if (done > 0) await loadMetrics(runId, startTick + 1, startTick + done);
-
-      if (hitCeiling) {
-        showToast(
-          `Stopped at ${IDLE_TICK_CEILING.toLocaleString()} ticks with work still on the floor`,
-          "error",
-        );
-      }
     },
     [
       runId,
@@ -560,13 +546,19 @@ function SimulationPage() {
         ...point,
         secondary: net[i]?.cents,
       })),
-      rate: throughputRate(history).map(toPoint),
+      // a bucketed sample already spans the rate window, so it rescales
+      // instead of sliding — index arithmetic on a strided series would mix
+      // ticks and samples
+      rate:
+        seriesBucket > 1
+          ? bucketThroughputRate(history, seriesBucket).map(toPoint)
+          : throughputRate(history).map(toPoint),
       wip: series.map((sample) => ({
         tick: sample.tickNum,
         value: sample.wipCount,
       })),
     };
-  }, [series, runTotalCents, runNetTotalCents]);
+  }, [series, seriesBucket, runTotalCents, runNetTotalCents]);
   const workOrderById = new Map(workOrders.map((wo) => [wo.id, wo]));
   // (run_id, work_order_id) is the release table's primary key — a work order
   // releases once per run — so an already-released order leaves the picker
@@ -717,7 +709,8 @@ function SimulationPage() {
         <div className="h-6 w-px bg-border" />
 
         {/* Fast-forward. The clock is for watching; these are for seeing where
-            a run ends up, which is what the presets and until-idle answer. */}
+            a run ends up. (Run until idle is gone: with rent accruing against
+            time, an empty floor is a goal no factory has.) */}
         <span className="text-xs text-muted-foreground">Fast-forward</span>
         {JUMP_PRESETS.map((preset) => (
           <Button
@@ -731,14 +724,34 @@ function SimulationPage() {
             {preset.label}
           </Button>
         ))}
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => runJump("idle")}
-          disabled={runId === null || jump !== null}
-        >
-          <FastForward className="size-4" /> Run until idle
-        </Button>
+
+        {/* A jump in flight: inline progress instead of a blocking modal — the
+            tabs stay live and stream each committed hour in. Stop halts
+            dispatching and never aborts the chunk in flight, so it still lands
+            on a committed boundary. */}
+        {jump && (
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">{jump.label}</span>
+            <Progress
+              value={Math.min(100, (jump.ticksDone / jump.ticksTotal) * 100)}
+              className="w-32"
+            />
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {Math.round((jump.ticksDone / jump.ticksTotal) * 100)}%
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={stopping}
+              onClick={() => {
+                stopJump.current = true;
+                setStopping(true);
+              }}
+            >
+              <Square className="size-3.5" /> {stopping ? "Stopping…" : "Stop"}
+            </Button>
+          </div>
+        )}
       </div>
 
       {run ? (
@@ -874,22 +887,6 @@ function SimulationPage() {
         </div>
       )}
 
-      {jump && showOverlay && (
-        <SimulatingOverlay
-          label={jump.label}
-          ticksDone={jump.ticksDone}
-          ticksTotal={jump.ticksTotal}
-          tickNum={jump.tickNum}
-          // a jump inside one chunk has nothing to report until it is done, so
-          // it pulses rather than snapping a bar from 0 to 100
-          determinate={jump.ticksTotal !== null && jump.ticksTotal > CHUNK_TICKS}
-          stopping={stopping}
-          onStop={() => {
-            stopJump.current = true;
-            setStopping(true);
-          }}
-        />
-      )}
     </div>
   );
 }

@@ -36,3 +36,17 @@ export function formatTickTime(
   const pad = (figure: number) => String(figure).padStart(2, "0");
   return `Day ${day} · ${hours}:${pad(minutes)}:${pad(seconds)}`;
 }
+
+/** More points than this and recharts drags; fewer than a screen needs. */
+export const MAX_CHART_POINTS = 5_000;
+
+/**
+ * The bucket the Trends tab should ask `/ticks` for: raw seconds while the
+ * whole run fits on screen, then simulated minutes, then hours. Coarsening
+ * beats truncating — the newest-5000 suffix once hid an entire drained floor.
+ */
+export function chartBucket(tickNum: number): number {
+  if (tickNum <= MAX_CHART_POINTS) return 1;
+  if (tickNum <= MAX_CHART_POINTS * 60) return 60;
+  return 3_600;
+}
