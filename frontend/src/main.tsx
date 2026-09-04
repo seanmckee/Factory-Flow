@@ -10,6 +10,7 @@ import SetupLayout from "./pages/setup/SetupLayout";
 import WorkCentersPage from "./pages/setup/WorkCentersPage";
 import PartsPage from "./pages/setup/PartsPage";
 import RoutingsPage from "./pages/setup/RoutingsPage";
+import FactorySettingsPage from "./pages/setup/FactorySettingsPage";
 import "./index.css";
 
 const router = createBrowserRouter([
@@ -35,6 +36,7 @@ const router = createBrowserRouter([
           { path: "work-centers", element: <WorkCentersPage /> },
           { path: "parts", element: <PartsPage /> },
           { path: "routings", element: <RoutingsPage /> },
+          { path: "settings", element: <FactorySettingsPage /> },
         ],
       },
       // /create was the old stub page

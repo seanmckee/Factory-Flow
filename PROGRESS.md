@@ -710,7 +710,7 @@ frozen copy.
       (throughput − OE − carrying) and `dayTicks`; `RunMetrics` gains the
       windowed breakdown; `/floor` centres gain the frozen standing rate;
       `/ticks` rows gain the expense columns. Doc sweep.
-- [ ] 6A.7 UI: cost setup — standing-cost column on the work-centres table;
+- [x] 6A.7 UI: cost setup — standing-cost column on the work-centres table;
       `/setup/settings` Factory Settings page (overhead, carrying %/day);
       settings join `SetupDataProvider`'s load.
 - [ ] 6A.8 UI: pure transforms — `simTime.ts` (`ticksToDays`, `formatDays`),
