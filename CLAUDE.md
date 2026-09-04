@@ -230,10 +230,12 @@ Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that l
 ### Driving a run (`src/pages/SimulationPage.tsx`)
 
 **The frontend has no engine.** It was deleted when the page switched over;
-`src/simulation/` holds only chart transforms (`cumulativeThroughput.ts`,
-`throughputRate.ts`), pure and unit-tested. Don't
-reintroduce simulation logic here — the backend owns it, and two copies drifted
-badly the one time they coexisted.
+`src/simulation/` holds only pure, unit-tested chart/display transforms —
+`cumulativeThroughput.ts` (+ `openingCents`), `netProfit.ts`,
+`throughputRate.ts` (`trailingRate`), `standingCost.ts` and `simTime.ts`
+(day/time/duration formatting, `chartBucket`). Don't reintroduce simulation
+logic here — the backend owns it, and two copies drifted badly the one time
+they coexisted.
 
 The page drives a server-side run: it picks or creates one, releases work
 orders into it, and a `setInterval(…, 1000)` calls
@@ -321,9 +323,8 @@ honest tab name once rate and WIP moved in and "Metrics" overlapped it —
 throughput is itself a metric. Every control stays on screen. The floor is
 `WorkCenterTable`, one row per centre from `GET /:id/floor` in stable name
 order — the floor redraws every tick, so the queue signal is the badge and the
-Waiting column, never the row order; the chart tab reads `GET /:id/ticks` and
-draws three series from it (cumulative, rate, WIP — see the chart pipeline
-below). The table shows the run's **frozen** capacity
+Waiting column, never the row order; the Trends tab reads `GET /:id/ticks` once
+and derives its four series from it (see the chart pipeline below). The table shows the run's **frozen** capacity
 read-only — editing the live work center would change nothing about a run
 already created — and no "% utilized", which was `slotsInUse / capacity` and
 could only read 0% or 100% for a single machine.
@@ -370,11 +371,11 @@ net curve with the floor deliberately **absent** — net before the window can
 legitimately be negative, and clamping would redraw a loss as break-even.
 
 The rate and WIP series are local by construction, so the suffix needs no
-opening correction for them — but the cap does create a *left edge*:
-`throughputRate` divides points earlier than the window into the series by
+opening correction for them — but the series start does create a *left edge*:
+`trailingRate` divides points earlier than a full window into the series by
 the ticks actually covered, never by the full window, because the data before
-a suffix isn't zero, it's absent, and a full-window divisor would draw a fake
-ramp at the start of every fast-forwarded chart.
+the first sample isn't zero, it's absent, and a full-window divisor would draw
+a fake ramp at the start of every chart.
 
 ### React state notes
 

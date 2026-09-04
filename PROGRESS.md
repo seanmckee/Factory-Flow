@@ -8,13 +8,17 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6A (operating expense / P&L core) is complete,
-awaiting a browser pass.** The score can go down: runs freeze cost rates and
-accrue expense per tick, the summary and every window report net profit, the
-Trends money chart overlays cumulative net with a zero line, the dashboard
-leads with the windowed P&L, and setup gained a standing-cost column and a
-Factory Settings page. Next: 6B (due dates + lateness) — see the Track 6
-section.
+**You are here:** **Track 6A (operating expense / P&L core) is complete and
+hardened by a hands-on pass** (units 6A.10a–e came out of driving it). The
+score can go down: runs freeze cost rates and accrue expense per tick, the
+summary and every window report net profit, and the day is the product-facing
+unit end to end — the clock plays a simulated minute per real second and reads
+"Day 1 · 5:19:00", fast-forward jumps +1h/+4h/+1 day, streams in per committed
+hour and stops itself when the floor drains, a day advances in ~8s, Trends is
+one chart (throughput, net, trailing-hour rate, WIP — hideable lines, Day·time
+axis), the dashboard leads with the windowed P&L and reads durations in
+hours, and setup gained a standing-cost column and a Factory Settings page.
+Next: 6B (due dates + lateness) — see the Track 6 section.
 
 **Next up:** Track 6B (due dates in calendar days + late penalties), then
 6C–6E — see the Track 6 section for the sub-track split and the time model.
@@ -724,6 +728,10 @@ frozen copy.
       (decided over a fourth card — the gap between the lines is the README's
       "running at a loss while output looks healthy"), dashed zero line; `Net`
       stat in the run bar.
+- [x] 6A.10e Durations read in hours past two staffed hours —
+      `formatDurationSeconds` in `simTime.ts` (graded s → m → h), so the
+      cycle-time card says "2.7h / 5.0h" rather than "163.6m"; null stays a
+      dash, zero stays a printed duration.
 - [x] 6A.10d One Trends chart, hideable lines, Day·time axis, smooth rate
       (user call after driving 6A.10c: three cards hid the relationships, the
       minute-bucket rate drew a comb, and a tick axis "means nothing to a
