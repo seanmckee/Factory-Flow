@@ -19,9 +19,9 @@ card; netCents is untouched, the 6B metric-not-money pattern. Before it, 6B
 freeze cost rates and accrue expense per tick, the day as the product-facing
 unit end to end).
 
-**Next up:** 6D (shifts and wages), then 6E (capital actions) — both
-"re-plan when reached"; see the Track 6 section for the sub-track split and
-the time model. Track 6A made the score able to go down, which is
+**Next up:** 6D (shifts and wages) — **planned 2026-09-04**, units 6D.1–6D.4
+below — then 6E (capital actions), re-plan when reached; see the Track 6
+section for the sub-track split and the time model. Track 6A made the score able to go down, which is
 what makes an agent's objective non-degenerate; 6B adds the promise the agent
 can break without buying anything with it; 6C makes batch size a real decision
 and output itself unreliable.
@@ -1025,11 +1025,92 @@ the material cents are frozen per scrapped unit — the same argument that made
       found on the way (`TICKS_PER_BATCH` still said 500 and
       `ROWS_PER_INSERT` still existed; both superseded in 6A.10b).
 
-### Track 6D — Shifts and wages (`feat/shift-calendar`) — re-plan when reached
+### Track 6D — Shifts and wages (`feat/shift-calendar`)
 
-`day_ticks = shifts × 28,800` per run; wages accrue per staffed tick per
-operator, overtime at a multiplier when authorized; machines stop off-shift
-(off-shift time is not simulated). Rent stays per calendar day.
+Planned 2026-09-04. The calendar day gets a width and the people get paid:
+a run's day is `shifts × 28,800` staffed ticks, and every staffed tick costs
+wages whether or not anything moves.
+
+**Shifts are a facility setting frozen per run.** `factory_settings.shifts`
+(1–3, default 1), and `createRun` freezes `day_ticks = shifts × 28,800` — the
+column 6A reserved for exactly this, so nothing downstream changes shape:
+rent amortizes thinner over a longer day (`accrueRate` is already a function
+of `day_ticks`), due days convert against the run's own day in `loadRunState`
+(the reason 6B chose calendar days), and the clock reads staffed time as it
+always has. Off-shift time still isn't ticks. `shifts` joins the POST
+`/api/runs` overrides — one-shift vs two-shift is precisely the comparison a
+Track 7 fork wants to run.
+
+**Wages are a per-staffed-hour rate — the third cost class.**
+`work_centers.wage_cents_per_hour`, per operator, frozen into
+`run_work_centers` like capacity and standing cost. **Operators = capacity
+until 6E** (the explicit `operators` column and `min(machines, operators)`
+gating are 6E's lever, recorded there), so a centre's wage bill is
+`capacity × rate`, accrued with the same exact floor-diff as every time rate
+but over **D = 3,600** — per rate then summed, as always. That denominator is
+the entire economics: rent is per calendar day, so a second shift amortizes
+it; wages are per staffed hour, so a second shift doubles the day's bill.
+
+**Wages are their own frozen tick column, and the score subtracts them.**
+`run_ticks.wage_cents` beside expense and carrying;
+`netCents = throughput − OE − carrying − wages`. Deliberately *not* folded
+into `operating_expense_cents`: the wages-vs-rent split is exactly what a
+shift decision is about, and one merged column would make a one-shift and a
+two-shift fork read as the same P&L shape with different slopes and no
+explanation.
+
+**Overtime is deferred to 6E, deliberately.** Overtime is an *authorization*
+— a mid-run action against the run's own frozen config, which is 6E's whole
+territory; a run that authorizes overtime at creation is just a longer day
+with a premium, i.e. shifts again. The machinery 6E already owes (effective-
+dated rates, `accrueRate` generalized to `floor((t−t₀)·r/D)` diffs) is the
+same machinery overtime needs.
+
+**A known non-tension, recorded rather than hidden:** against a finite seeded
+order book, two shifts near-dominate one — the book needs the same staffed
+hours (same total wages), fewer calendar days (less rent), earlier
+deliveries. The counterweights are 6E's (hiring the second shift's operators
+costs money; overtime as the cheaper marginal hour) and eventually rolling
+demand. 6D's job is to make the lever exist and price it honestly, not to
+balance it yet.
+
+- [x] 6D.1 Ledger rewrite (this section) + schema + migration + seed.
+      `factory_settings.shifts` (default 1);
+      `work_centers.wage_cents_per_hour` (default 0), frozen copy on
+      `run_work_centers`; `run_ticks.wage_cents` (default 0 — pre-6D ticks
+      read "no wages", the usual retroactive rule). Seed: wages with a skill
+      spread (drill highest), and prices raised so the factory stays
+      profitable **when the constraint is fed** now that people are paid —
+      target roughly: bracket margins strongly positive per drill-day, flange
+      margin *below* the staffed-day cost line but above zero, so flanges are
+      worth running once staffed yet can't carry the factory — the
+      contribution-margin lesson beside the constraint one. Verify the
+      arithmetic in seed comments, live at 6D.3.
+- [ ] 6D.2 Engine: wages + tests. `CostRates` gains per-centre
+      `wageCentsPerHour` (the loader pre-multiplies by frozen capacity, so
+      the engine sums rates without knowing about operators);
+      `wagesAtTick(rates, tickNum)` accrues each centre's rate over 3,600 and
+      sums — per rate then summed, mid-hour split-vs-whole tests like
+      `timeExpenseAtTick`'s; `TickRecord.wageCents`; batch wiring; the
+      one-batch-vs-several test re-run with wages on.
+- [ ] 6D.3 API. `shifts` through settings GET/PATCH; `wageCentsPerHour`
+      through work-centre POST/PATCH; `createRun` freezes
+      `day_ticks = shifts × 28,800` (override in the POST body) and the wage
+      rates; `advanceRun` writes the tick column; `AdvanceResult`,
+      `RunSummary`, `RunMetrics` and `/ticks` rows gain `wageCents`, with
+      `netCents` subtracting it everywhere it is computed; `/floor` centres
+      gain the frozen wage rate (the standing-cost pattern — display-only
+      derivations stay client-side). Exercise over HTTP: a two-shift run's
+      day-1 due tick is 57,600; a staffed hour sums to exactly
+      `Σ capacity × rate`; the P&L identity across summary, metrics and tick
+      sums.
+- [ ] 6D.4 UI + doc sweep. Factory Settings gains Shifts; work-centres table
+      gains a Wage column; dashboard gains a Wages card and the net stat
+      subtracts it (server-side already — but `netPerTick`/`netCentsOf` in
+      `netProfit.ts` must learn the fourth column or the Trends net curve
+      contradicts the run bar); `TickSample` mirror gains `wageCents`.
+      CLAUDE.md cost-model section (three costs become four), README Phase 4
+      wages bullet, this file.
 
 ### Track 6E — Capital actions (`feat/capital-actions`) — re-plan when reached
 
