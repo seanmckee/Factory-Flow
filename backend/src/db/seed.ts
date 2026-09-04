@@ -216,23 +216,34 @@ async function seed() {
   const insertedSalesOrders = await db
     .insert(salesOrders)
     .values([
+      // Due days are sized against the drill press (~480s/unit, ~60/day; the
+      // whole 170-unit book is ~2.83 drill-days): SO-2001 makes day 1 with a
+      // few-sigma margin only if brackets release immediately and run first;
+      // SO-2002 is comfortable brackets-first and late flanges-first, so the
+      // due date agrees with the price signal (the $55 order is the one to
+      // protect); SO-2003 makes day 3 only if the drill never starves, in
+      // direct tension with the carrying cost that rewards releasing WO-1002
+      // late.
       {
         orderNumber: "SO-2001",
         partId: bracket.id,
         quantity: 52,
         unitPriceCents: 5000,
+        dueDay: 1,
       },
       {
         orderNumber: "SO-2002",
         partId: bracket.id,
         quantity: 28,
         unitPriceCents: 5500,
+        dueDay: 2,
       },
       {
         orderNumber: "SO-2003",
         partId: flange.id,
         quantity: 90,
         unitPriceCents: 3000,
+        dueDay: 3,
       },
     ])
     .returning();
