@@ -8,16 +8,24 @@ export type StepDraft = {
   workCenterId: string;
   processTimeSeconds: string;
   setupTimeSeconds: string;
+  /** entered as a percentage (the carrying-rate convention); sent as bps */
+  scrapPercent: string;
 };
 
 export type StepPayload = {
   workCenterId: number;
   processTimeSeconds: number;
   setupTimeSeconds: number;
+  scrapBps: number;
 };
 
 export function emptyStep(): StepDraft {
-  return { workCenterId: "", processTimeSeconds: "", setupTimeSeconds: "0" };
+  return {
+    workCenterId: "",
+    processTimeSeconds: "",
+    setupTimeSeconds: "0",
+    scrapPercent: "0",
+  };
 }
 
 /** Existing steps arrive sequenced; the editor works in array order instead. */
@@ -26,6 +34,8 @@ export function toDrafts(steps: RoutingStep[]): StepDraft[] {
     workCenterId: String(step.workCenterId),
     processTimeSeconds: String(step.processTimeSeconds),
     setupTimeSeconds: String(step.setupTimeSeconds),
+    // 50 bps reads back as "0.5", exactly what the user typed
+    scrapPercent: String(step.scrapBps / 100),
   }));
 }
 
@@ -105,7 +115,23 @@ export function parseSteps(drafts: StepDraft[]): ParseResult {
       };
     }
 
-    steps.push({ workCenterId, processTimeSeconds, setupTimeSeconds });
+    // percent → basis points: bps are integers, so the finest step is 0.01%
+    const scrapPercent = Number(draft.scrapPercent);
+    const scrapBps = Math.round(scrapPercent * 100);
+    if (
+      draft.scrapPercent === "" ||
+      !Number.isFinite(scrapPercent) ||
+      scrapPercent < 0 ||
+      scrapPercent > 100 ||
+      Math.abs(scrapPercent * 100 - scrapBps) > 1e-9
+    ) {
+      return {
+        ok: false,
+        message: `Step ${position}: scrap must be 0–100%, in steps of 0.01`,
+      };
+    }
+
+    steps.push({ workCenterId, processTimeSeconds, setupTimeSeconds, scrapBps });
   }
 
   return { ok: true, steps };

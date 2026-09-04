@@ -53,9 +53,10 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   freezes), `GET /api/runs`, `GET /api/runs/:id` (with counts and the P&L:
   frozen throughput, operating expense, carrying cost, `netCents` — the score,
   and it can go negative), `GET /api/runs/:id/metrics?fromTick&toTick` (the
-  same P&L windowed, plus `onTimeDelivery` and its per-order breakdown
-  `salesOrderDelivery` — the summary deliberately carries no OTD copy, since
-  the whole-run `/metrics` already answers it),
+  same P&L windowed, plus `onTimeDelivery`, its per-order breakdown
+  `salesOrderDelivery`, and `scrap` — count and frozen material cents,
+  windowed on `scrapped_at_tick` — the summary deliberately carries no copy of
+  any of these, since the whole-run `/metrics` already answers them),
   `GET /api/runs/:id/floor`, `GET /api/runs/:id/ticks?fromTick&toTick&bucket`
   (bucket groups the series server-side — money summed, WIP at bucket end,
   grid aligned to absolute ticks),
@@ -67,7 +68,8 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   `wipCount`, so a caller advancing until the floor is empty stops on the
   advance's own answer rather than chasing each call with a `GET /:id` that
   could already be a batch stale — it is `state.wipParts.length` after the
-  last batch, not a query. `unlock` is **not** a reset — it clears a
+  last batch, not a query — and `scrappedCount`, the same kind of
+  agent-visible signal. `unlock` is **not** a reset — it clears a
   lock a dead process left, and re-creating a run with the same seed reproduces
   it exactly, so rewinding one is not a feature. `work_orders.status` still has
   no writer and should not gain one here: a release is per-run
@@ -80,7 +82,7 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 - Writes that span tables run in `db.transaction()`; helpers inside a transaction throw `HttpError` (`src/lib/httpError.ts`) to both roll back and carry a status. This is why `db/index.ts` uses the Neon WebSocket `Pool` rather than the HTTP driver, which has no transaction support.
 - Allocation rules live in `src/lib/allocate.ts` as pure functions taking plain objects, so they are unit-testable without a database. Allocations for a work order **must** be inserted in one statement, oldest-sales-order-first: ids come out ascending in insert order, and `calculateThroughput` credits finished units in allocation-id order.
 - Joins/aggregation are done in JS after separate `db.select()` calls rather than in SQL (see `salesOrders.ts` grouping allocations by sales order, `routings.ts` attaching ordered `steps`).
-- The eight `run_*` / `simulation_runs` tables are one run's history;
+- The nine `run_*` / `simulation_runs` tables are one run's history;
   everything above them in `schema.ts` is the shared factory definition.
   **The invariant: once a run exists, the engine reads that run's own config —
   `run_work_centers` for capacity and standing cost, `run_work_order_steps` for
@@ -92,14 +94,17 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   already halfway through a route.
 - History cascades from `simulation_runs`, and references out to the shared
   definition are RESTRICT — a work order a run has released can't be deleted
-  from under it. Four columns are deliberately **un-keyed**: `work_center_id`
-  in `run_work_centers`, `run_work_order_steps` and `run_tick_work_centers`,
-  plus `run_released_orders.routing_id`. A pinned copy and a set of
+  from under it. Five columns are deliberately **un-keyed**: `work_center_id`
+  in `run_work_centers`, `run_work_order_steps`, `run_tick_work_centers` and
+  `run_scrapped_parts`, plus `run_released_orders.routing_id`. A pinned copy
+  and a set of
   observations exist to outlive edits to what they copied; an FK would either
   erase a finished run's history when a centre is retired or add a 500 path to
   work-centre deletion. `run_finished_parts` freezes its money columns at
   finish time for the same reason — otherwise deleting a sales order rewrites
-  what a finished run earned. `npm run seed` deletes `simulation_runs` first.
+  what a finished run earned — and `run_scrapped_parts` freezes the ruined
+  unit's `material_cost_cents` the same way. `npm run seed` deletes
+  `simulation_runs` first.
 - `/floor` and `/metrics` deliberately answer different questions. `/floor` is
   a **snapshot** — what is at each center and how far along — built by the pure
   `deriveFloorView`, and it is what the simulation page's cards draw.
@@ -185,23 +190,52 @@ one place, `loadRunState` (`dueDay × the run's frozen day_ticks`); the engine's
 deliberately **no money penalty**: lateness feeds the OTD metric only, and
 `netCents` is unchanged.
 
+**Setup and scrap (6C)** are both per pinned step
+(`run_work_order_steps.setup_time_seconds` / `scrap_bps`, copied from
+`routing_steps` at release like everything else a run reads). Setup is
+**machine time, not a money charge**: one changeover per (work order, step),
+paid by whichever unit is *admitted to a machine first* — folded into that
+unit's `actualProcessTimeSeconds` — so its cost surfaces as rent against time
+and lost constraint minutes, and `busy` counts a machine in setup as busy.
+Admission-pays, not arrival-pays: units can arrive out of admission order, and
+the payer is deterministic because list order is. It is deterministic — no
+draw — and the paid state persists as
+`run_work_order_steps.setup_started_at_tick` (null = not yet), because it must
+survive a batch boundary and deriving it fails once the paying unit scraps out
+of the very step it set up; a part already mid-process never pays, so pre-6C
+runs are never retro-charged, and a zero setup time is never recorded. Scrap
+is a probability in basis points drawn **at step completion** — the machine
+time is spent, then the unit fails — through the seeded RNG in a separate
+**draw domain** (`unitDraw`'s second argument; the process domain is the
+unmarked legacy key, byte for byte, so pre-6C runs still re-create exactly).
+A scrapped unit leaves the floor that tick as a `run_scrapped_parts` row with
+its `material_cost_cents` frozen, and **never reaches `creditFinishedParts`**:
+it consumes no allocation, the next good unit takes its sale, and a short work
+order under-delivers — which, with the wasted machine time and carrying
+already paid, is scrap's whole money bite. **No write-off**: like an uncovered
+unit's material, a scrapped unit's is recorded, not charged, and `netCents` is
+untouched — a penalty stays layerable off the frozen column, the 6B pattern.
+
 Advancing a run is split across the pure/impure line. `simulateBatch`
 (`simulation/simulateBatch.ts`) takes a `RunState`, ticks it N times in memory
-and returns a `RunBatch` — the surviving WIP, the finished records with their
-frozen money, a `TickRecord` per tick, and the advanced `priorCounts` — while
+and returns a `RunBatch` — the surviving WIP, the finished and scrapped
+records with their
+frozen money, a `TickRecord` per tick, the advanced `priorCounts` and
+`setupDone` set, and the batch's newly-started setups — while
 `lib/runService.ts` only loads the state (via `lib/runState.ts`), calls it,
 and writes the batch. All
 the logic that decides anything is therefore under test with no database;
 `runService` holds no arithmetic. `priorCounts` advances *within* a batch, so a
 unit finishing at tick 5 is priced against the allocation after the one that
 covered a unit finishing at tick 3, and carrying it out means a long advance
-runs as several batches without re-reading it.
+runs as several batches without re-reading it — `setupDone` and the carrying
+remainder travel the same way.
 
-`runService` writes per batch, never per tick — `TICKS_PER_BATCH` is 500, each
-batch one transaction, so a crash costs at most one batch and a 5000-tick
-advance reads once and writes ten times. Inserts are split at
-`ROWS_PER_INSERT`, because Postgres caps bind parameters near 65535 and 500
-ticks of a twenty-centre factory is ten thousand per-centre rows. Both
+`runService` writes per batch, never per tick — `TICKS_PER_BATCH` is 3600
+(one staffed hour), each
+batch one transaction, so a crash costs at most one batch. Inserts are split
+per table by `chunkFor(paramsPerRow)`, because Postgres caps bind parameters
+near 65535 and a simulated day of a six-centre factory is ~200k rows. Both
 advancing and releasing take the run's `advancing` lock via `withRunLock`: an
 advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
@@ -235,6 +269,9 @@ stats cover late units only, null when every measured unit was on time. It
 never throws — due-before-release is legal, an order can already be late at
 release. `groupDeliveryBySalesOrder` reuses it per covering order, so the
 per-order rows and the overall aggregate agree by construction.
+`aggregateScrap` windows on its own column, `scrappedAtTick`, and answers an
+empty window with **zeroes, not nulls** — zero scrap over observed ticks is a
+real observation, the factory ran clean.
 
 ## Frontend architecture
 
@@ -314,7 +351,9 @@ clearing the lock lets two writers rewrite the same WIP rows.
 on — stat cards led by the window's **net profit** (signed, destructive below
 zero), then throughput, operating expense and carrying cost, ahead of finished
 count, cycle time, on-time delivery (— when no promised unit finished in the
-window; destructive styling stays reserved for money) and WIP, over a
+window; destructive styling stays reserved for money), scrap (count, with the
+frozen material cents in the detail — neutral styling, since that money is
+recorded, not charged) and WIP, over a
 Deliveries table (per-order shipped/on-time/late — which promise broke; order
 numbers and quantities join client-side from the live sales orders, and Due
 reads `dueAtTick / dayTicks` back as a day) and a work-centre table ranked by

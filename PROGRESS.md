@@ -8,19 +8,20 @@ that completes it.
 
 ---
 
-**You are here:** **Track 6B (due dates + on-time delivery) is complete** —
-planned and built 2026-09-04, units 6B.1–6B.5 below. Sales orders promise a
-calendar day, runs freeze each finished unit's due tick at credit time, and
-the dashboard reads on-time delivery overall and per order. Deliberately a
-metric, not money — netCents is unchanged. Track 6A landed the P&L: the score
-can go down, runs freeze cost rates and accrue expense per tick, and the day is
-the product-facing unit end to end (minute-per-second clock, +1h/+4h/+1 day
-streaming jumps with drain-stop, one Trends chart, windowed P&L dashboard,
-standing-cost column and Factory Settings page).
+**You are here:** **Track 6C (setup and scrap) is complete** — planned and
+built 2026-09-04, units 6C.1–6C.5 below. Changeovers are machine time paid
+once per work order per step (batch size finally trades off against carrying
+cost, and a split order costs the constraint a second setup), and scrap is a
+per-step probability drawn at step completion in its own RNG domain — ruined
+units record their frozen material, consume no allocation, and feed a Scrap
+card; netCents is untouched, the 6B metric-not-money pattern. Before it, 6B
+(due dates + on-time delivery) and 6A (the P&L: the score can go down, runs
+freeze cost rates and accrue expense per tick, the day as the product-facing
+unit end to end).
 
-**Next up:** 6C (setup and scrap) — **planned 2026-09-04**, units 6C.1–6C.5
-below — then 6D–6E; see the Track 6 section for the sub-track split and the
-time model. Track 6A made the score able to go down, which is
+**Next up:** 6D (shifts and wages), then 6E (capital actions) — both
+"re-plan when reached"; see the Track 6 section for the sub-track split and
+the time model. Track 6A made the score able to go down, which is
 what makes an agent's objective non-degenerate; 6B adds the promise the agent
 can break without buying anything with it; 6C makes batch size a real decision
 and output itself unreliable.
@@ -1011,13 +1012,18 @@ the material cents are frozen per scrapped unit — the same argument that made
       produced identical money, scrap and completion ticks, which is the
       setup-carry and scrap determinism proven at the service layer;
       `scrapBps: 20000` 400s with the field's own message.
-- [ ] 6C.5 UI + doc sweep. Step editor gains a scrap field — entered as a
+- [x] 6C.5 UI + doc sweep. Step editor gains a scrap field — entered as a
       percentage, sent as bps, the carrying-rate convention (the setup-time
-      field already exists); `routingSteps.ts` drafts/parse stay the pure
+      field already exists), finest step 0.01% because bps are integers, and
+      the round-trip closes the 6C.4 hazard: `toDrafts` reads bps back as the
+      percentage the user typed, so saving a routing no longer resets its
+      rates; `routingSteps.ts` drafts/parse stay the pure
       tested layer; dashboard gains a Scrap stat card (count, material cents
       in the detail line; neutral styling — destructive stays reserved for
       money that is *in* `netCents`). CLAUDE.md engine/cost-model sections,
-      README Phase 4 bullet, this file.
+      README Phase 4 bullets, this file — plus two stale CLAUDE.md figures
+      found on the way (`TICKS_PER_BATCH` still said 500 and
+      `ROWS_PER_INSERT` still existed; both superseded in 6A.10b).
 
 ### Track 6D — Shifts and wages (`feat/shift-calendar`) — re-plan when reached
 

@@ -59,6 +59,7 @@ export default function StepEditor({
               <TableHead>Work center</TableHead>
               <TableHead className="text-right">Process (s)</TableHead>
               <TableHead className="text-right">Setup (s)</TableHead>
+              <TableHead className="text-right">Scrap (%)</TableHead>
               <TableHead />
             </TableRow>
           </TableHeader>
@@ -122,6 +123,21 @@ export default function StepEditor({
                       update(index, { setupTimeSeconds: event.target.value })
                     }
                     className="ml-auto w-24 text-right tabular-nums"
+                  />
+                </TableCell>
+                <TableCell className="text-right">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    aria-label={`Scrap rate for step ${index + 1}`}
+                    disabled={disabled}
+                    value={step.scrapPercent}
+                    onChange={(event) =>
+                      update(index, { scrapPercent: event.target.value })
+                    }
+                    className="ml-auto w-20 text-right tabular-nums"
                   />
                 </TableCell>
                 <TableCell className="text-right">

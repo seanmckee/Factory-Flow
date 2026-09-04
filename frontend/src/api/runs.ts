@@ -77,6 +77,8 @@ export type AdvanceResult = {
   throughputCents: number;
   operatingExpenseCents: number;
   carryingCostCents: number;
+  /** units ruined by scrap draws over the advance */
+  scrappedCount: number;
   /** WIP still on the floor after the advance — an agent's stop condition. */
   wipCount: number;
 };
@@ -146,6 +148,11 @@ export type RunMetrics = {
    * names come off /floor — /metrics carries ids.
    */
   salesOrderDelivery: SalesOrderDelivery[];
+  /** the window's ruined units, with the material they consumed frozen */
+  scrap: {
+    scrappedCount: number;
+    scrappedMaterialCents: number;
+  };
 };
 
 export type SalesOrderDelivery = {
