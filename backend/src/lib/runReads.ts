@@ -29,6 +29,7 @@ import {
   type ScrapAggregate,
   type MetricsAggregate,
 } from "../simulation/metrics.js";
+import { bucketTicks } from "../simulation/observationBuckets.js";
 import type {
   TickMetrics,
   TickWorkCenterMetrics,
@@ -359,7 +360,9 @@ export async function getRunMetrics(
     // the roster only: utilization's denominator now comes from each
     // observation's own capacity, not from this map
     flow: aggregateMetrics(
-      series,
+      // stored rows are still one per tick until 6G.1b moves storage onto the
+      // grid; a bucket of one is the identity, so this is the same arithmetic
+      bucketTicks(series, 1),
       new Map(
         storedCenters.map((center) => [
           center.workCenterId,

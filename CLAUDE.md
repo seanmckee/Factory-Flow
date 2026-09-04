@@ -307,15 +307,37 @@ snapshot undercounts. `capacity` is emitted for the same reason since 6E: it is
 the **effective** capacity the tick admitted against (`min(machines,
 operators)`, taken at the load boundary so the engine never learns what an
 operator is), and a capital action moves it mid-run, so the observation has to
-carry its own denominator. Keep the list total: `aggregateMetrics` in
-`metrics.ts` reduces a window of these to utilization (busy machine-ticks ÷
-**summed capacity-ticks**, reported as `capacityTicks`), queue depth and WIP.
-Per-centre `observedTicks` is what makes that denominator right rather than
-being it — a work center created mid-run isn't reported idle for time it did
-not exist — and a centre retired to no machines contributes no capacity-ticks,
-so it reads 0 instead of dividing by zero. Stored observations from before 6E
-have a null `capacity` column and fall back to the run's frozen capacity,
-which is exactly what it was throughout a run that could not change it.
+carry its own denominator. Keep the list total.
+
+`aggregateMetrics` in `metrics.ts` reduces a window to utilization (busy
+machine-ticks ÷ **summed capacity-ticks**, reported as `capacityTicks`), queue
+depth and WIP — but it takes **observation buckets, not ticks**, since 6G.
+`observationBuckets.ts` owns that layer: `bucketTicks(series, width)` groups a
+tick-ordered series onto an absolute grid, and a single tick is simply a bucket
+of one, so one aggregate serves a stored series, a live batch and a test's
+hand-built ticks. `TICKS_PER_BUCKET` (60, one simulated minute) is a
+**constant**, not frozen per run like `day_ticks`: Track 7 can only compare two
+runs' observations if both are bucketed the same way, and resolution — unlike
+shifts — changes nothing about what a run's money means.
+
+Every field on a bucket is a **sum, a count or a max**, never a mean, which is
+what makes the grouping lossless: divide once, at the end. Money needs one
+field each; **WIP needs three**, because it is a level rather than a flow —
+`wipPartTicks` is the mean's numerator, `maxWip` a peak no sum recovers, and
+`endWip` the closing level. Don't collapse them: a mean of closing levels is
+not a mean. Per-centre `observedTicks` is what makes the utilization
+denominator right rather than being it — a work center created mid-run isn't
+reported idle for time it did not exist — and a centre retired to no machines
+contributes no capacity-ticks, so it reads 0 instead of dividing by zero.
+Stored observations from before 6E have a null `capacity` column and fall back
+to the run's frozen capacity, which is exactly what it was throughout a run
+that could not change it.
+
+A window's default bounds are the **whole run, from tick 0** — not tick 1,
+though ticks are numbered from 1. Tick 0 is a real moment at which money is
+spent: a capital action applied before the first advance. Defaulting to 1 hid
+that spend from every whole-run `/metrics`, so the dashboard read a run better
+than the run bar did (6E.7).
 
 Cycle time comes from the other series: `WipPart` carries `releasedAtTick` for
 its whole life and `finish()` copies it onto the `FinishedPart`, so

@@ -1441,17 +1441,17 @@ afterwards.
       per-centre rates; Phase 5's "buy a machine, add a shift" notes that two
       of its levers already exist and what forking actually adds.
 - [x] 6E.7 Fix: a whole-run window began at tick 1, so **tick-0 capital was
-      invisible to `/metrics`**. Found while proving 6G.1a a no-op, by
-      re-reading the 6H.1 playthrough: the summary said the run netted $42,444
-      and whole-run `/metrics` said $45,652, and the gap was exactly the $3,208
-      the run opened by spending. `tickWindow` defaulted `from` to 1 because
-      ticks are numbered from 1 — but a capital action is an **event at a
-      tick**, not an accrual across one, and tick 0 is a real moment at which
-      money is spent: it is the moment a machine is worth buying, before the
-      first advance, which is precisely what the capital dialog invites. So the
-      P&L pane read a run better than it was while the run bar beside it told
-      the truth, and the more sensibly a run was played the wider the two
-      diverged.
+      invisible to `/metrics`**. Found during 6G.1a, by re-reading the 6H.1
+      playthrough to prove the bucket aggregate a no-op: the summary said the
+      run netted $42,444 and whole-run `/metrics` said $45,652, and the gap was
+      exactly the $3,208 the run opened by spending. `tickWindow` defaulted
+      `from` to 1 because ticks are numbered from 1 — but a capital action is an
+      **event at a tick**, not an accrual across one, and tick 0 is a real
+      moment at which money is spent: it is the moment a machine is worth
+      buying, before the first advance, which is precisely what the capital
+      dialog invites. So the P&L pane read a run better than it was while the
+      run bar beside it told the truth, and the more sensibly a run was played
+      the wider the two diverged.
       **The fix is `from: fromTick ?? 0`** — the default window is the whole
       run, and a run begins at tick 0. Nothing else moves: no tick, finished
       part or scrapped part is ever numbered 0, so every other query returns
@@ -1519,29 +1519,106 @@ observation rows go to Neon whatever is happening, and at today's book the
 database is ~97% of the wall clock. WIP is a second, independent curve — the
 pure tick loop is O(WIP) and reads 465k ticks/s empty, 68k at 172, 22k at 500
 and 4.8k at 2,000 — so it only becomes comparable past ~500 parts, which is
-exactly where 6H's deeper book would put it. Reads are fine and stay fine:
-`/floor` 124 ms, summary 92 ms, whole-run `/metrics` 460 ms over 20,000 ticks,
-`/ticks?bucket=60` 133 ms.
+exactly where 6H's deeper book would put it.
 
-- [ ] 6G.1 Per-minute observation buckets — the lever 6A.10b named and
-      deferred. `run_ticks` and `run_tick_work_centers` become one row per
-      **simulated minute**: 60× fewer rows, so a day of writes goes from
-      ~200k rows to ~3.5k and ~12 s to well under a second.
-      **Every aggregate stays exact**, which is what makes this safe rather
-      than a resolution compromise: a bucket stores *sums* (throughput,
-      expense, carrying, wages; per centre, busy machine-ticks, capacity-ticks
-      and queued part-ticks), a *max* (worst queue depth) and one *level* (WIP
-      at bucket end) — and every figure `aggregateMetrics` reports is built
-      from precisely those, so utilization, mean and worst queue and mean WIP
-      come out identical. What actually coarsens is **window resolution**: a
-      window whose bounds fall mid-minute covers the containing minutes, and
-      the label already comes from the response, which is the rule that makes
-      that honest. Also gone is the per-*second* series, which
-      `chartBucket` already stops asking for past 5,000 ticks.
-      Open when this is built: whether `run_ticks` keeps its name (the row is
-      no longer a tick), and whether the bucket width is a constant or frozen
-      per run like `day_ticks` — a fork comparing two runs must bucket both
-      the same way.
+**Re-measured on the 6H.1 playground seed (2026-09-04), and one conclusion
+flips.** Ten centres means eleven observation rows a tick, so a 20,000-tick
+advance now writes **220,000** rows: an empty floor costs **8.9 s**, ~326 WIP
+11.2 s, ~1,300 WIP 13.0 s. The write cost is confirmed as the dominant term and
+the per-part curve is real but secondary, as before.
+
+What flips is **"reads are fine and stay fine"** — that was measured over a
+20,000-tick run and does not survive a book with a horizon, because
+`/metrics` reads every tick row and every per-centre row in its window:
+
+| run length | rows in a whole-run window | `GET /:id/metrics` |
+| --- | --- | --- |
+| 20,000 ticks | 220,000 | **1.7 s** |
+| 432,000 ticks (the 6H.1 playthrough) | 4,752,000 | **7.4 s** |
+
+7.4 s is the **Dashboard tab's own fetch**, so on a run long enough for capital
+decisions to pay back, the pane that judges them takes seven seconds to draw.
+Buckets fix the read and the write with one change — 60× fewer rows on both
+sides — which makes 6G.1 the unit that pays for itself twice, and is why it
+stays first. (`/floor` 89 ms, summary 704 ms, `/ticks?bucket=3600` 450 ms and
+`/actions` 80 ms are all fine at 432,000 ticks.)
+
+**6G.1 is split three ways** (2026-09-04, on reaching it): the storage change
+renames the two observation tables, and a rename cannot be staged behind a
+compiling intermediate the way 6E's additive columns could. So the pure layer
+goes first and lands as a provable no-op, storage follows, and the UI last.
+
+**One correction to the plan below, found by writing it.** The sketch said a
+bucket stores "one *level* (WIP at bucket end)" and that every figure would
+come out identical. It would not: `aggregateMetrics` reports `meanWip` as a sum
+over ticks divided by the tick count, and `maxWip` as a peak — neither of which
+a closing level can reconstruct. WIP is a **level, not a flow**, so it needs
+three fields where money needs one: `wipPartTicks` (the mean's numerator),
+`maxWip` (the peak) and `endWip` (the closing level). Per centre the same rule
+adds `observedTicks` beside the three sums and the max. Rows still fall 60×;
+columns grow by about half, which is the trade that keeps the change exact
+instead of merely close.
+
+- [x] 6G.1a Pure layer: `simulation/observationBuckets.ts` —
+      `TICKS_PER_BUCKET`, the `ObservationBucket` / `BucketWorkCenterMetrics`
+      shapes, and `bucketTicks(series, width)`; `aggregateMetrics` becomes
+      **bucket-native**, taking buckets rather than ticks.
+      **Decided: `simulateBatch` is not touched at all.** The first sketch had
+      the batch emit buckets, which would have rewritten the 36 tests that are
+      the determinism contract (one batch vs several, the RNG replay, the
+      accrual splits). Bucketing is instead a pure function that
+      `runService` calls on its way to the write — which keeps
+      "`runService` holds no arithmetic" true, since the arithmetic is a tested
+      pure function, and leaves `TickRecord` as the batch's own shape. A batch
+      is 3,600 ticks, so holding them before grouping costs nothing.
+      **Decided: the width is a constant, not frozen per run** (the open
+      question above). Track 7 compares two runs' observations and can only do
+      it if both are bucketed the same way, and a constant makes that
+      structural rather than a check a comparison has to remember; `day_ticks`
+      is frozen because shifts change what a run's money *means*, where
+      resolution changes nothing about the run. `?bucket=N` already coarsens
+      further at read time, so per-run width would buy only what the read path
+      offers anyway.
+      **Decided: a bucket needs no stored `firstTick`/`lastTick`.** Observed
+      ticks fill a bucket in ascending order, so they are always a prefix of
+      its slot: `lastTick = startTick + tickCount − 1`, and `bucketLastTick`
+      is that one line. A series that goes backwards **throws** rather than
+      being re-ordered — the 1.2 rule, since a silently mis-bucketed series
+      reads as a policy that behaved oddly rather than as a bug.
+      **Proved a no-op two ways.** All 184 existing tests pass untouched (the
+      13 `aggregateMetrics` call sites in `metrics.test.ts` route through an
+      `aggregate(ticks, centers, width = 1)` helper, so every assertion is the
+      original one), and 15 new tests pin the property the storage change rests
+      on: the same jagged series — WIP peaking mid-bucket, a capacity change at
+      tick 5, a centre arriving late — aggregates **identically at widths 1, 2,
+      3, 7, 60 and 1000**, with `meanWip` staying `39/7` where a mean of
+      closing levels would read 8. Empirically too: whole-run `/metrics` on the
+      6H.1 playthrough returned all ten centres' utilization, busy and capacity
+      ticks byte for byte unchanged.
+      **The name question is deferred to 6G.1b**, where the table is actually
+      renamed and the answer has consequences.
+- [ ] 6G.1b Storage on the grid. New `run_buckets` / `run_bucket_work_centers`
+      replacing `run_ticks` / `run_tick_work_centers`; the migration
+      **aggregates the existing rows into buckets** rather than dropping them
+      (an `INSERT … SELECT … GROUP BY` per table, with
+      `(array_agg(wip_count order by tick_num desc))[1]` for the closing level —
+      the trick `getRunTicks` already uses — and `COALESCE(capacity,
+      min(machines, operators))` for the pre-6E null), so no finished run loses
+      its series. `runService` writes buckets, and the write must be an
+      **accumulating upsert** (`ON CONFLICT … DO UPDATE SET x = existing +
+      excluded`, `GREATEST` for the maxima, overwrite for the level): an
+      advance of a tick count the width does not divide leaves a **partial**
+      bucket that the next advance completes, which is the one thing per-tick
+      rows never had to handle. `getRunMetrics`, `getRun`'s expense sums and
+      `getRunTicks` all read buckets; `?bucket=N` becomes a multiple of the
+      stored width.
+      Answer the name question here: the row is no longer a tick.
+- [ ] 6G.1c Frontend + docs. `chartBucket` floors at the stored width (the
+      per-*second* series is gone, as planned — and a live beat is 60 ticks, so
+      one beat is exactly one point, which suits the chart better than it
+      sounds); `TickSample` needs no change, since `/ticks` keeps its shape
+      (`wipCount` was already a bucket-end level on the bucketed path). CLAUDE.md
+      and README.
 - [ ] 6G.2 Clone on write in the tick loop. Every tick copies **every** WIP
       part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
       20,000 ticks is 40 million object clones — and a part that sits queued

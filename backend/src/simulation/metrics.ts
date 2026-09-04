@@ -1,4 +1,4 @@
-import type { TickMetrics } from "./simulationTick.js";
+import { bucketLastTick, type ObservationBucket } from "./observationBuckets.js";
 import type { FinishedPart, WorkCenter } from "./types.js";
 
 /**
@@ -60,17 +60,25 @@ export type MetricsAggregate = {
 };
 
 /**
- * Reduce a window of per-tick observations to rates.
+ * Reduce a window of observation buckets to rates.
  *
- * `series` must be in tick order; storage returns it that way and an in-memory
- * batch is built that way. Windowing is the caller's job — a `WHERE tick_num
- * BETWEEN` or a slice — so this aggregates exactly what it is handed.
+ * `buckets` must be in tick order; storage returns them that way and
+ * `bucketTicks` builds them that way. Windowing is the caller's job — a
+ * `WHERE start_tick BETWEEN` or a slice — so this aggregates exactly what it is
+ * handed.
+ *
+ * It takes **buckets rather than ticks** so that one code path serves a stored
+ * series and a live one: since 6G storage keeps a bucket per simulated minute,
+ * and a single tick is simply a bucket of one (`bucketTicks(series, 1)`), which
+ * is how a caller with per-tick observations reaches this. Every figure below
+ * is built from a sum, a count or a max, so the answer does not depend on how
+ * the same ticks were grouped.
  *
  * An empty window is not an error: a run that has never advanced legitimately
  * has no ticks. It reports zeroes, null bounds, and every center still listed.
  */
 export function aggregateMetrics(
-  series: TickMetrics[],
+  buckets: ObservationBucket[],
   workCenters: Map<number, WorkCenter>,
 ): MetricsAggregate {
   const busyMachineTicks = new Map<number, number>();
@@ -81,43 +89,53 @@ export function aggregateMetrics(
 
   let wipTotal = 0;
   let maxWip = 0;
+  let tickCount = 0;
 
-  for (const tick of series) {
-    wipTotal += tick.wipCount;
-    maxWip = Math.max(maxWip, tick.wipCount);
+  for (const bucket of buckets) {
+    tickCount += bucket.tickCount;
+    wipTotal += bucket.wipPartTicks;
+    maxWip = Math.max(maxWip, bucket.maxWip);
 
-    for (const observation of tick.workCenters) {
+    for (const observation of bucket.workCenters) {
       const id = observation.workCenterId;
       if (!workCenters.has(id)) {
         throw new Error(
-          `Tick ${tick.tickNum} reports work center ${id}, which was not loaded`,
+          `Bucket at tick ${bucket.startTick} reports work center ${id}, which was not loaded`,
         );
       }
-      observedTicks.set(id, (observedTicks.get(id) ?? 0) + 1);
-      busyMachineTicks.set(id, (busyMachineTicks.get(id) ?? 0) + observation.busy);
+      observedTicks.set(
+        id,
+        (observedTicks.get(id) ?? 0) + observation.observedTicks,
+      );
+      busyMachineTicks.set(
+        id,
+        (busyMachineTicks.get(id) ?? 0) + observation.busyMachineTicks,
+      );
       capacityTicks.set(
         id,
-        (capacityTicks.get(id) ?? 0) + observation.capacity,
+        (capacityTicks.get(id) ?? 0) + observation.capacityTicks,
       );
-      queuedPartTicks.set(id, (queuedPartTicks.get(id) ?? 0) + observation.queued);
+      queuedPartTicks.set(
+        id,
+        (queuedPartTicks.get(id) ?? 0) + observation.queuedPartTicks,
+      );
       maxQueueDepth.set(
         id,
-        Math.max(maxQueueDepth.get(id) ?? 0, observation.queued),
+        Math.max(maxQueueDepth.get(id) ?? 0, observation.maxQueueDepth),
       );
     }
   }
 
-  const tickCount = series.length;
-  const first = series[0];
-  const last = series[tickCount - 1];
+  const first = buckets[0];
+  const last = buckets[buckets.length - 1];
 
   return {
-    fromTick: first?.tickNum ?? null,
-    toTick: last?.tickNum ?? null,
+    fromTick: first?.startTick ?? null,
+    toTick: last ? bucketLastTick(last) : null,
     tickCount,
     meanWip: tickCount === 0 ? 0 : wipTotal / tickCount,
     maxWip,
-    finalWip: last?.wipCount ?? 0,
+    finalWip: last?.endWip ?? 0,
     workCenters: [...workCenters.values()].map((workCenter) => {
       const observed = observedTicks.get(workCenter.id) ?? 0;
       const busy = busyMachineTicks.get(workCenter.id) ?? 0;
