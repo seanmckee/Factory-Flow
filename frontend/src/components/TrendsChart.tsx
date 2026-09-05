@@ -13,20 +13,28 @@ import {
 import { formatCents, formatSignedCents } from "../orders/salesOrderMath";
 import { formatTickShort, formatTickTime } from "../simulation/simTime";
 
-/** One tick's four vitals, pre-derived by the page from one `/ticks` response. */
+/**
+ * One tick's vitals, pre-derived by the page from one `/ticks` response. The
+ * fields are optional because a compared run's series can extend past the
+ * primary's (or trail off-grid in its final partial bucket): such ticks carry
+ * only one side, and every line bridges the other side's gap with
+ * `connectNulls` — the data there isn't zero, it's absent.
+ */
 export type TrendsPoint = {
   tick: number;
   /** cumulative throughput, cents */
-  throughput: number;
+  throughput?: number;
   /** cumulative net profit, cents — can be negative */
-  net: number;
+  net?: number;
   /** trailing-hour earning rate, cents per staffed hour */
-  rate: number;
+  rate?: number;
   /** parts on the floor at this tick */
-  wip: number;
+  wip?: number;
+  /** the compare run's cumulative net, cents (Track 7) */
+  compareNet?: number;
 };
 
-type SeriesKey = "throughput" | "net" | "rate" | "wip";
+type SeriesKey = "throughput" | "net" | "rate" | "wip" | "compareNet";
 type AxisId = "money" | "rate" | "parts";
 
 /**
@@ -48,7 +56,7 @@ type AxisId = "money" | "rate" | "parts";
  * net sagging under a climbing throughput, is exactly the read three separate
  * cards made the viewer assemble by eye.
  */
-const SERIES: {
+type SeriesSpec = {
   key: SeriesKey;
   label: string;
   axis: AxisId;
@@ -56,7 +64,11 @@ const SERIES: {
   /** stepAfter for integer series — parts don't move fractionally */
   type: "monotone" | "stepAfter";
   format: (value: number) => string;
-}[] = [
+  /** dashed for the compare run's net — same axis, same meaning, other branch */
+  dash?: string;
+};
+
+const SERIES: SeriesSpec[] = [
   {
     key: "throughput",
     label: "Throughput ($)",
@@ -91,17 +103,39 @@ const SERIES: {
   },
 ];
 
-const formatBySeries = new Map(SERIES.map((s) => [s.key as string, s.format]));
-
 export default function TrendsChart({
   data,
   dayTicks,
+  compareLabel,
+  forkTick,
 }: {
   data: TrendsPoint[];
   /** the run's frozen day length, for the Day · time axis and tooltip */
   dayTicks: number;
+  /** names the compared run; present exactly when `data` carries compareNet */
+  compareLabel?: string | undefined;
+  /** where the compared pair's shared history ends, when they are parent/child */
+  forkTick?: number | null | undefined;
 }) {
   const [hidden, setHidden] = useState<Set<SeriesKey>>(new Set());
+
+  // Dashed rather than a fifth colour: it is the same measure — net, on the
+  // same axis — for the other branch, and four colours already carry meaning.
+  const series: SeriesSpec[] = compareLabel
+    ? [
+        ...SERIES,
+        {
+          key: "compareNet",
+          label: `Net — ${compareLabel}`,
+          axis: "money",
+          stroke: "var(--chart-4)",
+          type: "monotone",
+          format: formatSignedCents,
+          dash: "6 3",
+        },
+      ]
+    : SERIES;
+  const formatBySeries = new Map(series.map((entry) => [entry.key as string, entry.format]));
 
   const toggle = (key: SeriesKey) =>
     setHidden((current) => {
@@ -109,8 +143,15 @@ export default function TrendsChart({
       if (next.has(key)) next.delete(key);
       else next.add(key);
       // never hide the last visible line — a blank chart reads as a bug
-      return next.size === SERIES.length ? current : next;
+      return next.size === series.length ? current : next;
     });
+
+  // The x-axis is categorical (one entry per data tick), so the fork seam
+  // snaps to the first drawn tick at or past it rather than not rendering.
+  const forkX =
+    forkTick === null || forkTick === undefined
+      ? undefined
+      : data.find((pt) => pt.tick >= forkTick)?.tick;
 
   return (
     <ResponsiveContainer width="100%" height="100%">
@@ -128,7 +169,7 @@ export default function TrendsChart({
         <YAxis
           yAxisId="money"
           width={64}
-          hide={hidden.has("throughput") && hidden.has("net")}
+          hide={hidden.has("throughput") && hidden.has("net") && (!compareLabel || hidden.has("compareNet"))}
           stroke="var(--muted-foreground)"
           tick={{ fill: "var(--muted-foreground)", fontSize: 12 }}
           tickFormatter={(cents) => `$${Math.round(Number(cents) / 100).toLocaleString()}`}
@@ -190,18 +231,34 @@ export default function TrendsChart({
           stroke="var(--muted-foreground)"
           strokeDasharray="4 4"
         />
-        {SERIES.map((series) => (
+        {forkX !== undefined && (
+          <ReferenceLine
+            yAxisId="money"
+            x={forkX}
+            stroke="var(--muted-foreground)"
+            strokeDasharray="4 4"
+            label={{
+              value: "fork",
+              position: "insideTopRight",
+              fill: "var(--muted-foreground)",
+              fontSize: 11,
+            }}
+          />
+        )}
+        {series.map((entry) => (
           <Line
-            key={series.key}
-            yAxisId={series.axis}
-            type={series.type}
-            dataKey={series.key}
-            name={series.label}
-            stroke={series.stroke}
+            key={entry.key}
+            yAxisId={entry.axis}
+            type={entry.type}
+            dataKey={entry.key}
+            name={entry.label}
+            stroke={entry.stroke}
             strokeWidth={2}
+            strokeDasharray={entry.dash}
             dot={false}
             isAnimationActive={false}
-            hide={hidden.has(series.key)}
+            hide={hidden.has(entry.key)}
+            connectNulls
           />
         ))}
       </LineChart>

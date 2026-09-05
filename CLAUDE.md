@@ -571,6 +571,29 @@ the ticks actually covered, never by the full window, because the data before
 the first sample isn't zero, it's absent, and a full-window divisor would draw
 a fake ramp at the start of every chart.
 
+**Compare (Track 7)** overlays a second run's net curve — dashed, same money
+axis, `Net — #id name` in the legend — picked from a small Select in the
+Trends card header (any other run, not lineage-only: two same-seed siblings
+are the same comparison a fork is). Both series are fetched at **one shared
+bucket**, `chartBucket(max of the two tickNums)`, because the absolute grid is
+what lands both curves on the same ticks *and* the bucket is `trailingRate`'s
+sample spacing — fetching the two runs at different widths would misalign the
+merge and skew the rate. The compare run's summary is re-read alongside its
+series since its `netCents` seeds `openingNetCents` for the compare curve; the
+merge itself is the pure `mergeCompareNet` (`simulation/compareTrend.ts`),
+which unions the two tick sets and leaves one-sided ticks (a run that advanced
+further, a trailing partial bucket off the grid) carrying one side only — the
+chart bridges those with `connectNulls`, since absent isn't zero. When the
+compared pair is parent/child in either direction, a vertical "fork" reference
+line marks where the shared history ends — the seam the payback question
+starts from. Compare state lives in `useSimulationPage` (`compareRunId`,
+`compareRun`, `compareSeries`, `selectCompare`) because `loadSeries` owns the
+shared-bucket rule; `selectRun` resets it. Both branches still read **live
+demand** (orders, prices, allocations) via `loadRunState`, so editing demand
+between branch advances diverges them for a reason the seed doesn't explain —
+same as two same-seed runs, not an RNG bug. The dashboard deliberately stays
+one run's window; comparison is the Trends chart's job.
+
 ### React state notes
 
 The page holds two refs, both about who owns the run's lock: `advancing` is
