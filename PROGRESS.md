@@ -23,12 +23,19 @@ whole-run `/metrics` on the 15-day playthrough 7.4 s → 1.13 s; every reported
 figure byte-identical across the migration). The playground seed gives a book
 with a horizon: 10 centres, 10 parts, 29 orders / 3,600 units, due days 2–18.
 
-**Next: Track 7 (forking) → Track 8 (the agent).** The remaining sim units —
-6G.2, 6G.3, 6H.2, 6H.3 — are **deferred behind both** (user call, 2026-09-04).
-The sim is done: it has a five-line P&L, a book with a horizon, and an API an
-agent can already drive. What is left there is polish and perf, and playing the
-sim kept generating more of it — 6F, 6G and 6H were all invented while driving
-6E. Pick them up after the agent, if its behaviour shows they are needed.
+**Track 7 (forking) is complete** (2026-09-04): `POST /api/runs/:id/fork`
+copies a run at its current tick under the parent's lock, the branches replay
+byte-identically from the shared seed until a decision diverges them (verified
+end-to-end by `npm run check:fork`), and the Trends chart overlays a compared
+run's net curve with a fork-seam line — the payback of one decision, read off
+two nets.
+
+**Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
+6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
+has a five-line P&L, a book with a horizon, forking, and an API an agent can
+already drive. What is left there is polish and perf, and playing the sim kept
+generating more of it — 6F, 6G and 6H were all invented while driving 6E. Pick
+them up after the agent, if its behaviour shows they are needed.
 
 ---
 
@@ -83,13 +90,8 @@ pays back in **0.6 of a fed day**.
       book. New randomness, so it needs a draw domain of its own (the 6C
       pattern) and must stay reproducible from `rng_seed` alone.
 
-### Track 7 onward — re-plan when reached
+### Track 8 — re-plan when reached
 
-- [ ] **Track 7** `feat/run-forking` — fork at a checkpoint, compare on net
-      profit. What all of Track 6 exists to make meaningful, and 6E gave it its
-      sharpest question: fork, buy the second drill press in one branch only,
-      and read the payback off the two net curves. Depends on the seeded RNG
-      (1.2) and on the draw key being uuid-free (3.2b).
 - [ ] **Track 8** `feat/agent` — tool layer: create, advance, fork, read
       metrics, compare.
 
@@ -269,3 +271,10 @@ spans ~5 wall-minutes and ~5M observation rows.
 
 ### Track 6H — Demand depth (`feat/demand-depth`)
 - [x] 6H.1 The playground seed — a book that spans a horizon (taken out of order, user call)
+
+### Track 7 — Run forking (`feat/run-forking`)
+- [x] 7.1 `forkRun` — every `run_*` table copied under the parent's lock, one transaction; `npm run check:fork` is the replay-identity proof
+- [x] 7.2 `POST /api/runs/:id/fork` — optional name, 201 with the run row; copy-vs-replay resolved as **copy**
+- [x] 7.3 Fork in the UI — button beside New Run, lands on the child; lineage in the picker and run bar
+- [x] 7.4 Compare on net profit — dashed compare-net on Trends at one shared bucket, fork-seam line; `mergeCompareNet` pure + tested
+- [x] 7.5 Ledger + doc sweep

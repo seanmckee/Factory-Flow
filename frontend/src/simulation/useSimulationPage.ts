@@ -5,6 +5,7 @@ import {
   applyCapitalAction,
   createRun,
   deleteRun,
+  forkRun,
   getRun,
   getRunFloor,
   getRunMetrics,
@@ -22,6 +23,7 @@ import {
   type TickSample,
 } from "../api/runs";
 import { CAPITAL_LABELS, formatSpend } from "./capital";
+import { mergeCompareNet } from "./compareTrend";
 import { cumulativeThroughput, openingCents } from "./cumulativeThroughput";
 import { netPerTick, openingNetCents } from "./netProfit";
 import {
@@ -53,7 +55,7 @@ export type JumpProgress = {
 };
 
 export type ActiveTab = "floor" | "trends" | "dashboard";
-type PendingAction = "create" | "delete" | "release" | "capital" | null;
+type PendingAction = "create" | "delete" | "fork" | "release" | "capital" | null;
 
 /** Coordinates the server-backed run while keeping rendering concerns out of the page. */
 export function useSimulationPage() {
@@ -72,6 +74,11 @@ export function useSimulationPage() {
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [newRunName, setNewRunName] = useState("");
   const [newRunOpen, setNewRunOpen] = useState(false);
+  const [forkName, setForkName] = useState("");
+  const [forkOpen, setForkOpen] = useState(false);
+  const [compareRunId, setCompareRunId] = useState<number | null>(null);
+  const [compareRun, setCompareRun] = useState<RunSummary | null>(null);
+  const [compareSeries, setCompareSeries] = useState<TickSample[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isRunLoading, setIsRunLoading] = useState(false);
@@ -135,20 +142,57 @@ export function useSimulationPage() {
     );
   }, []);
 
+  /**
+   * Loads the Trends series — and, when a compare run is chosen, its series
+   * too, both at one **shared bucket** picked from whichever run is longer.
+   * The shared grid is what lets the two curves land on the same ticks, and
+   * the bucket doubles as `trailingRate`'s sample spacing, so the two runs
+   * must not be fetched at different widths. The compare run's summary is
+   * re-read alongside, since its `netCents` seeds the compare curve's opening
+   * balance and the two must describe the same moment.
+   */
   const loadSeries = useCallback(
-    async (id: number, tickNum: number) => {
+    async (id: number, tickNum: number, compareId: number | null = compareRunId) => {
       setSeriesLoading(true);
       try {
-        const bucket = chartBucket(tickNum);
-        setSeries(await getRunTicks(id, bucket));
+        if (compareId === null) {
+          const bucket = chartBucket(tickNum);
+          setSeries(await getRunTicks(id, bucket));
+          setSeriesBucket(bucket);
+          setCompareRun(null);
+          setCompareSeries([]);
+          return;
+        }
+        const other = await getRun(compareId);
+        const bucket = chartBucket(Math.max(tickNum, other.tickNum));
+        const [own, theirs] = await Promise.all([
+          getRunTicks(id, bucket),
+          getRunTicks(compareId, bucket),
+        ]);
+        setSeries(own);
         setSeriesBucket(bucket);
+        setCompareRun(other);
+        setCompareSeries(theirs);
       } catch (error) {
         report(error, "Failed to load trends");
       } finally {
         setSeriesLoading(false);
       }
     },
-    [report],
+    [report, compareRunId],
+  );
+
+  /** Picks the run whose net curve overlays the Trends chart, or clears it. */
+  const selectCompare = useCallback(
+    (id: number | null) => {
+      setCompareRunId(id);
+      if (id === null) {
+        setCompareRun(null);
+        setCompareSeries([]);
+      }
+      if (runId !== null && run) void loadSeries(runId, run.tickNum, id);
+    },
+    [runId, run, loadSeries],
   );
 
   const loadMetrics = useCallback(
@@ -220,6 +264,9 @@ export function useSimulationPage() {
     setRun(null);
     setFloor(null);
     setSeries([]);
+    setCompareRunId(null);
+    setCompareRun(null);
+    setCompareSeries([]);
     setMetrics(null);
     metricsWindow.current = null;
     setActions([]);
@@ -340,6 +387,40 @@ export function useSimulationPage() {
     }
   };
 
+  /**
+   * Forks the selected run at its current tick and lands on the child — the
+   * branch the next decision is about. Waits the clock's beat out and holds
+   * `advancing` exactly as releasing does: the fork takes the same server-side
+   * lock as advancing, and colliding would raise the 409 the unlock button
+   * exists to cure. An empty name lets the server derive one from the parent.
+   */
+  const onForkRun = async () => {
+    if (runId === null) return showToast("Create or select a run first", "error");
+    if (jump) return;
+    setPendingAction("fork");
+    if (!(await awaitIdleClock())) {
+      setPendingAction(null);
+      return showToast("The run is still advancing — try again", "error");
+    }
+    advancing.current = true;
+    try {
+      const name = forkName.trim();
+      const child = await forkRun(runId, name === "" ? undefined : name);
+      setRuns((previous) => [...previous, child]);
+      selectRun(child.id);
+      setForkName("");
+      setForkOpen(false);
+      showToast(
+        `Forked at ${formatTickTime(child.forkedAtTick ?? 0, child.dayTicks)} — now driving "${child.name}"`,
+      );
+    } catch (error) {
+      report(error, "Failed to fork the run");
+    } finally {
+      advancing.current = false;
+      setPendingAction(null);
+    }
+  };
+
   const onDeleteRun = async () => {
     if (runId === null) return;
     setPendingAction("delete");
@@ -440,14 +521,31 @@ export function useSimulationPage() {
     const cumulative = cumulativeThroughput(history, openingCents(history, run?.throughputCents ?? 0));
     const net = cumulativeThroughput(netPerTick(pnlHistory), openingNetCents(pnlHistory, run?.netCents ?? 0));
     const rate = trailingRate(history, seriesBucket);
-    return series.map((sample, index) => ({
+    const base = series.map((sample, index) => ({
       tick: sample.tickNum,
       throughput: cumulative[index]?.cents ?? 0,
       net: net[index]?.cents ?? 0,
       rate: rate[index]?.cents ?? 0,
       wip: sample.wipCount,
     }));
-  }, [series, seriesBucket, run?.throughputCents, run?.netCents]);
+    if (compareRun === null || compareSeries.length === 0) return base;
+    // the compare run's net curve is the same math as the primary's, run on
+    // its own series and seeded by its own totals — the opening identity
+    // holds per run, and the child's totals include the copied history
+    const comparePnl = compareSeries.map((sample) => ({
+      tick: sample.tickNum,
+      throughputCents: sample.throughputCents,
+      operatingExpenseCents: sample.operatingExpenseCents,
+      carryingCostCents: sample.carryingCostCents,
+      wageCents: sample.wageCents,
+      capitalSpendCents: sample.capitalSpendCents,
+    }));
+    const compareNet = cumulativeThroughput(
+      netPerTick(comparePnl),
+      openingNetCents(comparePnl, compareRun.netCents),
+    );
+    return mergeCompareNet(base, compareNet);
+  }, [series, seriesBucket, run?.throughputCents, run?.netCents, compareRun, compareSeries]);
 
   const workOrderById = useMemo(() => new Map(workOrders.map((order) => [order.id, order])), [workOrders]);
   const releasedIds = useMemo(
@@ -469,13 +567,17 @@ export function useSimulationPage() {
   };
 
   return {
-    actions, activeTab, capitalOpen, changeTab, floor, isLoading, isRunLoading,
+    actions, activeTab, capitalOpen, changeTab, compareRun, compareRunId, floor,
+    forkName, forkOpen,
+    isLoading, isRunLoading,
     isRunning, jump,
     loadMetrics, metrics, metricsLoading, newRunName, newRunOpen, onCapitalAction,
     onCreateRun,
-    onDeleteRun, onRelease, pendingAction, releasableOrders, run, runId, runs,
-    runJump, salesOrders, selectRun, selectedOrderId, seriesLoading, setCapitalOpen,
-    setIsRunning,
+    onDeleteRun, onForkRun, onRelease, pendingAction, releasableOrders, run,
+    runId, runs,
+    runJump, salesOrders, selectCompare, selectRun, selectedOrderId,
+    seriesLoading, setCapitalOpen,
+    setForkName, setForkOpen, setIsRunning,
     setNewRunName, setNewRunOpen, setSelectedOrderId, setStopping, stopping,
     stopJumpRef, trend, workOrderById,
   };

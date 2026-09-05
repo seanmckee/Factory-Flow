@@ -65,7 +65,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   simulated minute since 6G, so a bucket at or below `TICKS_PER_BUCKET`
   returns the stored resolution rather than erroring, and a larger one
   regroups on top),
-  `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/releases`, `POST /api/runs/:id/fork` (Track 7 — copies
+  the run at its current tick into a new run with `parent_run_id` /
+  `forked_at_tick` set, an optional `name` the only input; it takes the
+  parent's lock, so it 409s mid-advance, and returns 201 with the new run
+  row), `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
   actions — one endpoint with a discriminating `kind` of `buy_machine` /
   `retire_machine` / `hire_operator` / `fire_operator`, rather than four
@@ -108,7 +112,13 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   the live tables — buying a machine in one run leaves every other run, and the
   factory, alone. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
-  already halfway through a route.
+  already halfway through a route. Track 7 makes the copy literal: `forkRun`
+  copies every `run_*` table row-for-row under the parent's lock, in one
+  transaction. **A new `run_*` table must join `forkRun`'s copy list** —
+  nothing catches a missed table automatically, while a missed *column* is a
+  compile error via its `CopyOf` annotations. The WIP copy goes through JS in
+  id order because admission order is list order; everything else is
+  server-side `INSERT … SELECT`.
 - History cascades from `simulation_runs`, and references out to the shared
   definition are RESTRICT — a work order a run has released can't be deleted
   from under it. Five columns are deliberately **un-keyed**: `work_center_id`
@@ -560,6 +570,29 @@ opening correction for them — but the series start does create a *left edge*:
 the ticks actually covered, never by the full window, because the data before
 the first sample isn't zero, it's absent, and a full-window divisor would draw
 a fake ramp at the start of every chart.
+
+**Compare (Track 7)** overlays a second run's net curve — dashed, same money
+axis, `Net — #id name` in the legend — picked from a small Select in the
+Trends card header (any other run, not lineage-only: two same-seed siblings
+are the same comparison a fork is). Both series are fetched at **one shared
+bucket**, `chartBucket(max of the two tickNums)`, because the absolute grid is
+what lands both curves on the same ticks *and* the bucket is `trailingRate`'s
+sample spacing — fetching the two runs at different widths would misalign the
+merge and skew the rate. The compare run's summary is re-read alongside its
+series since its `netCents` seeds `openingNetCents` for the compare curve; the
+merge itself is the pure `mergeCompareNet` (`simulation/compareTrend.ts`),
+which unions the two tick sets and leaves one-sided ticks (a run that advanced
+further, a trailing partial bucket off the grid) carrying one side only — the
+chart bridges those with `connectNulls`, since absent isn't zero. When the
+compared pair is parent/child in either direction, a vertical "fork" reference
+line marks where the shared history ends — the seam the payback question
+starts from. Compare state lives in `useSimulationPage` (`compareRunId`,
+`compareRun`, `compareSeries`, `selectCompare`) because `loadSeries` owns the
+shared-bucket rule; `selectRun` resets it. Both branches still read **live
+demand** (orders, prices, allocations) via `loadRunState`, so editing demand
+between branch advances diverges them for a reason the seed doesn't explain —
+same as two same-seed runs, not an RNG bug. The dashboard deliberately stays
+one run's window; comparison is the Trends chart's job.
 
 ### React state notes
 

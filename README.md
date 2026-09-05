@@ -148,10 +148,10 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 
 The core experiment loop, and the most valuable feature in the project.
 
-- Fork a run from any checkpoint: same state, new branch, new decisions.
-- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Two of those are already real: a run can buy machines and hire operators through Track 6E's actions, and a run can be created with a different shift count. What forking adds is doing it from a checkpoint of a run already in motion, against a sibling that didn't.*
-- Runs form a tree, so a chain of decisions can be traced back to the checkpoint it diverged at.
-- **Compare forks side by side**: same time window, same metrics, difference highlighted.
+- ~~Fork a run from any checkpoint: same state, new branch, new decisions.~~ **Done (Track 7):** `POST /api/runs/:id/fork` copies the run at its current tick — any moment a run is paused at is a checkpoint — and the Fork button lands on the child. Both branches replay identically from the shared seed until a decision diverges them, verified by a replay-identity check (`npm run check:fork`).
+- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Buying machines and hiring operators (6E) can now be done in one branch of a fork against a sibling that didn't — the drill-press question is askable end to end.*
+- ~~Runs form a tree~~ — they do: `parent_run_id` chains, a fork of a fork works, and a parent can't be deleted out from under its forks.
+- **Compare forks side by side**: the Trends chart overlays a compared run's net curve (dashed, same clock, a "fork" line where the shared history ends), which is the payback read. *Windowed metric deltas — same window, every metric, difference highlighted — remain open.*
 - **The comparison is scored on net profit, not throughput.** With Phase 4 in place, a fork that raises output but required a machine purchase and a second shift can lose to the fork that did nothing. That result is only visible if cost is in the model — which is why the money model comes first.
 - Every comparison has to be measurable — deltas in net profit, throughput, operating expense, WIP, cycle time, lateness — not just a visual impression.
 
@@ -211,7 +211,7 @@ Independent of the phases above, the domain model needs:
 
 Decisions not yet made, recorded so they get made deliberately:
 
-- Whether forking copies state or replays from a checkpoint. Leaning copy: a run's state is a handful of rows, and the seeded RNG means a copy replays identically without an event log to keep.
+- ~~Whether forking copies state or replays from a checkpoint.~~ **Answered by Track 7: copy.** A run's state is a handful of rows, and the seeded RNG plus the uuid-free draw key mean the copy replays identically without an event log to keep — `POST /api/runs/:id/fork` copies every `run_*` table under the parent's lock, and two branches stay byte-identical until a decision (a capital action, a release) diverges them.
 - ~~Whether a run should be able to edit its *own* factory config.~~ **Answered by Track 6E: yes, and only through an action that charges for it.** `run_work_centers` has exactly one writer — a capital action, which pays the run's frozen price, re-dates the rate it moved and appends to `run_capital_actions`. Free editing was never the question worth answering; a factory you can reconfigure for nothing makes every decision trivial. Pinned *steps* still have no writer, so changing what the next release will pin remains an edit to the shared routing.
 
 Answered since, kept here because the answers shaped everything after them:

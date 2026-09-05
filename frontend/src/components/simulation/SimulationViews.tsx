@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { ChevronRight, Info, LoaderCircle } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import WorkCenterTable from "../WorkCenterTable";
@@ -8,7 +9,7 @@ import type { ActiveTab, SimulationPageController } from "../../simulation/useSi
 
 const TrendsChart = lazy(() => import("../TrendsChart"));
 
-function ChartCard({ children }: { children: React.ReactNode }) {
+function ChartCard({ children, controls }: { children: React.ReactNode; controls?: React.ReactNode }) {
   return (
     <div className="flex h-full min-h-0 flex-col rounded-lg border bg-card p-4">
       <div className="flex shrink-0 items-center gap-1.5 pb-2">
@@ -16,9 +17,10 @@ function ChartCard({ children }: { children: React.ReactNode }) {
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger className="text-muted-foreground hover:text-foreground" aria-label={'What "Trends" shows'}><Info className="size-3.5" /></TooltipTrigger>
-            <TooltipContent className="max-w-72">The run's vitals on one clock. WIP climbing while the rate is flat means parts are piling at a constraint; net falling while throughput climbs means the doors cost more than the flow earns.</TooltipContent>
+            <TooltipContent className="max-w-72">The run's vitals on one clock. WIP climbing while the rate is flat means parts are piling at a constraint; net falling while throughput climbs means the doors cost more than the flow earns. Compare overlays another run's net curve, dashed, on the same clock — fork a run, take one decision in one branch, and read the payback off where the two nets cross.</TooltipContent>
           </Tooltip>
         </TooltipProvider>
+        {controls && <div className="ml-auto">{controls}</div>}
       </div>
       <div className="min-h-0 flex-1">{children}</div>
     </div>
@@ -26,13 +28,48 @@ function ChartCard({ children }: { children: React.ReactNode }) {
 }
 
 type Props = Pick<SimulationPageController,
-  "actions" | "activeTab" | "changeTab" | "floor" | "loadMetrics" | "metrics" |
-  "metricsLoading" | "run" | "salesOrders" | "seriesLoading" | "trend" | "workOrderById"
+  "actions" | "activeTab" | "changeTab" | "compareRun" | "compareRunId" | "floor" |
+  "loadMetrics" | "metrics" |
+  "metricsLoading" | "run" | "runs" | "salesOrders" | "selectCompare" |
+  "seriesLoading" | "trend" | "workOrderById"
 >;
 
 export function SimulationViews(props: Props) {
-  const { actions, activeTab, changeTab, floor, loadMetrics, metrics, metricsLoading, run, salesOrders, seriesLoading, trend, workOrderById } = props;
+  const { actions, activeTab, changeTab, compareRun, compareRunId, floor, loadMetrics, metrics, metricsLoading, run, runs, salesOrders, selectCompare, seriesLoading, trend, workOrderById } = props;
   if (!run) return null;
+  // the seam is drawn only when the compared pair is parent/child, in either
+  // direction — that tick is where their shared history ends
+  const forkTick = compareRun
+    ? compareRun.parentRunId === run.id
+      ? compareRun.forkedAtTick
+      : run.parentRunId === compareRun.id
+        ? run.forkedAtTick
+        : null
+    : null;
+  const compareOptions = runs.filter((option) => option.id !== run.id);
+  const compareSelect = (
+    <div className="flex items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Compare</span>
+      <Select
+        value={compareRunId === null ? "none" : String(compareRunId)}
+        onValueChange={(value) => selectCompare(value === "none" ? null : Number(value))}
+        disabled={compareOptions.length === 0}
+      >
+        <SelectTrigger size="sm" className="w-56">
+          <SelectValue placeholder="—" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="none">No comparison</SelectItem>
+          {compareOptions.map((option) => (
+            <SelectItem key={option.id} value={String(option.id)}>
+              #{option.id} · {option.name}
+              {option.parentRunId !== null && ` · fork of #${option.parentRunId}`}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
   return (
     <Tabs value={activeTab} onValueChange={(value) => changeTab(value as ActiveTab)} className="flex min-h-0 flex-1 flex-col gap-3">
       <TabsList className="shrink-0 self-start"><TabsTrigger value="floor">Floor</TabsTrigger><TabsTrigger value="trends">Trends</TabsTrigger><TabsTrigger value="dashboard">Dashboard</TabsTrigger></TabsList>
@@ -46,7 +83,7 @@ export function SimulationViews(props: Props) {
         </div>
       </TabsContent>
       <TabsContent value="trends" className="min-h-0 flex-1 overflow-auto">
-        <div className="h-full min-h-[28rem]"><ChartCard>{seriesLoading ? <Loading label="Loading trends…" /> : <Suspense fallback={<Loading label="Loading chart…" />}><TrendsChart data={trend} dayTicks={run.dayTicks} /></Suspense>}</ChartCard></div>
+        <div className="h-full min-h-[28rem]"><ChartCard controls={compareSelect}>{seriesLoading ? <Loading label="Loading trends…" /> : <Suspense fallback={<Loading label="Loading chart…" />}><TrendsChart data={trend} dayTicks={run.dayTicks} compareLabel={compareRun ? `#${compareRun.id} ${compareRun.name}` : undefined} forkTick={forkTick} /></Suspense>}</ChartCard></div>
       </TabsContent>
       <TabsContent value="dashboard" className="flex min-h-0 flex-1 flex-col">
         {metricsLoading ? <Loading label="Loading dashboard…" /> : metrics ? (

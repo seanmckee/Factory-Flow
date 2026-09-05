@@ -253,6 +253,15 @@ export const createRunSchema = z.object({
   shifts: shiftsInt.optional(),
 });
 
+/**
+ * Forking takes only an optional name — everything else is the parent's: the
+ * seed, the frozen config, the floor and the history are copied, not chosen.
+ * No name means the server derives one from the parent and the fork day.
+ */
+export const forkRunSchema = z.object({
+  name: boundedText("name").optional(),
+});
+
 export const releaseWorkOrderSchema = z.object({
   workOrderId: positiveInt("workOrderId"),
 });
