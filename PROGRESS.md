@@ -30,6 +30,13 @@ end-to-end by `npm run check:fork`), and the Trends chart overlays a compared
 run's net curve with a fork-seam line — the payback of one decision, read off
 two nets.
 
+**Release policies (RP) are complete** (2026-09-04): a run can feed its own
+floor while it advances — CONWIP, due-date scheduling, or drum-buffer-rope,
+EDD priority throughout — with defaults in Factory Settings, a frozen per-run
+copy changeable any time under the run's lock, and fork isolation proven
+end-to-end by `npm run check:policy`. A jump now drains only when the floor
+and the releasable backlog are both empty.
+
 **Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
 6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
@@ -101,7 +108,7 @@ Noted 2026-09-04, to pick up later (after the agent, unless it needs them):
 - [ ] **More compare series on Trends** — e.g. an operating-expense line for
       the compared run, so the cost side of a decision reads alongside its net.
 
-### Release policies (`feat/release-policy`) — in progress
+### Release policies (`feat/release-policy`) — complete
 
 Planned 2026-09-04 from playing the sim: with only manual releases, a long
 fast-forward drains the floor and rent burns on an idle factory. Three
@@ -118,7 +125,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
 - [x] RP.4 `POST /api/runs/:id/policy` + settings PATCH + `npm run check:policy`
 - [x] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and
       drain-stop learn about backlog
-- [ ] RP.6 Ledger + doc sweep
+- [x] RP.6 Ledger + doc sweep
 
 ### Track 8 — re-plan when reached
 
