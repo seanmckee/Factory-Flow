@@ -111,7 +111,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
 
 - [x] RP.1 Schema + migration — five policy columns on `factory_settings` and
       `simulation_runs`; frozen at create; forkRun copies them
-- [ ] RP.2 Pure policy engine + tests — `planReleases` (conwip / due_date /
+- [x] RP.2 Pure policy engine + tests — `planReleases` (conwip / due_date /
       dbr), `buildReleaseParts` shared with manual release, `admitOrderIntoState`
 - [ ] RP.3 Advance integration — evaluate per batch, release rows ride the
       batch transaction, `AdvanceResult.autoReleased` + `backlogCount`

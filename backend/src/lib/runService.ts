@@ -17,10 +17,7 @@ import {
   workOrders,
 } from "../db/schema.js";
 import { TICKS_PER_DAY } from "../simulation/operatingExpense.js";
-import {
-  PROCESS_TIME_DEVIATION,
-  sampleProcessTime,
-} from "../simulation/sampleProcessTime.js";
+import { buildReleaseParts } from "../simulation/releaseAdmission.js";
 import {
   TICKS_PER_BUCKET,
   bucketMoney,
@@ -551,26 +548,28 @@ export async function releaseWorkOrder(
         })),
       );
 
-      const newParts = Array.from(
-        { length: workOrder.quantity },
-        (_, unitIndex) => ({
-          runId,
-          partUuid: crypto.randomUUID(),
-          workOrderId,
-          unitIndex,
-          releasedAtTick: run.tickNum,
-          stepIndex: 0,
-          progressSeconds: 0,
-          actualProcessTimeSeconds: sampleProcessTime(
-            firstStep.processTimeSeconds,
-            PROCESS_TIME_DEVIATION,
-            { seed: run.rngSeed, workOrderId, unitIndex, stepIndex: 0 },
-          ),
-        }),
+      // one construction site for a release's parts, shared with the
+      // auto-release path so the draw key cannot drift between the two
+      const newParts = buildReleaseParts(
+        run,
+        workOrderId,
+        workOrder.quantity,
+        firstStep.processTimeSeconds,
       );
 
       for (const slice of chunked(newParts, chunkFor(8))) {
-        await tx.insert(runWipParts).values(slice);
+        await tx.insert(runWipParts).values(
+          slice.map((part) => ({
+            runId,
+            partUuid: part.id,
+            workOrderId: part.workOrderId,
+            unitIndex: part.unitIndex,
+            releasedAtTick: part.releasedAtTick,
+            stepIndex: part.stepIndex,
+            progressSeconds: part.progressSeconds,
+            actualProcessTimeSeconds: part.actualProcessTimeSeconds,
+          })),
+        );
       }
 
       return {
