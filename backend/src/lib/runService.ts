@@ -28,6 +28,7 @@ import {
 } from "../simulation/observationBuckets.js";
 import { simulateBatch } from "../simulation/simulateBatch.js";
 import { getFactorySettings } from "./factorySettings.js";
+import { defaultForkName } from "./forkName.js";
 import { HttpError } from "./httpError.js";
 import { loadRunState, type RunRow } from "./runState.js";
 
@@ -186,6 +187,245 @@ export async function createRun(
 
     return run;
   });
+}
+
+/**
+ * Every payload column of an insert shape, `id` excluded — the compile-time
+ * guard on `forkRun`'s copy selections. A copy that misses a column doesn't
+ * fail, it silently takes the column default (nearly every `run_work_centers`
+ * column has one, so a forgotten column would quietly reset a bought
+ * machine); `satisfies CopyOf<…>` turns that into a build error instead.
+ */
+type CopyOf<TInsert> = Record<keyof Required<Omit<TInsert, "id">>, unknown>;
+
+/**
+ * Copies a run as it stands at its current tick — Track 7's checkpoint fork.
+ * A fork is a **copy, not a versioning scheme**: the child gets its own rows
+ * for the frozen config, the floor, the history and the observations, and the
+ * shared seed plus the uuid-free draw key mean both branches draw identical
+ * noise until a decision — a capital action, a release — diverges them.
+ *
+ * Taken under the **parent's** lock: an advance replaces the WIP rows and
+ * writes the buckets in separate statements, so a fork landing mid-batch
+ * would copy a torn state. The child needs no lock of its own — nobody can
+ * learn its id until the transaction commits. One transaction on purpose:
+ * `run_capital_actions` has no unique constraint, so a partial copy retried
+ * would silently double the P&L's capital line.
+ *
+ * Every `run_*` table is copied, and a new one must join this list — nothing
+ * catches a missed *table* automatically. A missed *column* is a compile
+ * error via the `CopyOf` annotations. The parent's trailing observation
+ * bucket may be partial (`tick_count < 60`); it is copied verbatim, and the
+ * accumulating bucket upsert completes it when the child advances into the
+ * same grid slot — the same mechanics as an advance whose length the bucket
+ * width does not divide.
+ */
+export async function forkRun(
+  parentId: number,
+  name?: string,
+): Promise<RunRow> {
+  return withRunLock(parentId, (parent) =>
+    db.transaction(async (tx) => {
+      const [child] = await tx
+        .insert(simulationRuns)
+        .values({
+          name:
+            name ??
+            defaultForkName(parent.name, parent.tickNum, parent.dayTicks),
+          // status deliberately not copied: `parent` is the row the lock
+          // claimed, so it reads `advancing` here; the child defaults to idle
+          tickNum: parent.tickNum,
+          rngSeed: parent.rngSeed,
+          parentRunId: parent.id,
+          forkedAtTick: parent.tickNum,
+          dayTicks: parent.dayTicks,
+          facilityOverheadCentsPerDay: parent.facilityOverheadCentsPerDay,
+          wipCarryingBpsPerDay: parent.wipCarryingBpsPerDay,
+          carryRemainder: parent.carryRemainder,
+        })
+        .returning();
+      if (!child) throw new HttpError(500, "Fork insert failed");
+
+      const childId = sql<number>`${child.id}::int`;
+
+      // frozen config: capacities, rates, prices, and both effective-from
+      // ticks — absolute run ticks, valid verbatim because the child keeps
+      // the parent's tick numbering
+      await tx.insert(runWorkCenters).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            workCenterId: runWorkCenters.workCenterId,
+            capacity: runWorkCenters.capacity,
+            operators: runWorkCenters.operators,
+            standingCostCentsPerDay: runWorkCenters.standingCostCentsPerDay,
+            wageCentsPerHour: runWorkCenters.wageCentsPerHour,
+            standingCostEffectiveFromTick:
+              runWorkCenters.standingCostEffectiveFromTick,
+            wageEffectiveFromTick: runWorkCenters.wageEffectiveFromTick,
+            machinePurchaseCents: runWorkCenters.machinePurchaseCents,
+            machineSalvageCents: runWorkCenters.machineSalvageCents,
+            operatorHireCents: runWorkCenters.operatorHireCents,
+          } satisfies CopyOf<typeof runWorkCenters.$inferInsert>)
+          .from(runWorkCenters)
+          .where(eq(runWorkCenters.runId, parent.id)),
+      );
+
+      // pinned steps, including the mutable setup_started_at_tick — without
+      // it the child re-pays every changeover the parent already paid
+      await tx.insert(runWorkOrderSteps).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            workOrderId: runWorkOrderSteps.workOrderId,
+            sequence: runWorkOrderSteps.sequence,
+            workCenterId: runWorkOrderSteps.workCenterId,
+            processTimeSeconds: runWorkOrderSteps.processTimeSeconds,
+            setupTimeSeconds: runWorkOrderSteps.setupTimeSeconds,
+            scrapBps: runWorkOrderSteps.scrapBps,
+            setupStartedAtTick: runWorkOrderSteps.setupStartedAtTick,
+          } satisfies CopyOf<typeof runWorkOrderSteps.$inferInsert>)
+          .from(runWorkOrderSteps)
+          .where(eq(runWorkOrderSteps.runId, parent.id)),
+      );
+
+      await tx.insert(runReleasedOrders).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            workOrderId: runReleasedOrders.workOrderId,
+            routingId: runReleasedOrders.routingId,
+            routingRevision: runReleasedOrders.routingRevision,
+          } satisfies CopyOf<typeof runReleasedOrders.$inferInsert>)
+          .from(runReleasedOrders)
+          .where(eq(runReleasedOrders.runId, parent.id)),
+      );
+
+      // The floor is copied through JS with an ordered multi-row insert, not
+      // INSERT…SELECT: `loadRunState` reads WIP `ORDER BY id` and admission is
+      // list order, so relative id order is replay-load-bearing, and serial
+      // assignment order under INSERT…SELECT is not guaranteed. WIP is small
+      // (peaked at 865 on the 15-day playthrough); the append-only tables
+      // below stay server-side.
+      const wip = await tx
+        .select()
+        .from(runWipParts)
+        .where(eq(runWipParts.runId, parent.id))
+        .orderBy(runWipParts.id);
+      for (const slice of chunked(wip, chunkFor(8))) {
+        await tx.insert(runWipParts).values(
+          slice.map(
+            (part) =>
+              ({
+                runId: child.id,
+                partUuid: part.partUuid,
+                workOrderId: part.workOrderId,
+                unitIndex: part.unitIndex,
+                releasedAtTick: part.releasedAtTick,
+                stepIndex: part.stepIndex,
+                progressSeconds: part.progressSeconds,
+                actualProcessTimeSeconds: part.actualProcessTimeSeconds,
+              }) satisfies CopyOf<typeof runWipParts.$inferInsert>,
+          ),
+        );
+      }
+
+      // history — required for correctness, not just reporting: priorCounts
+      // is a GROUP BY over the finished table and is the allocation cursor
+      await tx.insert(runFinishedParts).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            partUuid: runFinishedParts.partUuid,
+            workOrderId: runFinishedParts.workOrderId,
+            releasedAtTick: runFinishedParts.releasedAtTick,
+            completedAtTick: runFinishedParts.completedAtTick,
+            throughputCents: runFinishedParts.throughputCents,
+            salesOrderId: runFinishedParts.salesOrderId,
+            unitPriceCents: runFinishedParts.unitPriceCents,
+            materialCostCents: runFinishedParts.materialCostCents,
+            dueAtTick: runFinishedParts.dueAtTick,
+          } satisfies CopyOf<typeof runFinishedParts.$inferInsert>)
+          .from(runFinishedParts)
+          .where(eq(runFinishedParts.runId, parent.id))
+          .orderBy(runFinishedParts.id),
+      );
+
+      await tx.insert(runScrappedParts).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            partUuid: runScrappedParts.partUuid,
+            workOrderId: runScrappedParts.workOrderId,
+            unitIndex: runScrappedParts.unitIndex,
+            releasedAtTick: runScrappedParts.releasedAtTick,
+            scrappedAtTick: runScrappedParts.scrappedAtTick,
+            sequence: runScrappedParts.sequence,
+            workCenterId: runScrappedParts.workCenterId,
+            materialCostCents: runScrappedParts.materialCostCents,
+          } satisfies CopyOf<typeof runScrappedParts.$inferInsert>)
+          .from(runScrappedParts)
+          .where(eq(runScrappedParts.runId, parent.id))
+          .orderBy(runScrappedParts.id),
+      );
+
+      // observations — buckets before their per-centre rows (composite FK)
+      await tx.insert(runBuckets).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            startTick: runBuckets.startTick,
+            tickCount: runBuckets.tickCount,
+            throughputCents: runBuckets.throughputCents,
+            operatingExpenseCents: runBuckets.operatingExpenseCents,
+            carryingCostCents: runBuckets.carryingCostCents,
+            wageCents: runBuckets.wageCents,
+            wipPartTicks: runBuckets.wipPartTicks,
+            maxWip: runBuckets.maxWip,
+            endWip: runBuckets.endWip,
+          } satisfies CopyOf<typeof runBuckets.$inferInsert>)
+          .from(runBuckets)
+          .where(eq(runBuckets.runId, parent.id)),
+      );
+
+      await tx.insert(runBucketWorkCenters).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            startTick: runBucketWorkCenters.startTick,
+            workCenterId: runBucketWorkCenters.workCenterId,
+            observedTicks: runBucketWorkCenters.observedTicks,
+            busyMachineTicks: runBucketWorkCenters.busyMachineTicks,
+            capacityTicks: runBucketWorkCenters.capacityTicks,
+            queuedPartTicks: runBucketWorkCenters.queuedPartTicks,
+            maxQueueDepth: runBucketWorkCenters.maxQueueDepth,
+          } satisfies CopyOf<typeof runBucketWorkCenters.$inferInsert>)
+          .from(runBucketWorkCenters)
+          .where(eq(runBucketWorkCenters.runId, parent.id)),
+      );
+
+      // the child's pre-fork capital spend: without it the copied history's
+      // net and the capital log would disagree with the parent over the
+      // shared ticks
+      await tx.insert(runCapitalActions).select((qb) =>
+        qb
+          .select({
+            runId: childId.as("run_id"),
+            kind: runCapitalActions.kind,
+            workCenterId: runCapitalActions.workCenterId,
+            appliedAtTick: runCapitalActions.appliedAtTick,
+            spendCents: runCapitalActions.spendCents,
+            machinesAfter: runCapitalActions.machinesAfter,
+            operatorsAfter: runCapitalActions.operatorsAfter,
+          } satisfies CopyOf<typeof runCapitalActions.$inferInsert>)
+          .from(runCapitalActions)
+          .where(eq(runCapitalActions.runId, parent.id))
+          .orderBy(runCapitalActions.id),
+      );
+
+      return child;
+    }),
+  );
 }
 
 export type ReleaseResult = {

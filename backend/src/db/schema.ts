@@ -212,7 +212,7 @@ export const simulationRuns = pgTable("simulation_runs", {
   tickNum: integer("tick_num").notNull().default(0),
   /** the whole of the run's randomness; the draw needs no cursor */
   rngSeed: integer("rng_seed").notNull(),
-  /** reserved for forking a run at a checkpoint; nothing sets it today */
+  /** set by `forkRun`: the run this one was copied from at `forked_at_tick` */
   parentRunId: integer("parent_run_id").references(
     (): AnyPgColumn => simulationRuns.id,
     { onDelete: "restrict" },

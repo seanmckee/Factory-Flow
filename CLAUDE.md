@@ -108,7 +108,13 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   the live tables — buying a machine in one run leaves every other run, and the
   factory, alone. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
-  already halfway through a route.
+  already halfway through a route. Track 7 makes the copy literal: `forkRun`
+  copies every `run_*` table row-for-row under the parent's lock, in one
+  transaction. **A new `run_*` table must join `forkRun`'s copy list** —
+  nothing catches a missed table automatically, while a missed *column* is a
+  compile error via its `CopyOf` annotations. The WIP copy goes through JS in
+  id order because admission order is list order; everything else is
+  server-side `INSERT … SELECT`.
 - History cascades from `simulation_runs`, and references out to the shared
   definition are RESTRICT — a work order a run has released can't be deleted
   from under it. Five columns are deliberately **un-keyed**: `work_center_id`
