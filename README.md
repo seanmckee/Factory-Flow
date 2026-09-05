@@ -148,10 +148,10 @@ The model already tracks Throughput in cents (revenue minus material cost, credi
 
 The core experiment loop, and the most valuable feature in the project.
 
-- Fork a run from any checkpoint: same state, new branch, new decisions.
-- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Two of those are already real: a run can buy machines and hire operators through Track 6E's actions, and a run can be created with a different shift count. What forking adds is doing it from a checkpoint of a run already in motion, against a sibling that didn't.*
-- Runs form a tree, so a chain of decisions can be traced back to the checkpoint it diverged at.
-- **Compare forks side by side**: same time window, same metrics, difference highlighted.
+- ~~Fork a run from any checkpoint: same state, new branch, new decisions.~~ **Done (Track 7):** `POST /api/runs/:id/fork` copies the run at its current tick — any moment a run is paused at is a checkpoint — and the Fork button lands on the child. Both branches replay identically from the shared seed until a decision diverges them, verified by a replay-identity check (`npm run check:fork`).
+- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Buying machines and hiring operators (6E) can now be done in one branch of a fork against a sibling that didn't — the drill-press question is askable end to end.*
+- ~~Runs form a tree~~ — they do: `parent_run_id` chains, a fork of a fork works, and a parent can't be deleted out from under its forks.
+- **Compare forks side by side**: the Trends chart overlays a compared run's net curve (dashed, same clock, a "fork" line where the shared history ends), which is the payback read. *Windowed metric deltas — same window, every metric, difference highlighted — remain open.*
 - **The comparison is scored on net profit, not throughput.** With Phase 4 in place, a fork that raises output but required a machine purchase and a second shift can lose to the fork that did nothing. That result is only visible if cost is in the model — which is why the money model comes first.
 - Every comparison has to be measurable — deltas in net profit, throughput, operating expense, WIP, cycle time, lateness — not just a visual impression.
 
