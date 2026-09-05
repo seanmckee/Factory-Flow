@@ -1,4 +1,5 @@
 import { deleteJson, getJson, postJson } from "./client";
+import type { ReleasePolicyKind } from "../simulation/releasePolicy";
 
 /**
  * The run API, hand-typed as every API shape in this app is — the backend's
@@ -19,6 +20,12 @@ export type Run = {
   rngSeed: number;
   parentRunId: number | null;
   forkedAtTick: number | null;
+  /** the run's own frozen release policy (RP); changed via setReleasePolicy */
+  releasePolicy: ReleasePolicyKind;
+  wipCap: number;
+  releaseLeadDays: number;
+  drumWorkCenterId: number | null;
+  drumBuffer: number;
   /** the run's frozen day length in ticks — what its per-day rates accrue over */
   dayTicks: number;
   /** frozen facility-level rates, for display; the accrual happened server-side */
@@ -105,6 +112,18 @@ export type AdvanceResult = {
   scrappedCount: number;
   /** WIP still on the floor after the advance — an agent's stop condition. */
   wipCount: number;
+  /** what the release policy put on the floor during the advance, in order */
+  autoReleased: {
+    workOrderId: number;
+    partsReleased: number;
+    releasedAtTick: number;
+  }[];
+  /**
+   * Orders the policy could still release. A jump drains only when
+   * `wipCount === 0 && backlogCount === 0` — always 0 under manual, so the
+   * old drain condition is this one's special case.
+   */
+  backlogCount: number;
 };
 
 /** One work center's rates over a window. Utilization is in [0, 1]. */
@@ -212,6 +231,22 @@ export const createRun = (name: string, rngSeed?: number) =>
  * branches replay identically until a decision diverges them. Name omitted
  * means the server derives one from the parent and the fork day.
  */
+/**
+ * Changes the run's own release policy — under the run's lock (409 during a
+ * jump), effective from the next advance. Omitted numeric fields keep the
+ * run's current values.
+ */
+export const setReleasePolicy = (
+  runId: number,
+  body: {
+    releasePolicy: ReleasePolicyKind;
+    wipCap?: number;
+    releaseLeadDays?: number;
+    drumWorkCenterId?: number | null;
+    drumBuffer?: number;
+  },
+) => postJson<Run>(`/api/runs/${runId}/policy`, body);
+
 export const forkRun = (runId: number, name?: string) =>
   postJson<Run>(
     `/api/runs/${runId}/fork`,

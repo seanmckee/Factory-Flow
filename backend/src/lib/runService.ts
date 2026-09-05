@@ -18,9 +18,14 @@ import {
 } from "../db/schema.js";
 import { TICKS_PER_DAY } from "../simulation/operatingExpense.js";
 import {
-  PROCESS_TIME_DEVIATION,
-  sampleProcessTime,
-} from "../simulation/sampleProcessTime.js";
+  admitOrderIntoState,
+  buildReleaseParts,
+} from "../simulation/releaseAdmission.js";
+import {
+  eligibleBacklogCount,
+  planReleases,
+  policyFromRun,
+} from "../simulation/releasePolicy.js";
 import {
   TICKS_PER_BUCKET,
   bucketMoney,
@@ -30,7 +35,12 @@ import { simulateBatch } from "../simulation/simulateBatch.js";
 import { getFactorySettings } from "./factorySettings.js";
 import { defaultForkName } from "./forkName.js";
 import { HttpError } from "./httpError.js";
-import { loadRunState, type RunRow } from "./runState.js";
+import {
+  loadReleaseBacklog,
+  loadRunState,
+  type LoadedBacklogOrder,
+  type RunRow,
+} from "./runState.js";
 
 /**
  * The write side of the run API: creating a run, releasing into it and
@@ -149,6 +159,13 @@ export async function createRun(
           settings.facilityOverheadCentsPerDay,
         wipCarryingBpsPerDay:
           overrides.wipCarryingBpsPerDay ?? settings.wipCarryingBpsPerDay,
+        // the release policy freezes like the rates: the settings row is the
+        // default, POST /:id/policy is the per-run writer thereafter
+        releasePolicy: settings.releasePolicy,
+        wipCap: settings.wipCap,
+        releaseLeadDays: settings.releaseLeadDays,
+        drumWorkCenterId: settings.drumWorkCenterId,
+        drumBuffer: settings.drumBuffer,
       })
       .returning();
     if (!run) throw new HttpError(500, "Run insert failed");
@@ -165,6 +182,19 @@ export async function createRun(
         operatorHireCents: workCenters.operatorHireCents,
       })
       .from(workCenters);
+
+    // a dbr run without a drum can never release anything, so refuse the
+    // creation rather than freeze a policy that silently starves the floor
+    if (
+      settings.releasePolicy === "dbr" &&
+      (settings.drumWorkCenterId === null ||
+        !centers.some((center) => center.id === settings.drumWorkCenterId))
+    ) {
+      throw new HttpError(
+        400,
+        "Factory settings use drum-buffer-rope but name no existing drum work center — pick one in Factory Settings first",
+      );
+    }
 
     if (centers.length > 0) {
       // the prices are frozen too, not just the rates: a capital action mid-run
@@ -242,6 +272,15 @@ export async function forkRun(
           facilityOverheadCentsPerDay: parent.facilityOverheadCentsPerDay,
           wipCarryingBpsPerDay: parent.wipCarryingBpsPerDay,
           carryRemainder: parent.carryRemainder,
+          // NOTE: this literal is hand-maintained — a new simulation_runs
+          // column must be added here BY HAND or a fork silently takes the
+          // column default (no CopyOf guard exists on this table).
+          // check:policy's fork-isolation assertion is the runtime net.
+          releasePolicy: parent.releasePolicy,
+          wipCap: parent.wipCap,
+          releaseLeadDays: parent.releaseLeadDays,
+          drumWorkCenterId: parent.drumWorkCenterId,
+          drumBuffer: parent.drumBuffer,
         })
         .returning();
       if (!child) throw new HttpError(500, "Fork insert failed");
@@ -428,6 +467,80 @@ export async function forkRun(
   );
 }
 
+export type ReleasePolicyUpdates = {
+  releasePolicy: "manual" | "conwip" | "due_date" | "dbr";
+  wipCap?: number | undefined;
+  releaseLeadDays?: number | undefined;
+  drumWorkCenterId?: number | null | undefined;
+  drumBuffer?: number | undefined;
+};
+
+/**
+ * The second writer of a run's frozen config, after capital actions: changes
+ * the run's own release policy under the run's lock, so it 409s mid-advance
+ * exactly as an action does and is effective from the next advance —
+ * `withRunLock` hands `advanceRun` a fresh row every call. Deliberately
+ * unlogged: unlike a capital action it moves no money, so the P&L has nothing
+ * to freeze, and the run row itself says what the current policy is. Omitted
+ * fields keep the run's current values; the merged result is what validates,
+ * since a kind flip can lean on numbers set earlier.
+ */
+export async function changeReleasePolicy(
+  runId: number,
+  updates: ReleasePolicyUpdates,
+): Promise<RunRow> {
+  return withRunLock(runId, (run) =>
+    db.transaction(async (tx) => {
+      const merged = {
+        releasePolicy: updates.releasePolicy,
+        wipCap: updates.wipCap ?? run.wipCap,
+        releaseLeadDays: updates.releaseLeadDays ?? run.releaseLeadDays,
+        drumWorkCenterId:
+          updates.drumWorkCenterId === undefined
+            ? run.drumWorkCenterId
+            : updates.drumWorkCenterId,
+        drumBuffer: updates.drumBuffer ?? run.drumBuffer,
+      };
+
+      if (merged.releasePolicy === "dbr") {
+        if (merged.drumWorkCenterId === null) {
+          throw new HttpError(
+            400,
+            "A drum-buffer-rope policy needs a drum work center",
+          );
+        }
+        // against the run's own frozen centres, not the live table — the rope
+        // paces a centre this run actually has
+        const [drum] = await tx
+          .select({ workCenterId: runWorkCenters.workCenterId })
+          .from(runWorkCenters)
+          .where(
+            and(
+              eq(runWorkCenters.runId, runId),
+              eq(runWorkCenters.workCenterId, merged.drumWorkCenterId),
+            ),
+          );
+        if (!drum) {
+          throw new HttpError(
+            404,
+            `Run ${runId} has no work center ${merged.drumWorkCenterId} to use as the drum`,
+          );
+        }
+      }
+
+      const [updated] = await tx
+        .update(simulationRuns)
+        .set(merged)
+        .where(eq(simulationRuns.id, runId))
+        .returning();
+      if (!updated) throw new HttpError(500, "Policy update failed");
+      // the lock's finally sets the run idle right after this returns; hand
+      // the caller the state it will actually observe
+      return { ...updated, status: "idle" };
+    }),
+  );
+}
+
 export type ReleaseResult = {
   workOrderId: number;
   partsReleased: number;
@@ -522,26 +635,28 @@ export async function releaseWorkOrder(
         })),
       );
 
-      const newParts = Array.from(
-        { length: workOrder.quantity },
-        (_, unitIndex) => ({
-          runId,
-          partUuid: crypto.randomUUID(),
-          workOrderId,
-          unitIndex,
-          releasedAtTick: run.tickNum,
-          stepIndex: 0,
-          progressSeconds: 0,
-          actualProcessTimeSeconds: sampleProcessTime(
-            firstStep.processTimeSeconds,
-            PROCESS_TIME_DEVIATION,
-            { seed: run.rngSeed, workOrderId, unitIndex, stepIndex: 0 },
-          ),
-        }),
+      // one construction site for a release's parts, shared with the
+      // auto-release path so the draw key cannot drift between the two
+      const newParts = buildReleaseParts(
+        run,
+        workOrderId,
+        workOrder.quantity,
+        firstStep.processTimeSeconds,
       );
 
       for (const slice of chunked(newParts, chunkFor(8))) {
-        await tx.insert(runWipParts).values(slice);
+        await tx.insert(runWipParts).values(
+          slice.map((part) => ({
+            runId,
+            partUuid: part.id,
+            workOrderId: part.workOrderId,
+            unitIndex: part.unitIndex,
+            releasedAtTick: part.releasedAtTick,
+            stepIndex: part.stepIndex,
+            progressSeconds: part.progressSeconds,
+            actualProcessTimeSeconds: part.actualProcessTimeSeconds,
+          })),
+        );
       }
 
       return {
@@ -576,6 +691,20 @@ export type AdvanceResult = {
    * last batch handed back.
    */
   wipCount: number;
+  /**
+   * What the run's release policy put on the floor during this advance, in
+   * release order — empty under `manual`. The same agent-visible tier as
+   * `scrappedCount`: the advance already held every row.
+   */
+  autoReleased: { workOrderId: number; partsReleased: number; releasedAtTick: number }[];
+  /**
+   * Orders the policy could still release after this advance (for `due_date`
+   * that excludes undated orders, which it can never release). A caller
+   * jumping until the run drains stops on `wipCount === 0 && backlogCount
+   * === 0` — floor empty and nothing left that could refill it. Always 0
+   * under `manual`.
+   */
+  backlogCount: number;
 };
 
 /**
@@ -594,6 +723,17 @@ export async function advanceRun(
 
   return withRunLock(runId, async (run) => {
     let state = await loadRunState(run);
+    // The backlog is read live, once per advance request, like the demand
+    // side — and not at all under manual, so a manual run pays no new reads.
+    const policy = policyFromRun(run);
+    let backlog: LoadedBacklogOrder[] =
+      policy.kind === "manual"
+        ? []
+        : await loadReleaseBacklog(
+            run,
+            new Set(state.routingByWorkOrder.keys()),
+          );
+    const autoReleased: AdvanceResult["autoReleased"] = [];
     let throughputCents = 0;
     let operatingExpenseCents = 0;
     let carryingCostCents = 0;
@@ -601,10 +741,70 @@ export async function advanceRun(
     let scrappedCount = 0;
 
     for (let remaining = ticks; remaining > 0; ) {
+      // The policy is evaluated between batches — at the advance's start and
+      // then hourly — so an order becoming eligible mid-batch releases at
+      // most one batch late. Admission extends the in-memory state (the
+      // parts ride the WIP replace below); the release rows join the batch's
+      // own transaction, so a crash loses the batch and its releases
+      // together rather than leaving a released order with no parts.
+      const pendingReleases: LoadedBacklogOrder[] = [];
+      if (backlog.length > 0) {
+        const planned = new Set(planReleases(policy, state, backlog));
+        for (const order of backlog) {
+          if (!planned.has(order.workOrderId)) continue;
+          const firstStep = order.steps[0];
+          if (!firstStep) continue; // loader excludes stepless orders already
+          const newParts = buildReleaseParts(
+            { rngSeed: run.rngSeed, tickNum: state.tickNum },
+            order.workOrderId,
+            order.quantity,
+            firstStep.processTimeSeconds,
+          );
+          state = admitOrderIntoState(state, order, newParts);
+          pendingReleases.push(order);
+          autoReleased.push({
+            workOrderId: order.workOrderId,
+            partsReleased: newParts.length,
+            releasedAtTick: state.tickNum,
+          });
+        }
+        if (pendingReleases.length > 0) {
+          const releasedNow = new Set(
+            pendingReleases.map((order) => order.workOrderId),
+          );
+          backlog = backlog.filter(
+            (order) => !releasedNow.has(order.workOrderId),
+          );
+        }
+      }
+
       const size = Math.min(remaining, TICKS_PER_BATCH);
       const batch = simulateBatch(state, size);
 
       await db.transaction(async (tx) => {
+        // release rows first — before the WIP replace whose rows assume the
+        // released order exists, and before the setup updates that target
+        // run_work_order_steps
+        for (const order of pendingReleases) {
+          await tx.insert(runReleasedOrders).values({
+            runId,
+            workOrderId: order.workOrderId,
+            routingId: order.routingId,
+            routingRevision: order.routingRevision,
+          });
+          await tx.insert(runWorkOrderSteps).values(
+            order.steps.map((step, sequence) => ({
+              runId,
+              workOrderId: order.workOrderId,
+              sequence,
+              workCenterId: step.workCenterId,
+              processTimeSeconds: step.processTimeSeconds,
+              setupTimeSeconds: step.setupTimeSeconds,
+              scrapBps: step.scrapBps,
+            })),
+          );
+        }
+
         // the survivors replace the stored set: after a batch nearly every
         // part has moved, and no row references a WIP part by id
         await tx.delete(runWipParts).where(eq(runWipParts.runId, runId));
@@ -788,6 +988,8 @@ export async function advanceRun(
       wageCents,
       scrappedCount,
       wipCount: state.wipParts.length,
+      autoReleased,
+      backlogCount: eligibleBacklogCount(policy, backlog),
     };
   });
 }

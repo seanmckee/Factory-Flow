@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "seed": "tsx src/db/seed",
     "check:fork": "tsx src/scripts/forkReplayCheck.ts",
+    "check:policy": "tsx src/scripts/policyCheck.ts",
     "test": "vitest"
   },
   "keywords": [],
