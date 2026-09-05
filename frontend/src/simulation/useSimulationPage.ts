@@ -5,6 +5,7 @@ import {
   applyCapitalAction,
   createRun,
   deleteRun,
+  forkRun,
   getRun,
   getRunFloor,
   getRunMetrics,
@@ -53,7 +54,7 @@ export type JumpProgress = {
 };
 
 export type ActiveTab = "floor" | "trends" | "dashboard";
-type PendingAction = "create" | "delete" | "release" | "capital" | null;
+type PendingAction = "create" | "delete" | "fork" | "release" | "capital" | null;
 
 /** Coordinates the server-backed run while keeping rendering concerns out of the page. */
 export function useSimulationPage() {
@@ -72,6 +73,8 @@ export function useSimulationPage() {
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [newRunName, setNewRunName] = useState("");
   const [newRunOpen, setNewRunOpen] = useState(false);
+  const [forkName, setForkName] = useState("");
+  const [forkOpen, setForkOpen] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isRunLoading, setIsRunLoading] = useState(false);
@@ -340,6 +343,40 @@ export function useSimulationPage() {
     }
   };
 
+  /**
+   * Forks the selected run at its current tick and lands on the child — the
+   * branch the next decision is about. Waits the clock's beat out and holds
+   * `advancing` exactly as releasing does: the fork takes the same server-side
+   * lock as advancing, and colliding would raise the 409 the unlock button
+   * exists to cure. An empty name lets the server derive one from the parent.
+   */
+  const onForkRun = async () => {
+    if (runId === null) return showToast("Create or select a run first", "error");
+    if (jump) return;
+    setPendingAction("fork");
+    if (!(await awaitIdleClock())) {
+      setPendingAction(null);
+      return showToast("The run is still advancing — try again", "error");
+    }
+    advancing.current = true;
+    try {
+      const name = forkName.trim();
+      const child = await forkRun(runId, name === "" ? undefined : name);
+      setRuns((previous) => [...previous, child]);
+      selectRun(child.id);
+      setForkName("");
+      setForkOpen(false);
+      showToast(
+        `Forked at ${formatTickTime(child.forkedAtTick ?? 0, child.dayTicks)} — now driving "${child.name}"`,
+      );
+    } catch (error) {
+      report(error, "Failed to fork the run");
+    } finally {
+      advancing.current = false;
+      setPendingAction(null);
+    }
+  };
+
   const onDeleteRun = async () => {
     if (runId === null) return;
     setPendingAction("delete");
@@ -469,13 +506,15 @@ export function useSimulationPage() {
   };
 
   return {
-    actions, activeTab, capitalOpen, changeTab, floor, isLoading, isRunLoading,
+    actions, activeTab, capitalOpen, changeTab, floor, forkName, forkOpen,
+    isLoading, isRunLoading,
     isRunning, jump,
     loadMetrics, metrics, metricsLoading, newRunName, newRunOpen, onCapitalAction,
     onCreateRun,
-    onDeleteRun, onRelease, pendingAction, releasableOrders, run, runId, runs,
+    onDeleteRun, onForkRun, onRelease, pendingAction, releasableOrders, run,
+    runId, runs,
     runJump, salesOrders, selectRun, selectedOrderId, seriesLoading, setCapitalOpen,
-    setIsRunning,
+    setForkName, setForkOpen, setIsRunning,
     setNewRunName, setNewRunOpen, setSelectedOrderId, setStopping, stopping,
     stopJumpRef, trend, workOrderById,
   };

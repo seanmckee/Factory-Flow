@@ -206,6 +206,18 @@ export const listRuns = () => getJson<Run[]>("/api/runs");
 export const createRun = (name: string, rngSeed?: number) =>
   postJson<Run>("/api/runs", rngSeed === undefined ? { name } : { name, rngSeed });
 
+/**
+ * Copies the run at its current tick into a new run (Track 7). Everything but
+ * the name is the parent's — seed, frozen config, floor, history — so the
+ * branches replay identically until a decision diverges them. Name omitted
+ * means the server derives one from the parent and the fork day.
+ */
+export const forkRun = (runId: number, name?: string) =>
+  postJson<Run>(
+    `/api/runs/${runId}/fork`,
+    name === undefined ? {} : { name },
+  );
+
 export const getRun = (runId: number) =>
   getJson<RunSummary>(`/api/runs/${runId}`);
 

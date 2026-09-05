@@ -1,4 +1,4 @@
-import { LoaderCircle, Plus, Trash2 } from "lucide-react";
+import { GitFork, LoaderCircle, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader,
@@ -21,13 +21,17 @@ function Stat({ label, value, negative = false }: { label: string; value: string
 }
 
 type Props = Pick<SimulationPageController,
-  "jump" | "newRunName" | "newRunOpen" | "onCreateRun" | "onDeleteRun" |
-  "pendingAction" | "run" | "runId" | "runs" | "selectRun" | "setNewRunName" | "setNewRunOpen"
+  "forkName" | "forkOpen" | "jump" | "newRunName" | "newRunOpen" | "onCreateRun" |
+  "onDeleteRun" | "onForkRun" |
+  "pendingAction" | "run" | "runId" | "runs" | "selectRun" | "setForkName" |
+  "setForkOpen" | "setNewRunName" | "setNewRunOpen"
 >;
 
 export function SimulationRunBar(props: Props) {
-  const { jump, newRunName, newRunOpen, onCreateRun, onDeleteRun, pendingAction,
-    run, runId, runs, selectRun, setNewRunName, setNewRunOpen } = props;
+  const { forkName, forkOpen, jump, newRunName, newRunOpen, onCreateRun,
+    onDeleteRun, onForkRun, pendingAction,
+    run, runId, runs, selectRun, setForkName, setForkOpen, setNewRunName,
+    setNewRunOpen } = props;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2">
       <Select value={runId === null ? "" : String(runId)} onValueChange={(value) => selectRun(Number(value))} disabled={jump !== null}>
@@ -36,6 +40,7 @@ export function SimulationRunBar(props: Props) {
           {runs.map((option) => (
             <SelectItem key={option.id} value={String(option.id)}>
               #{option.id} · {option.name} · tick {option.tickNum.toLocaleString()}
+              {option.parentRunId !== null && ` · fork of #${option.parentRunId}`}
             </SelectItem>
           ))}
         </SelectContent>
@@ -64,6 +69,48 @@ export function SimulationRunBar(props: Props) {
         </DialogContent>
       </Dialog>
 
+      {/* Forking creates a run, so it lives beside New Run rather than on the
+          transport bar. The dialog opens with a derived name prefilled; an
+          emptied field lets the server derive the same default. */}
+      <Dialog
+        open={forkOpen}
+        onOpenChange={(open) => {
+          if (open && run) {
+            const day = Math.floor(run.tickNum / run.dayTicks) + 1;
+            setForkName(`${run.name} · fork @ D${day}`);
+          }
+          setForkOpen(open);
+        }}
+      >
+        <DialogTrigger asChild>
+          <Button variant="outline" disabled={runId === null || jump !== null || pendingAction !== null}>
+            <GitFork className="size-4" /> Fork
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="sm:max-w-sm">
+          <form onSubmit={(event) => { event.preventDefault(); void onForkRun(); }} className="flex flex-col gap-4">
+            <DialogHeader>
+              <DialogTitle>Fork run</DialogTitle>
+              <DialogDescription>
+                Copies the run as it stands at{" "}
+                {run ? formatTickTime(run.tickNum, run.dayTicks) : "its current tick"}. Both
+                branches share this history and the same seed — only your
+                decisions diverge them.
+              </DialogDescription>
+            </DialogHeader>
+            <Field label="Name">
+              <Input value={forkName} onChange={(event) => setForkName(event.target.value)} />
+            </Field>
+            <DialogFooter>
+              <Button type="submit" disabled={pendingAction === "fork"}>
+                {pendingAction === "fork" && <LoaderCircle className="size-4 animate-spin" />}
+                {pendingAction === "fork" ? "Forking…" : "Fork Run"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       <Button variant="ghost" onClick={() => void onDeleteRun()} disabled={runId === null || jump !== null || pendingAction !== null} className="text-destructive hover:bg-destructive/10 hover:text-destructive">
         {pendingAction === "delete" ? <LoaderCircle className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
         {pendingAction === "delete" ? "Deleting…" : "Delete Run"}
@@ -78,6 +125,12 @@ export function SimulationRunBar(props: Props) {
           <Stat label="Throughput" value={formatCents(run.throughputCents)} />
           <Stat label="Net" value={formatSignedCents(run.netCents)} negative={run.netCents < 0} />
           <span className="text-xs text-muted-foreground">seed {run.rngSeed}</span>
+          {run.parentRunId !== null && (
+            <span className="text-xs text-muted-foreground">
+              forked from #{run.parentRunId} at Day{" "}
+              {Math.floor((run.forkedAtTick ?? 0) / run.dayTicks) + 1}
+            </span>
+          )}
         </div>
       )}
     </div>
