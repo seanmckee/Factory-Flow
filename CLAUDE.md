@@ -69,7 +69,10 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   the run at its current tick into a new run with `parent_run_id` /
   `forked_at_tick` set, an optional `name` the only input; it takes the
   parent's lock, so it 409s mid-advance, and returns 201 with the new run
-  row), `POST /api/runs/:id/advance`,
+  row), `POST /api/runs/:id/policy` (RP — changes the run's own release
+  policy under the lock, effective next advance; omitted numeric fields keep
+  the run's current values, and a dbr change validates the drum against the
+  run's own frozen centres), `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
   actions — one endpoint with a discriminating `kind` of `buy_machine` /
   `retire_machine` / `hire_operator` / `fire_operator`, rather than four

@@ -467,6 +467,80 @@ export async function forkRun(
   );
 }
 
+export type ReleasePolicyUpdates = {
+  releasePolicy: "manual" | "conwip" | "due_date" | "dbr";
+  wipCap?: number | undefined;
+  releaseLeadDays?: number | undefined;
+  drumWorkCenterId?: number | null | undefined;
+  drumBuffer?: number | undefined;
+};
+
+/**
+ * The second writer of a run's frozen config, after capital actions: changes
+ * the run's own release policy under the run's lock, so it 409s mid-advance
+ * exactly as an action does and is effective from the next advance —
+ * `withRunLock` hands `advanceRun` a fresh row every call. Deliberately
+ * unlogged: unlike a capital action it moves no money, so the P&L has nothing
+ * to freeze, and the run row itself says what the current policy is. Omitted
+ * fields keep the run's current values; the merged result is what validates,
+ * since a kind flip can lean on numbers set earlier.
+ */
+export async function changeReleasePolicy(
+  runId: number,
+  updates: ReleasePolicyUpdates,
+): Promise<RunRow> {
+  return withRunLock(runId, (run) =>
+    db.transaction(async (tx) => {
+      const merged = {
+        releasePolicy: updates.releasePolicy,
+        wipCap: updates.wipCap ?? run.wipCap,
+        releaseLeadDays: updates.releaseLeadDays ?? run.releaseLeadDays,
+        drumWorkCenterId:
+          updates.drumWorkCenterId === undefined
+            ? run.drumWorkCenterId
+            : updates.drumWorkCenterId,
+        drumBuffer: updates.drumBuffer ?? run.drumBuffer,
+      };
+
+      if (merged.releasePolicy === "dbr") {
+        if (merged.drumWorkCenterId === null) {
+          throw new HttpError(
+            400,
+            "A drum-buffer-rope policy needs a drum work center",
+          );
+        }
+        // against the run's own frozen centres, not the live table — the rope
+        // paces a centre this run actually has
+        const [drum] = await tx
+          .select({ workCenterId: runWorkCenters.workCenterId })
+          .from(runWorkCenters)
+          .where(
+            and(
+              eq(runWorkCenters.runId, runId),
+              eq(runWorkCenters.workCenterId, merged.drumWorkCenterId),
+            ),
+          );
+        if (!drum) {
+          throw new HttpError(
+            404,
+            `Run ${runId} has no work center ${merged.drumWorkCenterId} to use as the drum`,
+          );
+        }
+      }
+
+      const [updated] = await tx
+        .update(simulationRuns)
+        .set(merged)
+        .where(eq(simulationRuns.id, runId))
+        .returning();
+      if (!updated) throw new HttpError(500, "Policy update failed");
+      // the lock's finally sets the run idle right after this returns; hand
+      // the caller the state it will actually observe
+      return { ...updated, status: "idle" };
+    }),
+  );
+}
+
 export type ReleaseResult = {
   workOrderId: number;
   partsReleased: number;

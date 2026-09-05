@@ -11,6 +11,7 @@ import {
 import {
   advanceRun,
   applyCapitalAction,
+  changeReleasePolicy,
   createRun,
   deleteRun,
   forkRun,
@@ -23,6 +24,7 @@ import {
   capitalActionSchema,
   createRunSchema,
   forkRunSchema,
+  releasePolicySchema,
   idParamSchema,
   metricsWindowSchema,
   ticksQuerySchema,
@@ -187,6 +189,26 @@ router.post("/:id/fork", async (req, res) => {
     res.status(201).json(await forkRun(params.id, body.name));
   } catch (error) {
     fail(res, error, "Error forking run");
+  }
+});
+
+/**
+ * Changes the run's own release policy (RP) — the second writer of a run's
+ * frozen config, after capital actions. Takes the run's lock, so it 409s
+ * mid-advance; effective from the next advance. Omitted numeric fields keep
+ * the run's current values. 200 with the run row.
+ */
+router.post("/:id/policy", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    const body = parseOr400(releasePolicySchema, req.body, res);
+    if (!body) return;
+
+    res.json(await changeReleasePolicy(params.id, body));
+  } catch (error) {
+    fail(res, error, "Error changing release policy");
   }
 });
 
