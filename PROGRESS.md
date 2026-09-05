@@ -101,6 +101,25 @@ Noted 2026-09-04, to pick up later (after the agent, unless it needs them):
 - [ ] **More compare series on Trends** — e.g. an operating-expense line for
       the compared run, so the cost side of a decision reads alongside its net.
 
+### Release policies (`feat/release-policy`) — in progress
+
+Planned 2026-09-04 from playing the sim: with only manual releases, a long
+fast-forward drains the floor and rent burns on an idle factory. Three
+policies plus manual, defaults in Factory Settings, frozen per run,
+changeable per run under the lock — so forks can test policies against each
+other. Priority is earliest-due-date, undated last, id tie-break.
+
+- [x] RP.1 Schema + migration — five policy columns on `factory_settings` and
+      `simulation_runs`; frozen at create; forkRun copies them
+- [ ] RP.2 Pure policy engine + tests — `planReleases` (conwip / due_date /
+      dbr), `buildReleaseParts` shared with manual release, `admitOrderIntoState`
+- [ ] RP.3 Advance integration — evaluate per batch, release rows ride the
+      batch transaction, `AdvanceResult.autoReleased` + `backlogCount`
+- [ ] RP.4 `POST /api/runs/:id/policy` + settings PATCH + `npm run check:policy`
+- [ ] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and
+      drain-stop learn about backlog
+- [ ] RP.6 Ledger + doc sweep
+
 ### Track 8 — re-plan when reached
 
 - [ ] **Track 8** `feat/agent` — tool layer: create, advance, fork, read

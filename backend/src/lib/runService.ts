@@ -149,6 +149,13 @@ export async function createRun(
           settings.facilityOverheadCentsPerDay,
         wipCarryingBpsPerDay:
           overrides.wipCarryingBpsPerDay ?? settings.wipCarryingBpsPerDay,
+        // the release policy freezes like the rates: the settings row is the
+        // default, POST /:id/policy is the per-run writer thereafter
+        releasePolicy: settings.releasePolicy,
+        wipCap: settings.wipCap,
+        releaseLeadDays: settings.releaseLeadDays,
+        drumWorkCenterId: settings.drumWorkCenterId,
+        drumBuffer: settings.drumBuffer,
       })
       .returning();
     if (!run) throw new HttpError(500, "Run insert failed");
@@ -165,6 +172,19 @@ export async function createRun(
         operatorHireCents: workCenters.operatorHireCents,
       })
       .from(workCenters);
+
+    // a dbr run without a drum can never release anything, so refuse the
+    // creation rather than freeze a policy that silently starves the floor
+    if (
+      settings.releasePolicy === "dbr" &&
+      (settings.drumWorkCenterId === null ||
+        !centers.some((center) => center.id === settings.drumWorkCenterId))
+    ) {
+      throw new HttpError(
+        400,
+        "Factory settings use drum-buffer-rope but name no existing drum work center — pick one in Factory Settings first",
+      );
+    }
 
     if (centers.length > 0) {
       // the prices are frozen too, not just the rates: a capital action mid-run
@@ -242,6 +262,15 @@ export async function forkRun(
           facilityOverheadCentsPerDay: parent.facilityOverheadCentsPerDay,
           wipCarryingBpsPerDay: parent.wipCarryingBpsPerDay,
           carryRemainder: parent.carryRemainder,
+          // NOTE: this literal is hand-maintained — a new simulation_runs
+          // column must be added here BY HAND or a fork silently takes the
+          // column default (no CopyOf guard exists on this table).
+          // check:policy's fork-isolation assertion is the runtime net.
+          releasePolicy: parent.releasePolicy,
+          wipCap: parent.wipCap,
+          releaseLeadDays: parent.releaseLeadDays,
+          drumWorkCenterId: parent.drumWorkCenterId,
+          drumBuffer: parent.drumBuffer,
         })
         .returning();
       if (!child) throw new HttpError(500, "Fork insert failed");

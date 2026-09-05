@@ -106,10 +106,16 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   steps, `simulation_runs` for the facility rates and `day_ticks` — and never
   `work_centers`, `routing_steps` or `factory_settings` again.** That is what lets two runs
   disagree about the drill press, and what makes forking a copy rather than a
-  versioning scheme. Since 6E that frozen config has exactly one **writer**:
-  a capital action, which charges the run's frozen price, re-dates the rate it
-  moved and appends a `run_capital_actions` row. It is still never re-read from
-  the live tables — buying a machine in one run leaves every other run, and the
+  versioning scheme. That frozen config has exactly two **writers**: a capital
+  action (6E), which charges the run's frozen price, re-dates the rate it
+  moved and appends a `run_capital_actions` row, and a policy change
+  (`POST /api/runs/:id/policy`), which updates the run's five release-policy
+  columns on `simulation_runs` (`release_policy`, `wip_cap`,
+  `release_lead_days`, `drum_work_center_id` — un-keyed, a frozen copy —
+  `drum_buffer`) under the same lock, unlogged because it moves no money. It
+  is still never re-read from
+  the live tables — buying a machine or re-policying one run leaves every
+  other run, and the
   factory, alone. Steps are pinned per **work order** at release, so editing
   a routing changes only releases made after the edit and never re-plans a part
   already halfway through a route. Track 7 makes the copy literal: `forkRun`
