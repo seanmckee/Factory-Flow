@@ -65,7 +65,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   simulated minute since 6G, so a bucket at or below `TICKS_PER_BUCKET`
   returns the stored resolution rather than erroring, and a larger one
   regroups on top),
-  `POST /api/runs/:id/releases`, `POST /api/runs/:id/advance`,
+  `POST /api/runs/:id/releases`, `POST /api/runs/:id/fork` (Track 7 — copies
+  the run at its current tick into a new run with `parent_run_id` /
+  `forked_at_tick` set, an optional `name` the only input; it takes the
+  parent's lock, so it 409s mid-advance, and returns 201 with the new run
+  row), `POST /api/runs/:id/advance`,
   `POST /api/runs/:id/actions` and `GET /api/runs/:id/actions` (6E's capital
   actions — one endpoint with a discriminating `kind` of `buy_machine` /
   `retire_machine` / `hire_operator` / `fire_operator`, rather than four

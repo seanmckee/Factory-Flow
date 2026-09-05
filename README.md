@@ -211,7 +211,7 @@ Independent of the phases above, the domain model needs:
 
 Decisions not yet made, recorded so they get made deliberately:
 
-- Whether forking copies state or replays from a checkpoint. Leaning copy: a run's state is a handful of rows, and the seeded RNG means a copy replays identically without an event log to keep.
+- ~~Whether forking copies state or replays from a checkpoint.~~ **Answered by Track 7: copy.** A run's state is a handful of rows, and the seeded RNG plus the uuid-free draw key mean the copy replays identically without an event log to keep — `POST /api/runs/:id/fork` copies every `run_*` table under the parent's lock, and two branches stay byte-identical until a decision (a capital action, a release) diverges them.
 - ~~Whether a run should be able to edit its *own* factory config.~~ **Answered by Track 6E: yes, and only through an action that charges for it.** `run_work_centers` has exactly one writer — a capital action, which pays the run's frozen price, re-dates the rate it moved and appends to `run_capital_actions`. Free editing was never the question worth answering; a factory you can reconfigure for nothing makes every decision trivial. Pinned *steps* still have no writer, so changing what the next release will pin remains an edit to the shared routing.
 
 Answered since, kept here because the answers shaped everything after them:

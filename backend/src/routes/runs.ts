@@ -13,6 +13,7 @@ import {
   applyCapitalAction,
   createRun,
   deleteRun,
+  forkRun,
   releaseWorkOrder,
   unlockRun,
 } from "../lib/runService.js";
@@ -21,6 +22,7 @@ import {
   advanceRunSchema,
   capitalActionSchema,
   createRunSchema,
+  forkRunSchema,
   idParamSchema,
   metricsWindowSchema,
   ticksQuerySchema,
@@ -163,6 +165,28 @@ router.post("/:id/releases", async (req, res) => {
     res.status(201).json(await releaseWorkOrder(params.id, body.workOrderId));
   } catch (error) {
     fail(res, error, "Error releasing work order");
+  }
+});
+
+/**
+ * Forks the run at its current tick (Track 7): the child is a full copy —
+ * frozen config, floor, history, observations — sharing the parent's seed, so
+ * the branches replay identically until a decision diverges them. Takes the
+ * parent's lock (a fork mid-batch would copy a torn state), so it 409s
+ * mid-advance exactly as a release does. 201 with the new run row, the same
+ * shape `POST /` returns — the client fetches the summary itself on select.
+ */
+router.post("/:id/fork", async (req, res) => {
+  try {
+    const params = parseOr400(idParamSchema, req.params, res);
+    if (!params) return;
+
+    const body = parseOr400(forkRunSchema, req.body, res);
+    if (!body) return;
+
+    res.status(201).json(await forkRun(params.id, body.name));
+  } catch (error) {
+    fail(res, error, "Error forking run");
   }
 });
 
