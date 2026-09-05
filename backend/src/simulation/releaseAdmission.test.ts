@@ -139,6 +139,45 @@ describe("admitOrderIntoState", () => {
     expect(newcomer?.progressSeconds).toBe(0);
   });
 
+  it("admits the same run whether the later advance is one batch or several", () => {
+    // the advanceRun idiom: thread the batch outputs, admit between batches
+    const thread = (base: RunState, batch: ReturnType<typeof simulateBatch>): RunState => ({
+      ...base,
+      tickNum: batch.tickNum,
+      wipParts: batch.wipParts,
+      priorCounts: batch.priorCounts,
+      carryRemainder: batch.carryRemainder,
+      setupDone: batch.setupDone,
+    });
+    const admitAt = (base: RunState): RunState =>
+      admitOrderIntoState(
+        base,
+        admittable(),
+        buildReleaseParts({ rngSeed: SEED, tickNum: base.tickNum }, 30, 2, 5),
+      );
+
+    // path A: 10 ticks, admit, 20 ticks in one batch
+    const a0 = state();
+    const aAdmitted = admitAt(thread(a0, simulateBatch(a0, 10)));
+    const aFinal = simulateBatch(aAdmitted, 20);
+
+    // path B: identical admission, the 20 ticks split 7 + 13
+    const b0 = state();
+    const bAdmitted = admitAt(thread(b0, simulateBatch(b0, 10)));
+    const bMid = simulateBatch(bAdmitted, 7);
+    const bFinal = simulateBatch(thread(bAdmitted, bMid), 13);
+
+    const finishedOf = (records: { workOrderId: number; completedAtTick: number; throughputCents: number }[]) =>
+      records.map((r) => [r.workOrderId, r.completedAtTick, r.throughputCents]);
+    expect(
+      finishedOf([...bMid.finishedParts, ...bFinal.finishedParts]),
+    ).toEqual(finishedOf(aFinal.finishedParts));
+    expect(bFinal.wipParts.map((p) => p.id)).toEqual(
+      aFinal.wipParts.map((p) => p.id),
+    );
+    expect(bFinal.tickNum).toBe(aFinal.tickNum);
+  });
+
   it("dedupes a part and a sales order the state already holds", () => {
     // work order 30 makes the SAME part as work order 10 and is covered by
     // the SAME sales order the state already knows

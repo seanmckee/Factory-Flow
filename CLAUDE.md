@@ -84,8 +84,11 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
   `wipCount`, so a caller advancing until the floor is empty stops on the
   advance's own answer rather than chasing each call with a `GET /:id` that
   could already be a batch stale — it is `state.wipParts.length` after the
-  last batch, not a query — and `scrappedCount`, the same kind of
-  agent-visible signal. `unlock` is **not** a reset — it clears a
+  last batch, not a query — and `scrappedCount`, `autoReleased` (what the
+  run's release policy put on the floor during the advance) and
+  `backlogCount` (orders the policy could still release — a caller jumping
+  until the run drains stops on `wipCount === 0 && backlogCount === 0`), the
+  same kind of agent-visible signal. `unlock` is **not** a reset — it clears a
   lock a dead process left, and re-creating a run with the same seed reproduces
   it exactly, so rewinding one is not a feature. `work_orders.status` still has
   no writer and should not gain one here: a release is per-run
@@ -308,7 +311,20 @@ remainder travel the same way.
 
 `runService` writes per batch, never per tick — `TICKS_PER_BATCH` is 3600
 (one staffed hour), each
-batch one transaction, so a crash costs at most one batch. Inserts are split
+batch one transaction, so a crash costs at most one batch. **The release
+policy (RP) is evaluated between batches**, at the advance's start and then
+hourly: `planReleases` (pure, `simulation/releasePolicy.ts`) plans from the
+tick, the floor and the backlog; `buildReleaseParts` +
+`admitOrderIntoState` (`simulation/releaseAdmission.ts`, shared with the
+manual release so the draw key cannot drift) graft the release onto the
+in-memory state, whose parts then ride the batch's WIP replace; and the
+`run_released_orders` / `run_work_order_steps` rows are written **first
+inside that batch's transaction**, so a crash loses the batch and its
+releases together, never a released order with no parts. The backlog
+(`loadReleaseBacklog`, `runState.ts`) is read live once per advance request
+— a work order created mid-advance is invisible until the next request, the
+same class of caveat as the live demand read. Under `manual` no backlog is
+read and behaviour is byte-identical to before RP. Inserts are split
 per table by `chunkFor(paramsPerRow)`, because Postgres caps bind parameters
 near 65535. Since 6G stores observations per simulated minute a day is ~5.3k
 observation rows rather than ~320k, so the chunking now matters most to the WIP

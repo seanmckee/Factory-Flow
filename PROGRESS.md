@@ -113,7 +113,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
       `simulation_runs`; frozen at create; forkRun copies them
 - [x] RP.2 Pure policy engine + tests — `planReleases` (conwip / due_date /
       dbr), `buildReleaseParts` shared with manual release, `admitOrderIntoState`
-- [ ] RP.3 Advance integration — evaluate per batch, release rows ride the
+- [x] RP.3 Advance integration — evaluate per batch, release rows ride the
       batch transaction, `AdvanceResult.autoReleased` + `backlogCount`
 - [ ] RP.4 `POST /api/runs/:id/policy` + settings PATCH + `npm run check:policy`
 - [ ] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and

@@ -17,7 +17,15 @@ import {
   workOrders,
 } from "../db/schema.js";
 import { TICKS_PER_DAY } from "../simulation/operatingExpense.js";
-import { buildReleaseParts } from "../simulation/releaseAdmission.js";
+import {
+  admitOrderIntoState,
+  buildReleaseParts,
+} from "../simulation/releaseAdmission.js";
+import {
+  eligibleBacklogCount,
+  planReleases,
+  policyFromRun,
+} from "../simulation/releasePolicy.js";
 import {
   TICKS_PER_BUCKET,
   bucketMoney,
@@ -27,7 +35,12 @@ import { simulateBatch } from "../simulation/simulateBatch.js";
 import { getFactorySettings } from "./factorySettings.js";
 import { defaultForkName } from "./forkName.js";
 import { HttpError } from "./httpError.js";
-import { loadRunState, type RunRow } from "./runState.js";
+import {
+  loadReleaseBacklog,
+  loadRunState,
+  type LoadedBacklogOrder,
+  type RunRow,
+} from "./runState.js";
 
 /**
  * The write side of the run API: creating a run, releasing into it and
@@ -604,6 +617,20 @@ export type AdvanceResult = {
    * last batch handed back.
    */
   wipCount: number;
+  /**
+   * What the run's release policy put on the floor during this advance, in
+   * release order — empty under `manual`. The same agent-visible tier as
+   * `scrappedCount`: the advance already held every row.
+   */
+  autoReleased: { workOrderId: number; partsReleased: number; releasedAtTick: number }[];
+  /**
+   * Orders the policy could still release after this advance (for `due_date`
+   * that excludes undated orders, which it can never release). A caller
+   * jumping until the run drains stops on `wipCount === 0 && backlogCount
+   * === 0` — floor empty and nothing left that could refill it. Always 0
+   * under `manual`.
+   */
+  backlogCount: number;
 };
 
 /**
@@ -622,6 +649,17 @@ export async function advanceRun(
 
   return withRunLock(runId, async (run) => {
     let state = await loadRunState(run);
+    // The backlog is read live, once per advance request, like the demand
+    // side — and not at all under manual, so a manual run pays no new reads.
+    const policy = policyFromRun(run);
+    let backlog: LoadedBacklogOrder[] =
+      policy.kind === "manual"
+        ? []
+        : await loadReleaseBacklog(
+            run,
+            new Set(state.routingByWorkOrder.keys()),
+          );
+    const autoReleased: AdvanceResult["autoReleased"] = [];
     let throughputCents = 0;
     let operatingExpenseCents = 0;
     let carryingCostCents = 0;
@@ -629,10 +667,70 @@ export async function advanceRun(
     let scrappedCount = 0;
 
     for (let remaining = ticks; remaining > 0; ) {
+      // The policy is evaluated between batches — at the advance's start and
+      // then hourly — so an order becoming eligible mid-batch releases at
+      // most one batch late. Admission extends the in-memory state (the
+      // parts ride the WIP replace below); the release rows join the batch's
+      // own transaction, so a crash loses the batch and its releases
+      // together rather than leaving a released order with no parts.
+      const pendingReleases: LoadedBacklogOrder[] = [];
+      if (backlog.length > 0) {
+        const planned = new Set(planReleases(policy, state, backlog));
+        for (const order of backlog) {
+          if (!planned.has(order.workOrderId)) continue;
+          const firstStep = order.steps[0];
+          if (!firstStep) continue; // loader excludes stepless orders already
+          const newParts = buildReleaseParts(
+            { rngSeed: run.rngSeed, tickNum: state.tickNum },
+            order.workOrderId,
+            order.quantity,
+            firstStep.processTimeSeconds,
+          );
+          state = admitOrderIntoState(state, order, newParts);
+          pendingReleases.push(order);
+          autoReleased.push({
+            workOrderId: order.workOrderId,
+            partsReleased: newParts.length,
+            releasedAtTick: state.tickNum,
+          });
+        }
+        if (pendingReleases.length > 0) {
+          const releasedNow = new Set(
+            pendingReleases.map((order) => order.workOrderId),
+          );
+          backlog = backlog.filter(
+            (order) => !releasedNow.has(order.workOrderId),
+          );
+        }
+      }
+
       const size = Math.min(remaining, TICKS_PER_BATCH);
       const batch = simulateBatch(state, size);
 
       await db.transaction(async (tx) => {
+        // release rows first — before the WIP replace whose rows assume the
+        // released order exists, and before the setup updates that target
+        // run_work_order_steps
+        for (const order of pendingReleases) {
+          await tx.insert(runReleasedOrders).values({
+            runId,
+            workOrderId: order.workOrderId,
+            routingId: order.routingId,
+            routingRevision: order.routingRevision,
+          });
+          await tx.insert(runWorkOrderSteps).values(
+            order.steps.map((step, sequence) => ({
+              runId,
+              workOrderId: order.workOrderId,
+              sequence,
+              workCenterId: step.workCenterId,
+              processTimeSeconds: step.processTimeSeconds,
+              setupTimeSeconds: step.setupTimeSeconds,
+              scrapBps: step.scrapBps,
+            })),
+          );
+        }
+
         // the survivors replace the stored set: after a batch nearly every
         // part has moved, and no row references a WIP part by id
         await tx.delete(runWipParts).where(eq(runWipParts.runId, runId));
@@ -816,6 +914,8 @@ export async function advanceRun(
       wageCents,
       scrappedCount,
       wipCount: state.wipParts.length,
+      autoReleased,
+      backlogCount: eligibleBacklogCount(policy, backlog),
     };
   });
 }
