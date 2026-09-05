@@ -90,6 +90,17 @@ pays back in **0.6 of a fed day**.
       book. New randomness, so it needs a draw domain of its own (the 6C
       pattern) and must stay reproducible from `rng_seed` alone.
 
+### Track 7 follow-ups — richer comparison (deferred)
+
+Noted 2026-09-04, to pick up later (after the agent, unless it needs them):
+
+- [ ] **Comparison functionality and display in the Dashboard and Trends.** The
+      dashboard is still deliberately one run's window; revisit what a compared
+      pair should show there, and how the Trends overlay presents beyond the
+      single net curve.
+- [ ] **More compare series on Trends** — e.g. an operating-expense line for
+      the compared run, so the cost side of a decision reads alongside its net.
+
 ### Track 8 — re-plan when reached
 
 - [ ] **Track 8** `feat/agent` — tool layer: create, advance, fork, read
