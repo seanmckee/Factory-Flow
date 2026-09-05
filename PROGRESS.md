@@ -116,7 +116,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
 - [x] RP.3 Advance integration — evaluate per batch, release rows ride the
       batch transaction, `AdvanceResult.autoReleased` + `backlogCount`
 - [x] RP.4 `POST /api/runs/:id/policy` + settings PATCH + `npm run check:policy`
-- [ ] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and
+- [x] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and
       drain-stop learn about backlog
 - [ ] RP.6 Ledger + doc sweep
 

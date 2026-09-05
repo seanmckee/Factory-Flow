@@ -402,7 +402,7 @@ real observation, the factory ran clean.
 
 ## Frontend architecture
 
-Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates and the shifts-per-day setting as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows). `/create` was a stub page and now redirects to `/orders/sales`.
+Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates, the shifts-per-day setting and the release-policy defaults as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows). `/create` was a stub page and now redirects to `/orders/sales`.
 
 Both modules follow the same shape: a `*Layout` renders a `*DataProvider` that loads every list the module needs in one `Promise.all` and exposes per-resource refetches, so sibling pages share one fetch and navigating between them doesn't refetch. `SetupDataProvider` loads parts, routings and the factory settings alongside work centers, because the routing editor will need the first three and the settings page edits the last.
 
@@ -462,9 +462,12 @@ aborted request would only leave the page claiming a tick the run has passed.
 with Stop beside it, and the page refreshes as each committed hour lands, so
 a day reads as the charts flying through it. A jump also **stops itself when
 the floor empties** (the toast names the Day · time): nothing can land
-mid-jump — the jump holds the run's lock — so every tick past a drain is rent
-on an empty factory nobody chose, which is also why a jump on an
-already-empty floor is refused. A jump **stops the clock
+mid-jump *by hand* — the jump holds the run's lock — but the run's own
+release policy (RP) can: an advance feeds the floor from the backlog, so a
+jump drains only when `wipCount === 0 && backlogCount === 0`, both off the
+advance's own answer, and a jump on an empty floor is refused only under
+`manual` (or with nothing left to release). A policy's releases during a
+jump land in one end-of-jump toast. A jump **stops the clock
 first** and waits out any beat in flight, and releasing does the same wait:
 all three contend for the same lock, and letting them collide would raise the
 very 409 the unlock action is there to cure. The work-order picker lists
@@ -516,6 +519,15 @@ whole-run on purpose, since an action is a decision taken at a tick, not a
 rate over a window, and reading it against the window containing it is the
 point. The window line shows ≈ days via the run's frozen `dayTicks`
 (`simTime.ts`, 28,800 fallback).
+
+**The release policy lives in a dialog off the transport bar too**
+(`PolicyDialog`, the button naming the active policy — `Policy · CONWIP`):
+picking one is a run-level decision, the dialog seeds from the run's own
+frozen columns (null-draft pattern, no effect), and `onPolicyChange` follows
+the capital-action lock protocol exactly. The Factory Settings page carries
+the same five fields as the defaults a new run freezes;
+`simulation/releasePolicy.ts` holds the labels, hints and `policySummary`
+(the `capital.ts` pattern).
 
 Capital actions live in a **dialog** off the transport bar, not in more bar
 controls: buying is a whole-factory question, so what answers it is the table
