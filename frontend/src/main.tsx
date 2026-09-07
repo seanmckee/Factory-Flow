@@ -6,6 +6,7 @@ import App from "./App";
 import SimulationPage from "./pages/SimulationPage";
 import "./index.css";
 
+const AgentPage = lazy(() => import("./pages/AgentPage"));
 const OrdersLayout = lazy(() => import("./pages/orders/OrdersLayout"));
 const SalesOrdersPage = lazy(() => import("./pages/orders/SalesOrdersPage"));
 const WorkOrdersPage = lazy(() => import("./pages/orders/WorkOrdersPage"));
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
     element: <App />,
     children: [
       { index: true, element: <SimulationPage /> },
+      { path: "agent", element: deferred(<AgentPage />) },
       {
         path: "orders",
         element: deferred(<OrdersLayout />),

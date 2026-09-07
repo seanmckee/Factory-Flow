@@ -141,7 +141,7 @@ verdict writer); phase 1 builds the foundation.
 - [x] 8.2 Read-only analyst — httpx sim client, read-only tools (runs, P&L,
       metrics, floor, capital log, order book, settings), single LangGraph
       agent, `POST /chat` streaming SSE events (token / tool / done / error)
-- [ ] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call
+- [x] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call
       chips, per-conversation thread memory
 - [ ] 8.4 Ledger + doc sweep
 
