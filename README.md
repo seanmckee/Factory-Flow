@@ -1,270 +1,373 @@
 # 🏭 Factory Flow
 
-Factory Flow is a manufacturing simulation platform focused on modeling production systems and exploring how factories can optimize for their true objective: making money.
+**A manufacturing simulator where the score is net profit, not parts finished.**
 
-Inspired by Eliyahu M. Goldratt's _The Goal_, this project models production flow, throughput, work-in-process (WIP), inventory, and operational constraints to better understand how local decisions affect overall system performance.
+Model a shop floor, run it forward through simulated days, fork the run at any
+moment, take one decision in one branch — then measure what that decision was
+worth.
 
-Rather than optimizing individual machines, Factory Flow aims to simulate an entire manufacturing system where bottlenecks, variability, and flow determine overall profitability.
+It's a study of Eliyahu Goldratt's _The Goal_, built as software: throughput is
+money made through sales, inventory is money tied up on the floor, and operating
+expense is money burned turning one into the other. Optimising a machine is
+easy. Optimising the system is the whole problem, and it's only visible once
+running a machine costs money whether or not it produces anything.
 
----
+**Stack** — React 19 · TypeScript · Vite · Tailwind v4 · Recharts ·
+Express 5 · Drizzle ORM · Neon serverless Postgres · Zod · Vitest
 
-## Objectives
-
-- Simulate the movement of work through a manufacturing facility.
-- Model the relationship between throughput, inventory (WIP), and operational expense.
-- Explore how bottlenecks limit system performance.
-- Visualize the effects of statistical fluctuations and dependent events on production flow.
-- Experiment with scheduling strategies, routing, staffing, and process improvements.
-- Run the factory as a business: revenue, operating expense, and capital spend, judged on net profit.
-- Make the _consequences_ of a decision measurable: run it, fork it, compare it.
-
----
-
-## Where the project is today
-
-**Master data (Postgres + Drizzle)**
-
-- Parts, work centers, routings with ordered routing steps, work orders, sales orders, allocations.
-- Referential rules are deliberate: routing steps `RESTRICT` their work center (a referenced centre can't be deleted), while sales/work order deletes cascade their allocations behind a confirmation step.
-
-**Order entry (`/orders`)**
-
-- Sales orders and work orders: list, create, delete (with cascade confirmation).
-- Allocations link work orders to sales orders, which is what makes finished units worth money.
-
-**Factory setup (`/setup`)**
-
-- Work centers: create, rename, delete.
-- Parts: create, edit, delete (with a split confirmation model — a part referenced by an order can't be deleted at all, while one referenced only by routings can be force-deleted).
-- Routing editor is next.
-
-**Simulation (`/`)**
-
-- Pure-function tick engine, unit-tested with vitest, in `backend/src/simulation/`. There is exactly one copy of it: the frontend's was deleted when the page switched to driving a server-side run.
-- One tick = one simulated second. A run is advanced by `POST /api/runs/:id/advance {ticks}` — the page calls it once a second to watch in real time, and a caller wanting 5000 ticks asks for them and gets them in about ten seconds.
-- A work center runs up to its `capacity` in parallel (1 by default); parts already in service claim their centre first, idle parts take what's left. Queueing is implicit — unclaimed parts simply don't advance.
-- Process times are sampled per step as uniform ±30% around the routing's nominal time. The statistical variation is the model, not noise.
-- **A run can be fast-forwarded.** Jump 100, 500 or 1000 ticks, or run until the floor is empty (with a ceiling, for a floor that can never empty). A jump advances in chunks of 500 — one server transaction each — so stopping one ends on a committed tick rather than mid-batch, and it terminates on the WIP the advance itself reports rather than on a follow-up read that could already be stale.
-- Each tick reports what the floor did — machines busy and parts queued per work centre, and WIP on hand — which reduces over a window to utilization, mean and worst queue depth, and mean and peak WIP. Finished parts carry the tick they were released on, so cycle time measures queueing as well as processing, with a median and a 95th percentile alongside the mean. Stored per tick and readable over `GET /api/runs/:id/metrics?fromTick&toTick`, and drawn by the Dashboard tab: stat cards over a work-centre table ranked by utilization, the constraint on top, with window controls (whole run, last-N, custom range) — a jump lands the dashboard on the jump's own ticks. The window matters: one bottleneck read 10% utilization over a whole run and 52% over the ticks it was actually working, which is why the dashboard labels every figure with the window the response covered.
-- **Throughput is measured in cents, not parts**: a finished unit earns `unit price − material cost` only if an allocation covers it. Finish order decides which sales order (and which price) a unit is credited to.
-- Live throughput charts: the run's stored per-tick money accumulated into the cumulative curve, the same money as a trailing rate in $ per simulated minute (the successor to the old trailing-mean smoothing), and WIP over time as a step line. The series is capped at the newest 5000 ticks, so the cumulative curve carries on from what the run had already earned rather than re-basing at zero — exactly, because per-tick money and the run's frozen per-part money are two sums of the same credits — and the rate divides its first window by the ticks it can actually see rather than drawing a ramp out of the cap.
-
-**The limitation that shaped this roadmap is closed.** A run is a server-side object with an id: its parts, its per-tick observations, its finished units and the money each earned all persist, so a page refresh resumes the run where it was and results outlive the tab. Advancing writes once per batch of 500 ticks inside one transaction, so **a crash loses at most one batch** and never leaves a run half-written.
-
-A run also freezes the factory it was created with — each released work order pins the routing steps it will follow, and capacities are copied per run — so editing a routing or a machine count changes only runs created afterwards, and never re-plans a part already in motion. Randomness is a pure function of `(seed, work order, unit, step)`, so a run is reproducible from its seed alone: two runs created with the same seed and the same releases are identical, which is what lets two policies be compared on the decision rather than on the dice.
-
-**Releases can run on a policy (RP).** Beyond manual releasing, a run can feed its own floor while it advances: **CONWIP** (release the next order — earliest due date first — whenever floor WIP drops below a cap), **due-date scheduling** (release each order a lead time before its promise), or **drum-buffer-rope** (releases pace the bottleneck, keeping the drum's queue inside a buffer; orders that never visit the drum release immediately). The policy defaults live in Factory Settings, freeze onto each run at creation, and can be changed per run at any time under the run's lock — a fork keeps the policy it was forked with, so two branches can play the same book under different release rules and be compared on net profit. Priority is earliest-due-date with undated orders last, releases stay reproducible from the seed, and a fast-forward now drains only when the floor *and* the releasable backlog are both empty — an idle factory burning rent because nobody clicked Release is gone.
-
-**Still ephemeral:** which orders exist and what they pay is read live, not frozen per run. Completed history is safe — the money each finished unit earned is frozen as it is credited — but editing the order book mid-run changes what later units are worth.
+**Status** — the simulator is complete and driveable end to end: 323 unit tests,
+none of which touch a database or an HTTP server. An AI agent over its REST API
+is the next track, and everything below is what that agent will be handed.
 
 ---
 
-## Roadmap
+## The question it exists to answer
 
-The theme: go from _"a simulation that runs"_ to _"a system of record for simulated factories that you can experiment against and reason about."_
+The drill press is the constraint. A second one costs $1,200, plus $288 to hire
+somebody to stand at it, plus $300/day of rent and $144/day of wages forever
+after. Is it worth it?
 
-### Phase 1 — Persistent factory state — **delivered**
+You can't answer that from a utilization chart. You answer it by running the
+factory twice from the same moment, with the same dice, and reading the money.
 
-The simulation stopped living only in React state.
+![Two runs on one clock — the compared run's net curve overlaid, dashed, with the fork seam marked](docs/screenshots/trends-compare.png)
 
-- Persist WIP, work centre occupancy, queues, and part progress to the database.
-- A **simulation run** is a first-class record: created, named, resumable, deletable.
-- Reopening the app resumes a run where it left off instead of restarting from zero.
-- Multiple runs coexist against the same master data.
+Run **#58** kept one press. Run **#59** was forked from it at the start of day 4,
+bought a second press and hired an operator, and ran on. Same seed, same order
+book, same release policy — the branches are byte-identical up to the dashed
+`fork` line and diverge only because of the decision.
 
-### Phase 2 — Real time, not just ticks — *partly delivered*
+By day 9:
 
-The server owns advancing, so the physics no longer depend on a browser being open: a run is advanced in batches by request, and asking for 5000 ticks takes about ten seconds. The page can now jump a run forward — 100, 500 or 1000 ticks, or until the floor is empty — chunked so that stopping a jump always lands on a committed tick, and a jump lands on a labelled window of metrics. What is missing is that **nothing advances a run unattended** — no clock and no calendar.
+|                  | #58 Baseline | #59 Second press |
+| ---------------- | -----------: | ---------------: |
+| Throughput       |  $45,162.00 |       $53,246.00 |
+| Capital spent    |       $0.00 |        $1,488.00 |
+| **Net profit**   | **$15,505.25** |   **$19,993.00** |
+| Parts finished   |        1,010 |            1,376 |
 
-- ~~Move from "one tick = one interval callback" to a clock the run owns.~~ Partly: the loop is the server's and runs in batches, but it is still a request that drives it, not time passing.
-- **Speed control — one honest speed, no multipliers.** The live clock plays one simulated minute per real second (60 ticks a beat — far inside what the server sustains), and fast-forward jumps in calendar units (+1 hour / +4 hours / +1 day) that stream in chunk by chunk. An unbounded "100×" multiplier stays unbuilt: it starts lying the moment it outruns the server. Run until idle was removed with the cost model — an idle factory burns money, so running a floor empty stopped being a question worth a button.
-- A run continues advancing correctly whether or not anyone is watching it — the tick loop shouldn't be a UI concern. **Still open**, and deliberately deferred: a background loop would be the first stateful thing in the server process, and an agent driving the run wants determinism rather than something ticking underneath it.
-- ~~A calendar on top of the clock: shifts~~ (6D: a day is `shifts × 28,800` staffed ticks, frozen per run), working days and idle hours still unmodelled — off-shift time simply isn't ticks.
-
-### Phase 3 — Event history and snapshots — *partly delivered*
-
-The record of _what happened_, which everything downstream reads from. The time series exists — a row per tick with WIP, throughput and per-work-centre occupancy and queue depth, aggregating to utilization and cycle time over any window. The **event log does not**, and it is the half Phase 7 explains and Phase 8 predicts on.
-
-- **Production event history**: an append-only log of every meaningful event — job released, step started, step finished, part blocked/queued, work centre idled, order completed, order shipped, downtime started, money spent or earned.
-- **Factory snapshots**: periodic state captures with time-series metrics attached — WIP by work centre, queue lengths, utilisation, throughput (cents), operating expense to date, cash position, cycle time, on-time performance.
-- Snapshots are the checkpoints Phase 5 forks from; the event log is what Phase 7 explains and Phase 8 predicts on. Note that forking needs less than was assumed here: a run is reproducible from its seed, so a fork can copy a few rows rather than replay a log.
-
-### Phase 4 — Operating expense and the P&L — *partly delivered*
-
-~~Right now the factory can only make money.~~ It can lose it now: Track 6A
-delivered the cost triple — per-work-centre standing cost, facility overhead,
-and a carrying charge on the material value sitting on the floor — accruing
-per tick against the run's frozen rates, with `netCents` (throughput − operating
-expense − carrying) as the score on the run summary and over any window. A
-calendar day is `shifts × 28,800` one-second ticks (one 8-hour shift today);
-rates are entered per 24h day and amortized over the day's staffed ticks.
-Track 6B added due dates and on-time delivery (a metric, deliberately not yet
-money). Track 6C delivered setup and scrap: a changeover is machine time paid
-once per work order per step (so batch size finally trades off against
-carrying cost, and a split order costs the constraint a second setup), and
-scrap is a per-step probability drawn at step completion through the seeded
-RNG in its own domain — a ruined unit's material is recorded but not charged,
-its money bite being the lost sale, the wasted machine time and the carrying
-already paid. Track 6D added shifts and wages: a run's calendar day is
-`shifts × 28,800` staffed ticks, and operators are
-paid per staffed hour — so a second shift doubles the day's wage bill while
-amortizing the same rent. Track 6E added **capital actions**: buy or retire a
-machine, hire or let go an operator, against the run's *own* frozen config
-while it runs. Operators became explicit, so a centre runs
-`min(machines, operators)` and a machine nobody staffs is rent with no output;
-each action charges a lump at the tick it lands, frozen on an append-only row,
-and net profit now subtracts a fifth line. Still
-open from the list below: overtime and mid-run shift changes (Track 6F — a
-non-uniform calendar day, and a premium without which overtime dominates
-every other labour lever), rework, and the penalty halves of 6B's
-and 6C's bullets — see PROGRESS.md for the sub-track plan.
-
-The model already tracks Throughput in cents (revenue minus material cost, credited only against an allocation). This phase completes Goldratt's triple by adding **Operating Expense** and putting a price on **Inventory** — so the objective function becomes _net profit_, not parts finished and not throughput alone.
-
-**Cost accrues against simulated time, not against production.** That's the whole point: an idle work centre still burns money, so keeping a non-bottleneck busy to "look efficient" produces nothing but expensive WIP.
-
-- **Recurring operating expense**
-  - Facility overhead per simulated day — rent, utilities, the cost of the doors being open.
-  - Per-work-centre standing cost — depreciation, maintenance, power, tooling.
-  - ~~Operator wages per shift-hour~~ (6D), with an overtime rate still open — an authorization, deferred to the capital actions.
-- **Variable cost**
-  - Material cost per part (already modelled).
-  - ~~Setup cost per changeover, which finally makes batch-size decisions have a real trade-off.~~ Delivered as machine time (6C), not a cents charge — the cost is rent against time and lost constraint minutes.
-  - ~~Scrap~~ (6C) and rework cost — rework still open, and scrapped material is recorded, not yet charged.
-- **Inventory carrying cost** — a holding charge on WIP and finished goods per unit per day, so sitting inventory is genuinely expensive rather than just a number on a chart. This is what makes "release less work" a financially visible strategy.
-- ~~**Capital decisions**~~ — delivered as Track 6E, actions that cost money up front and change the factory afterwards:
-  - ~~Buy a machine~~: a one-off outlay, then another machine's standing cost at that centre — standing cost is now **per machine**, so buying prices its own keep. Delivered as capacity at an *existing* centre rather than a new one: a new centre nothing routes to would need routings changed mid-run.
-  - ~~Hire an operator~~: an onboarding cost, then a recurring wage. Letting one go is deliberately **free** — a crew you can shed cheaply is the temp lever, and it is what gives a shift's commitment something to beat.
-  - Add a shift, or authorise overtime for a period — **still open** (Track 6F). Both make a run's calendar day non-uniform, which is the one place `day_ticks` is a single frozen integer, and overtime needs a wage premium or it strictly dominates hiring.
-  - ~~Sell or retire a machine~~: returns salvage, which is less than the purchase price, so churning one costs real money.
-- **Penalties** — ~~due dates~~ delivered as Track 6B: sales orders carry a due day, runs freeze each finished unit's due tick, and the dashboard reads on-time delivery overall and per order. Deliberately a metric and not money — no late penalty on the P&L yet; the frozen per-part due tick is any future penalty's basis. Lost sales still to come.
-
-**What this produces**
-
-- A **run P&L**: throughput, operating expense, carrying cost, wages, capital spend, net profit — over the whole run and over any selected time window. *Delivered in full: `GET /api/runs/:id` and `/metrics` both carry all five lines, summed from frozen columns so no later edit can rewrite what a run spent.*
-- A **cash curve** alongside the throughput chart, so it's visible when the factory is running at a loss even while output looks healthy. *Delivered: cumulative net profit overlaid on the cumulative-throughput chart, with a zero line.*
-- **Payback period** on capital decisions: buy the second machine at the bottleneck, and see how many simulated days until it pays for itself. *Readable rather than reported: capital is charged as a lump, so the cumulative net curve steps down by the purchase and payback is where it climbs back over what doing nothing would have earned. A number needs Track 7's two runs side by side.*
-- A break-even question worth asking every run: at this demand and this cost structure, is this factory profitable at all?
-
-### Phase 5 — Forkable simulations
-
-The core experiment loop, and the most valuable feature in the project.
-
-- ~~Fork a run from any checkpoint: same state, new branch, new decisions.~~ **Done (Track 7):** `POST /api/runs/:id/fork` copies the run at its current tick — any moment a run is paused at is a checkpoint — and the Fork button lands on the child. Both branches replay identically from the shared seed until a decision diverges them, verified by a replay-identity check (`npm run check:fork`).
-- Make a different call on the fork — change priority, add capacity, re-route, split a batch, expedite an order, buy a machine, add a shift — and let it play out. *Buying machines and hiring operators (6E) can now be done in one branch of a fork against a sibling that didn't — the drill-press question is askable end to end.*
-- ~~Runs form a tree~~ — they do: `parent_run_id` chains, a fork of a fork works, and a parent can't be deleted out from under its forks.
-- **Compare forks side by side**: the Trends chart overlays a compared run's net curve (dashed, same clock, a "fork" line where the shared history ends), which is the payback read. *Windowed metric deltas — same window, every metric, difference highlighted — remain open.*
-- **The comparison is scored on net profit, not throughput.** With Phase 4 in place, a fork that raises output but required a machine purchase and a second shift can lose to the fork that did nothing. That result is only visible if cost is in the model — which is why the money model comes first.
-- Every comparison has to be measurable — deltas in net profit, throughput, operating expense, WIP, cycle time, lateness — not just a visual impression.
-
-### Phase 6 — Interface for experimentation
-
-Card-based factory visuals don't scale to five forks running at once.
-
-- **Table view of the factory** as the primary layout for comparison work: one row per work centre, expandable to show queue contents, current job, progress, utilisation, cost accrued, and history.
-- Dense by design — far more data per work centre than a card can hold.
-- The current visual/spatial factory view stays available; the table is the default when comparing.
-- **Metrics and charts scoped to a time period**, so a decision's effect can be read over the window it happened in rather than as one lifetime average.
-- Multi-run comparison view: several runs on the same axes at once, with a P&L column per run.
-
-### Phase 7 — Explanation and root-cause analysis
-
-- **Root-cause reports**: given a bad outcome (an order shipped late, throughput dipped, WIP ballooned, the run lost money), walk the event log backwards and name the cause — which constraint, which queue, which decision, which cost.
-- **AI explanations** of a run or a fork comparison in plain language: what happened, why the two branches diverged, which decision drove the delta and what it cost.
-- **Autonomous explanation**: the system surfaces notable events on its own — "this work centre became the bottleneck at t=400", "carrying cost overtook throughput on day 6" — instead of waiting to be asked.
-- Root-cause reporting is the higher-value half of this phase; it's grounded in the event log and doesn't depend on the AI being right about anything it can't cite.
-
-### Phase 8 — Predictive model (traditional ML)
-
-- Train a model on historical run data to predict **whether a job will be late**, and flag it while there's still time to act.
-- Features come out of Phase 3: queue depth ahead of the job, remaining steps, bottleneck load, current WIP, historical variability at each work centre.
-- With Phase 4 penalties in place, a lateness probability converts directly into expected cost — which makes it actionable rather than merely informative.
-- Deliberately a conventional ML model, not an LLM — this is a calibrated-probability problem with real labels available from the event history.
-
-### Phase 9 — AI agent
-
-Built on top of everything above, not instead of it.
-
-- Agent with tools over the simulation: start a run, advance it, fork at a checkpoint, apply a decision, read metrics and the P&L, compare runs, read the event log.
-- The agent runs the experiment loop autonomously — try a policy, fork alternatives, measure, report which one won and why.
-- **Recommendations for what to do next**, backed by fork results rather than by assertion, and priced: "buy the second drill press — it pays back in 11 days and adds $X/day net."
-- **AI-generated scenarios**: plausible shop-floor disruptions injected into a run — machine breakdown, operator absence, rush order, material shortage, scrap/rework, a cost shock — for stress-testing a schedule.
-
-### Phase 10 — Retrieval over historical knowledge (exploratory)
-
-- RAG over accumulated run history plus written planner/operations notes, so past situations can inform present ones ("we've seen this pattern before, here's what happened").
-- Lower confidence than the rest of the roadmap. Structured root-cause reports over the event log may cover most of the value with far less machinery — this stays exploratory until the earlier phases prove otherwise.
-
-### Manufacturing model still to build
-
-Independent of the phases above, the domain model needs:
-
-- Bills of materials.
-- Inventory management.
-- Multiple production lines.
-- Machine downtime and operator availability.
-- ~~Due dates on orders~~ (landed with Track 6B — the remaining prerequisite work is the prediction itself).
-- Explicit queues. Queue *depth* is now measured per tick, per work centre, so the aggregate dynamics are no longer inferred — but queueing is still implicit in the engine (an unclaimed part simply doesn't advance), so there is nothing to reorder, prioritise, or measure a wait time from.
-- ~~Wage rates and per-work-centre cost rates as master data~~ (Tracks 6A/6D/6E: standing cost per machine, wages per operator-hour, and the capital prices all live on `work_centers` and freeze onto each run). **Shift calendars** remain: `shifts` is one facility number, so every day of a run is the same width — a real calendar (a short Friday, a dark week) is Track 6F's `run_days` table.
+The $1,488 decision was worth **$4,487.75** in five simulated days. That number
+is the product — not the chart, not the utilization figure. Everything in the
+codebase exists so that number can be trusted: same seed, same draws, frozen
+prices, money summed from columns written when it was earned.
 
 ---
 
-## Open questions
+## The tour
 
-Decisions not yet made, recorded so they get made deliberately:
+### The floor — what is happening right now
 
-- ~~Whether forking copies state or replays from a checkpoint.~~ **Answered by Track 7: copy.** A run's state is a handful of rows, and the seeded RNG plus the uuid-free draw key mean the copy replays identically without an event log to keep — `POST /api/runs/:id/fork` copies every `run_*` table under the parent's lock, and two branches stay byte-identical until a decision (a capital action, a release) diverges them.
-- ~~Whether a run should be able to edit its *own* factory config.~~ **Answered by Track 6E: yes, and only through an action that charges for it.** `run_work_centers` has exactly one writer — a capital action, which pays the run's frozen price, re-dates the rate it moved and appends to `run_capital_actions`. Free editing was never the question worth answering; a factory you can reconfigure for nothing makes every decision trivial. Pinned *steps* still have no writer, so changing what the next release will pin remains an edit to the shared routing.
+![The simulator's Floor tab: per-work-centre status, machines, progress, queue depth](docs/screenshots/floor.png)
 
-Answered since, kept here because the answers shaped everything after them:
+One row per work centre, redrawn as the run advances. `Starved` / `Running` /
+`Saturated` are the only three states a snapshot can honestly distinguish, so
+they're the only three there are. The run bar above is the whole state of the
+world: simulated day and time, tick, WIP on the floor, money in, net profit,
+the seed, and — for a fork — where it branched from.
 
-- **Where the tick loop lives** — the server, in batches. It loads a run once, advances N ticks in memory and writes once per 500; the browser's 1s interval is a display clock that asks for one tick, not the loop itself. Per-tick writes would have made a Neon round trip out of every simulated second.
-- **Snapshot granularity** — per tick for observations (`run_ticks` plus a row per work centre), because WIP is mutable state and nothing else can say what it was at tick 300. WIP itself is replaced wholesale per batch, no snapshots.
-- **Master data versioned per run, or runs pin a revision** — runs pin, and pin per *work order* at release rather than per run, so a routing edit reaches only later releases while parts already in motion keep the steps they started with.
-- Whether cost rates are master data or per-run configuration — a fork that buys a machine changes the factory's cost structure, so at minimum the delta has to belong to the run and not to the shared master data.
-- ~~Whether capital spend is amortised or charged as a lump at the moment of purchase.~~ **Answered by Track 6E: a lump**, and the argument is timescale rather than simplicity. A realistically amortised machine — $20k over a five-year life — is about $11/day against a ~$1,900/day factory, so inside the days a run spans the purchase would be free and "always buy" would be right every time: the degenerate objective Track 6A exists to prevent. Amortisation only bites here by inventing an unrealistically short machine life. It also stays layerable later, since the cents are frozen per action, exactly as 6B froze a due tick without a penalty.
+A run is a server-side object. Reload the page, come back tomorrow, open it in
+two tabs: it's the same run at the same tick, because the browser holds no
+simulation state at all.
 
----
+### The dashboard — a P&L over any window
 
-## Current Production Flow
+![The Dashboard tab: net profit and the five money lines, deliveries per sales order, the capital log, and work centres ranked by utilization](docs/screenshots/dashboard.png)
 
-```text
-Raw Material
-      │
-      ▼
- Cutter
-      │
-      ▼
- Drill Press
-      │
-      ▼
- Deburr
-      │
-      ▼
- Inspection
-      │
-      ▼
- Packaging
-      │
-      ▼
- Finished Goods
+Net profit leads, because everything else is an input to it:
+
+```
+net = throughput − operating expense − carrying cost − wages − capital spend
 ```
 
+Then the things that explain it: on-time delivery per sales order (which
+promise broke, not just how many), cycle time as median and p95, scrap, WIP
+mean and peak, and the work centres ranked by utilization with the constraint on
+top.
+
+Read that ranking against the fork above. Having bought the second press, the
+drill press has dropped to 87% and **the Cutter is now the constraint at 96%** —
+the bottleneck moved, which is exactly what Goldratt says happens and exactly
+what makes the next decision a different decision.
+
+Every figure is windowed, and the window is stated. The same work centre read
+10% utilization over a whole run and 52% over the ticks it was actually working;
+an unlabelled average is a lie with a number in it.
+
+### Capital actions — decisions that cost money up front
+
+![The capital actions dialog: machines, operators, rent and wages per day, with buy/retire and hire/let-go priced per centre](docs/screenshots/capital-dialog.png)
+
+Buying is a whole-factory question, so it gets the whole factory in one table:
+what each centre has, what it costs per day, and what changing it costs now. A
+centre runs `min(machines, operators)`, so a machine nobody staffs is rent with
+no output and an operator with no machine is a wage with no output.
+
+The prices are the run's **own frozen prices**. Edit the master data mid-run and
+this run neither sees the new number nor is charged it — that's what makes two
+forks comparable. Spend is charged as a lump at the tick it lands (a five-year
+amortisation would be ~$11/day against a ~$3,300/day factory, i.e. free, i.e.
+"always buy" wins and the decision stops being a decision).
+
+### Release policies — how work reaches the floor
+
+![The release policy dialog: manual, CONWIP, due-date and drum-buffer-rope](docs/screenshots/policy-dialog.png)
+
+A run can feed its own floor as it advances: **CONWIP** (hold floor WIP under a
+cap), **due-date** (release each order a lead time before its promise), or
+**drum-buffer-rope** (pace releases to the constraint's queue). Priority is
+earliest due date throughout. It's a per-run setting frozen at creation and
+changeable any time under the run's lock, so two forks can play the same order
+book under different release rules — the comparison the whole app is shaped
+around.
+
+Releasing everything on day one is always available, and always expensive:
+material on the floor accrues a carrying charge per day, so "release less" has a
+number attached to it.
+
+### The factory is data
+
+![The routing editor: ordered steps with work centre, process time, setup time and scrap rate](docs/screenshots/routing-steps.png)
+
+Parts, work centres, routings with ordered steps, work orders, sales orders with
+due dates, and the allocations that link them. Besides its work centre, a
+routing step carries three numbers that make it behave like an operation rather
+than a delay: a nominal process time (sampled ±30% per unit), a changeover time
+paid once per work order, and a scrap rate in basis points, drawn at step
+completion — so the machine time is spent and _then_ the unit fails.
+
+![Work orders with the open-demand panel: unfilled sales orders net of uncommitted supply](docs/screenshots/work-orders.png)
+
+Demand and supply are separate objects joined by allocations, which is what
+makes a finished unit worth money: a unit covered by an allocation earns
+`unit price − material cost`, and a unit beyond the allocated quantity earns
+nothing at all. Finish order therefore decides which sales order — and which
+price — a unit is credited to.
+
 ---
 
-## Technology
+## How it works
 
-- **Frontend** — React 19, TypeScript, Vite, Tailwind CSS v4, React Router, Recharts, Vitest
-- **Backend** — Express 5, TypeScript, Drizzle ORM, Neon serverless Postgres, Zod
+### The engine
 
-Two independent npm projects — no monorepo tooling. See `CLAUDE.md` for commands and conventions.
+`backend/src/simulation/` is pure functions: tick the floor, sample a process
+time, accrue a rate, credit a finished part, aggregate a window. No database, no
+HTTP, no `Date.now()`. That's why 323 tests run in under a second and why the
+rules are the tests rather than the other way round.
+
+- **One tick is one staffed second.** A calendar day is `shifts × 28,800` ticks.
+  Off-shift time isn't simulated and isn't skipped-with-gaps — it simply isn't
+  ticks, which is what makes a second shift double the day's wage bill while
+  amortising the same rent.
+- **Money is integer cents, everywhere.** Rates are accrued as an exact integer
+  floor-difference of the tick number, so splitting a run into batches can't
+  drift and a full day sums to exactly the daily rate. Carrying cost is the one
+  true accumulator (it depends on what sat on the floor), and it keeps its
+  remainder in the run row so the lifetime charge is exact however the run was
+  chunked.
+- **Nothing is derived after the fact that can be observed as it happens.** A
+  machine that finished a part during a tick was busy for all of it and is empty
+  by the time anything could look, so the tick emits its own metrics — busy
+  machines, queue depth, and the effective capacity it admitted against.
+
+### Determinism, and why it's load-bearing
+
+Randomness is not drawn at call time. A process time is a pure function of
+`(seed, workOrderId, unitIndex, stepIndex)`, hashed and avalanched, with scrap
+drawn from a second independent domain over the same key. A run therefore
+persists one integer — its seed — and no cursor. Re-create it, resume it, fork
+it: every draw comes back identical.
+
+This broke once, instructively. The draw key used to include the part's UUID,
+which is minted fresh at every release — so two runs created with the same seed
+drew different noise, and comparing them measured the dice instead of the
+decision. `UNIQUE(run_id, work_order_id, unit_index)` is what makes the current
+key name exactly one part.
+
+### A run freezes the factory it was created with
+
+Once a run exists, the engine reads that run's own copy of the config —
+machines, operators, standing costs, wages, capital prices, facility rates,
+shift width — and never the live tables again. Routing steps are pinned per
+**work order** at release, so editing a routing changes only later releases and
+never re-plans a part already halfway down a route.
+
+That's what lets two runs disagree about the drill press, and it's what makes
+forking a copy rather than a versioning scheme: `POST /api/runs/:id/fork` copies
+every `run_*` table row-for-row under the parent's lock, in one transaction. A
+replay-identity check (`npm run check:fork`) proves the branches stay
+byte-identical until a decision separates them.
+
+The frozen config has exactly two writers — a capital action, which charges the
+run's own price and appends an append-only log row, and a policy change. Neither
+touches the shared factory, and no read ever re-derives money from a rate: the
+cents are frozen into the row when they're spent or earned, so a later edit
+cannot rewrite what a finished run did.
+
+### Persistence and the advance loop
+
+`POST /api/runs/:id/advance {ticks}` loads the run once, ticks it in memory and
+writes once per 3,600-tick batch — one transaction each, so a crash costs at
+most one simulated hour and never leaves a half-written run. Advancing takes a
+row-level `advancing` lock; a release, a capital action or a policy change
+landing mid-batch would be overwritten by the write that follows it, so all four
+contend for the same lock and a 409 is a real answer rather than a race. A stale
+lock (a killed process) is clearable from the UI, worded as an assertion the
+user is making rather than a retry.
+
+Observations are stored per simulated minute on an absolute grid — every field a
+sum, a count or a max, never a mean, so grouping is lossless and you divide once
+at the end. WIP needs three fields, because a level isn't a flow: the mean's
+numerator, the peak, and the closing value. That change alone took a whole-run
+metrics read on a 15-day playthrough from 7.4s to 1.13s with every reported
+figure byte-identical across the migration.
+
+On this machine a loaded floor of 150–280 parts advances at **~8,000 ticks per
+second**, so a simulated day takes about four seconds and the fast-forward in
+the UI streams it in committed hourly chunks with the charts flying through it.
+
+### The API
+
+A run is driven entirely over HTTP, which is why the UI has no privileges an
+agent won't have:
+
+| Endpoint | |
+| --- | --- |
+| `POST /api/runs` | create a run, freezing the factory's rates, shifts and policy into it |
+| `GET /api/runs/:id` | summary and whole-run P&L |
+| `POST /api/runs/:id/releases` | put a work order on the floor, pinning its routing steps |
+| `POST /api/runs/:id/policy` | change this run's release policy, effective next advance |
+| `POST /api/runs/:id/actions` | buy/retire a machine, hire/let an operator go (`GET` lists the log) |
+| `POST /api/runs/:id/advance` | tick it forward, ≤ 20,000 ticks per call |
+| `POST /api/runs/:id/fork` | copy the run at its current tick into a new branch |
+| `GET /api/runs/:id/floor` | snapshot: what's at each centre, how far along |
+| `GET /api/runs/:id/metrics` | the P&L, utilization, cycle time, OTD and scrap over a tick window |
+| `GET /api/runs/:id/ticks` | the observation series, server-side bucketed |
+
+Plus REST CRUD for the factory definition itself — parts, work centres,
+routings, work orders, sales orders, settings. Every body, param and query is
+zod-validated, and every error response in the API is `{ message }`, which the
+UI toasts verbatim.
+
+An advance answers with more than a tick number: the surviving WIP count, what
+scrapped, what the release policy put on the floor, and how many orders remain
+releasable — so a caller running until the factory drains stops on the
+advance's own answer rather than chasing it with a read that may already be
+stale.
+
+### Frontend
+
+The frontend holds no simulation. It had its own copy of the engine once; the
+two drifted, and the frontend's was deleted the day the page switched to driving
+a server-side run. What's left in `frontend/src/simulation/` is pure display
+transforms — cumulative curves, trailing rates, a fork-aware merge of two runs'
+net series, tick-to-calendar formatting — each unit-tested like the engine.
+
+A subtlety the cumulative chart forced: `/ticks` returns at most the newest
+5,000 rows, so a long run's series is a **suffix**. Accumulating it from zero
+would draw a curve that contradicts the money above it, so the opening balance
+is derived exactly — the run's total minus the window's own sum, two sums over
+the same frozen columns — and the curve carries on from where the run really
+was.
 
 ---
 
-## Long-Term Vision
+## Running it
 
-The long-term objective is to build a simulation capable of modeling realistic manufacturing environments where routing, constraints, statistical variation, and operational policies can be evaluated before changes are made on the shop floor.
+Two independent npm projects, no monorepo tooling. Node 20.19+ (Vite 8) and a
+Postgres connection string (Neon, or anything the serverless driver can reach —
+the WebSocket `Pool` is used rather than the HTTP driver because writes span
+tables and need real transactions).
 
-Forking is what turns that from a demo into a tool: the same factory, the same moment, two different decisions, and a measured answer for which one made more money.
+```bash
+# backend — port 3000, needs backend/.env with DATABASE_URL=postgres://…
+cd backend
+npm install
+npx drizzle-kit migrate
+npm run seed        # the playground factory: 10 centres, 10 parts, 29 orders
+npm run dev
 
-By combining production simulation with manufacturing principles, Factory Flow aims to provide insight into how improvements in flow—not simply machine utilization—affect overall factory performance.
+# frontend — port 5173
+cd frontend
+npm install
+npm run dev
+```
+
+Then open the simulator, click **New Run**, pick a release policy, and
+fast-forward a day.
+
+```bash
+npx vitest run          # in either project: 231 tests backend, 92 frontend
+npm run check:fork      # backend, live DB: a fork replays its parent exactly
+npm run check:policy    # backend, live DB: policies stay isolated per run
+```
+
+The seed is tuned rather than arbitrary: ~$3,340/day of burn at one shift, a
+constraint ladder (drill press → cutter → mill) that shifts as you buy capacity,
+and margins per constraint-second that make the dispatch decision non-obvious.
+A 15-day playthrough on it nets **+$42,444 at 100% on-time delivery** if you
+expand early, and considerably less if you don't.
+
+---
+
+## Deliberately not built
+
+Being explicit about scope, because half of these are decisions rather than
+omissions:
+
+- **No background clock.** Nothing advances a run unattended; a request drives
+  it. A background loop would be the first stateful thing in the server process,
+  and an agent driving a run wants determinism, not something ticking underneath
+  it.
+- **No speed multiplier.** The live clock plays one simulated minute per real
+  second, and fast-forward jumps in calendar units. A "100×" button starts lying
+  the moment it outruns what the server sustains.
+- **No cash balance.** A run can't be refused a purchase for want of funds; net
+  just goes further negative. Financing is a different game.
+- **No late penalty, no scrap write-off.** Both are measured and frozen
+  per-part — the due tick a unit was promised, the material a scrapped unit
+  cost — so a money penalty is layerable later without rewriting history. Today
+  lateness costs you the metric, and scrap costs you the wasted machine time,
+  the carrying already paid and the sale that unit didn't make.
+- **No event log.** There's a full time series (money, WIP, per-centre occupancy
+  and queues per simulated minute) but not an append-only log of discrete
+  events. That's the piece a root-cause explainer would need.
+- **No BOMs, no multi-level assembly, no machine breakdown, no explicit
+  queues.** Queue *depth* is measured; queue *order* isn't a thing you can
+  reach in and change yet.
+- **Overtime and non-uniform shift calendars.** Overtime's entire economic
+  identity is its premium, and a mid-run shift change makes a run's calendar day
+  non-uniform while `day_ticks` is currently one frozen integer. It's a
+  day-boundary table's worth of work, not a flag.
+
+---
+
+## What's next
+
+An **AI agent** over the REST API. The API is already the whole surface — create
+a run, release work, set a policy, buy a machine, advance, fork, read the P&L
+and the metrics, compare two runs — so the agent is a pure HTTP client with no
+privileged access to the engine, inheriting the same locks, the same frozen
+config and the same reproducibility as the UI.
+
+The interesting part isn't tool-calling. It's that the environment can already
+tell it whether it was right: fork, take a decision in one branch, advance both,
+and read the delta in net profit. That's a measured answer rather than an
+assertion — and the whole simulator was built to make it one.
+
+Further out, in rough order of how much of it is grounded in something the
+system can already cite:
+
+- **An event log**, and root-cause reports over it: given an order that shipped
+  late or a day that lost money, walk backwards and name the constraint, the
+  queue, the decision.
+- **Multi-run comparison** beyond one overlaid curve — every metric, same
+  window, deltas highlighted, a P&L column per branch.
+- **Lateness prediction** as a conventional ML problem (real labels, calibrated
+  probabilities, features that already exist in the time series) rather than
+  something an LLM guesses at.
+- **Injected disruption** — breakdowns, absences, rush orders, cost shocks — to
+  stress-test a schedule that looks fine when nothing goes wrong.
+
+`PROGRESS.md` is the operational ledger — what shipped, what's next, and the
+reasoning behind the sequencing. `CLAUDE.md` holds the design invariants that
+the code is expected to keep.
