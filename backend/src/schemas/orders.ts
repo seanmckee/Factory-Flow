@@ -98,6 +98,11 @@ const shiftsInt = z
   .min(1, { error: "a day needs at least one shift" })
   .max(3, { error: "a day holds at most three 8-hour shifts" });
 
+/** The four release policies; see simulation/releasePolicy.ts for semantics. */
+const releasePolicyKind = z.enum(["manual", "conwip", "due_date", "dbr"], {
+  error: "releasePolicy must be manual, conwip, due_date or dbr",
+});
+
 export const updateFactorySettingsSchema = z
   .object({
     facilityOverheadCentsPerDay: nonNegativeInt(
@@ -105,14 +110,43 @@ export const updateFactorySettingsSchema = z
     ).optional(),
     wipCarryingBpsPerDay: nonNegativeInt("wipCarryingBpsPerDay").optional(),
     shifts: shiftsInt.optional(),
+    releasePolicy: releasePolicyKind.optional(),
+    wipCap: positiveInt("wipCap").optional(),
+    releaseLeadDays: nonNegativeInt("releaseLeadDays").optional(),
+    // nullish: null clears the default drum, which only a manual/conwip/
+    // due_date default can live with — a dbr run re-checks at creation
+    drumWorkCenterId: positiveInt("drumWorkCenterId").nullish(),
+    drumBuffer: positiveInt("drumBuffer").optional(),
   })
   .refine(
     (body) =>
       body.facilityOverheadCentsPerDay !== undefined ||
       body.wipCarryingBpsPerDay !== undefined ||
-      body.shifts !== undefined,
-    { error: "provide facilityOverheadCentsPerDay, wipCarryingBpsPerDay or shifts" },
+      body.shifts !== undefined ||
+      body.releasePolicy !== undefined ||
+      body.wipCap !== undefined ||
+      body.releaseLeadDays !== undefined ||
+      body.drumWorkCenterId !== undefined ||
+      body.drumBuffer !== undefined,
+    {
+      error:
+        "provide facilityOverheadCentsPerDay, wipCarryingBpsPerDay, shifts, releasePolicy, wipCap, releaseLeadDays, drumWorkCenterId or drumBuffer",
+    },
   );
+
+/**
+ * A run's own policy change — every field but the kind optional, omitted
+ * means keep the run's current value. Validation of the merged result (a dbr
+ * run must name a drum the run actually has) is the service's job, since only
+ * it sees the run.
+ */
+export const releasePolicySchema = z.object({
+  releasePolicy: releasePolicyKind,
+  wipCap: positiveInt("wipCap").optional(),
+  releaseLeadDays: nonNegativeInt("releaseLeadDays").optional(),
+  drumWorkCenterId: positiveInt("drumWorkCenterId").nullish(),
+  drumBuffer: positiveInt("drumBuffer").optional(),
+});
 
 // Parts
 

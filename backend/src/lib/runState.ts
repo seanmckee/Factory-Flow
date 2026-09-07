@@ -3,6 +3,8 @@ import { db } from "../db/index.js";
 import {
   allocations,
   parts,
+  routingSteps,
+  routings,
   runFinishedParts,
   runReleasedOrders,
   runWipParts,
@@ -12,9 +14,11 @@ import {
   simulationRuns,
   workOrders,
 } from "../db/schema.js";
+import type { AdmittableOrder } from "../simulation/releaseAdmission.js";
+import type { BacklogOrder } from "../simulation/releasePolicy.js";
 import type { RunState } from "../simulation/simulateBatch.js";
 import { setupKey } from "../simulation/simulationTick.js";
-import type { Routing, WipPart } from "../simulation/types.js";
+import type { Routing, RoutingStep, WipPart } from "../simulation/types.js";
 
 export type RunRow = typeof simulationRuns.$inferSelect;
 
@@ -24,9 +28,9 @@ export type RunRow = typeof simulationRuns.$inferSelect;
  * which is why finished money is frozen as it is credited rather than
  * recomputed later.
  *
- * Shared by the write side (`runService.advanceRun`) and the read side
- * (`runReads.getRunFloor`), which is why it lives in its own module rather
- * than either of theirs.
+ * `advanceRun` is the only caller now — the floor read used to share it and
+ * loads its own slimmer set — but the loader stays in its own module: it is
+ * the run's one load boundary, and the place calendar days become ticks.
  */
 export async function loadRunState(run: RunRow): Promise<RunState> {
   // These five reads share only the run id. Issuing them together matters on
@@ -215,4 +219,151 @@ export async function loadRunState(run: RunRow): Promise<RunState> {
     },
     carryRemainder: run.carryRemainder,
   };
+}
+
+/**
+ * One unreleased work order, loaded with everything both halves of an
+ * auto-release need: the planner's view (`BacklogOrder`) and the admission's
+ * graft (`AdmittableOrder`), plus the provenance the `run_released_orders`
+ * row records.
+ */
+export type LoadedBacklogOrder = BacklogOrder &
+  AdmittableOrder & { routingId: number; routingRevision: string };
+
+/**
+ * The un-released backlog, as a release policy sees it. Read **live and once
+ * per advance request**, the same contract as the demand side above: a work
+ * order created mid-advance is invisible until the next request, and editing
+ * the order book between branch advances diverges same-seed runs for a reason
+ * the seed doesn't explain — a caveat, not a bug.
+ *
+ * Orders with no routing or no steps are excluded rather than carried: they
+ * can never release (the manual endpoint 404s/400s them), and a policy that
+ * kept planning one would wedge every evaluation on the same dead order.
+ */
+export async function loadReleaseBacklog(
+  run: RunRow,
+  releasedIds: ReadonlySet<number>,
+): Promise<LoadedBacklogOrder[]> {
+  const allOrders = await db
+    .select({
+      id: workOrders.id,
+      partId: workOrders.partId,
+      routingId: workOrders.routingId,
+      quantity: workOrders.quantity,
+    })
+    .from(workOrders);
+  const unreleased = allOrders.filter((order) => !releasedIds.has(order.id));
+  if (unreleased.length === 0) return [];
+
+  const routingIds = [...new Set(unreleased.map((order) => order.routingId))];
+  const orderIds = unreleased.map((order) => order.id);
+  const partIds = [...new Set(unreleased.map((order) => order.partId))];
+
+  const [routingRows, stepRows, allocationRows, partRows] = await Promise.all([
+    db
+      .select({ id: routings.id, revision: routings.revision })
+      .from(routings)
+      .where(inArray(routings.id, routingIds)),
+    db
+      .select({
+        routingId: routingSteps.routingId,
+        workCenterId: routingSteps.workCenterId,
+        processTimeSeconds: routingSteps.processTimeSeconds,
+        setupTimeSeconds: routingSteps.setupTimeSeconds,
+        scrapBps: routingSteps.scrapBps,
+      })
+      .from(routingSteps)
+      .where(inArray(routingSteps.routingId, routingIds))
+      .orderBy(routingSteps.routingId, routingSteps.sequence),
+    db
+      .select()
+      .from(allocations)
+      .where(inArray(allocations.workOrderId, orderIds)),
+    db
+      .select({ id: parts.id, materialCostCents: parts.materialCostCents })
+      .from(parts)
+      .where(inArray(parts.id, partIds)),
+  ]);
+
+  const salesOrderIds = [
+    ...new Set(allocationRows.map((allocation) => allocation.salesOrderId)),
+  ];
+  const salesOrderRows = salesOrderIds.length
+    ? await db
+        .select({
+          id: salesOrders.id,
+          unitPriceCents: salesOrders.unitPriceCents,
+          dueDay: salesOrders.dueDay,
+        })
+        .from(salesOrders)
+        .where(inArray(salesOrders.id, salesOrderIds))
+    : [];
+
+  const revisionByRouting = new Map(
+    routingRows.map((routing) => [routing.id, routing.revision]),
+  );
+  const stepsByRouting = new Map<number, RoutingStep[]>();
+  for (const row of stepRows) {
+    const step: RoutingStep = {
+      workCenterId: row.workCenterId,
+      processTimeSeconds: row.processTimeSeconds,
+      setupTimeSeconds: row.setupTimeSeconds,
+      scrapBps: row.scrapBps,
+    };
+    const steps = stepsByRouting.get(row.routingId);
+    if (steps) steps.push(step);
+    else stepsByRouting.set(row.routingId, [step]);
+  }
+  const partById = new Map(partRows.map((part) => [part.id, part]));
+  // due days convert to the run's own ticks here, like the released demand
+  const salesOrderById = new Map(
+    salesOrderRows.map((so) => [
+      so.id,
+      {
+        id: so.id,
+        unitPriceCents: so.unitPriceCents,
+        dueAtTick: so.dueDay === null ? null : so.dueDay * run.dayTicks,
+      },
+    ]),
+  );
+
+  const backlog: LoadedBacklogOrder[] = [];
+  for (const order of unreleased) {
+    const steps = stepsByRouting.get(order.routingId);
+    const routingRevision = revisionByRouting.get(order.routingId);
+    if (!steps || steps.length === 0 || routingRevision === undefined) continue;
+    const part = partById.get(order.partId);
+    // the FK is NOT NULL RESTRICT, so a missing part is a bug, not a state
+    if (!part) throw new Error(`Work order ${order.id} names missing part ${order.partId}`);
+
+    const covering = allocationRows.filter(
+      (allocation) => allocation.workOrderId === order.id,
+    );
+    const coveringSalesOrders = [
+      ...new Set(covering.map((allocation) => allocation.salesOrderId)),
+    ].flatMap((id) => {
+      const so = salesOrderById.get(id);
+      if (!so) throw new Error(`Allocation names missing sales order ${id}`);
+      return [so];
+    });
+    const dueTicks = coveringSalesOrders
+      .map((so) => so.dueAtTick)
+      .filter((due): due is number => due !== null);
+
+    backlog.push({
+      workOrderId: order.id,
+      quantity: order.quantity,
+      dueAtTick: dueTicks.length ? Math.min(...dueTicks) : null,
+      workCenterIds: new Set(steps.map((step) => step.workCenterId)),
+      steps,
+      workOrder: { id: order.id, partId: order.partId },
+      part,
+      salesOrders: coveringSalesOrders,
+      allocations: covering,
+      routingId: order.routingId,
+      routingRevision,
+    });
+  }
+  return backlog;
 }

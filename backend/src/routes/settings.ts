@@ -32,6 +32,11 @@ router.patch("/", async (req, res) => {
       facilityOverheadCentsPerDay?: number;
       wipCarryingBpsPerDay?: number;
       shifts?: number;
+      releasePolicy?: string;
+      wipCap?: number;
+      releaseLeadDays?: number;
+      drumWorkCenterId?: number | null;
+      drumBuffer?: number;
     } = {};
     if (body.facilityOverheadCentsPerDay !== undefined) {
       updates.facilityOverheadCentsPerDay = body.facilityOverheadCentsPerDay;
@@ -41,6 +46,21 @@ router.patch("/", async (req, res) => {
     }
     if (body.shifts !== undefined) {
       updates.shifts = body.shifts;
+    }
+    if (body.releasePolicy !== undefined) {
+      updates.releasePolicy = body.releasePolicy;
+    }
+    if (body.wipCap !== undefined) {
+      updates.wipCap = body.wipCap;
+    }
+    if (body.releaseLeadDays !== undefined) {
+      updates.releaseLeadDays = body.releaseLeadDays;
+    }
+    if (body.drumWorkCenterId !== undefined) {
+      updates.drumWorkCenterId = body.drumWorkCenterId;
+    }
+    if (body.drumBuffer !== undefined) {
+      updates.drumBuffer = body.drumBuffer;
     }
 
     res.json(await updateFactorySettings(updates));

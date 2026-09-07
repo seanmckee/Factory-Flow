@@ -13,6 +13,7 @@ import {
   listCapitalActions,
   listRuns,
   releaseWorkOrder,
+  setReleasePolicy,
   unlockRun,
   type CapitalAction,
   type CapitalActionKind,
@@ -24,6 +25,7 @@ import {
 } from "../api/runs";
 import { CAPITAL_LABELS, formatSpend } from "./capital";
 import { mergeCompareNet } from "./compareTrend";
+import { policySummary, type PolicyChange } from "./releasePolicy";
 import { cumulativeThroughput, openingCents } from "./cumulativeThroughput";
 import { netPerTick, openingNetCents } from "./netProfit";
 import {
@@ -55,7 +57,7 @@ export type JumpProgress = {
 };
 
 export type ActiveTab = "floor" | "trends" | "dashboard";
-type PendingAction = "create" | "delete" | "fork" | "release" | "capital" | null;
+type PendingAction = "create" | "delete" | "fork" | "release" | "capital" | "policy" | null;
 
 /** Coordinates the server-backed run while keeping rendering concerns out of the page. */
 export function useSimulationPage() {
@@ -69,6 +71,7 @@ export function useSimulationPage() {
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [actions, setActions] = useState<CapitalAction[]>([]);
   const [capitalOpen, setCapitalOpen] = useState(false);
+  const [policyOpen, setPolicyOpen] = useState(false);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -316,12 +319,33 @@ export function useSimulationPage() {
     return !advancing.current;
   }, []);
 
+  const workOrderById = useMemo(() => new Map(workOrders.map((order) => [order.id, order])), [workOrders]);
+  const releasedIds = useMemo(
+    () => new Set((run?.releasedOrders ?? []).map((item) => item.workOrderId)),
+    [run?.releasedOrders],
+  );
+  const releasableOrders = useMemo(
+    () => workOrders.filter((order) => !releasedIds.has(order.id)),
+    [workOrders, releasedIds],
+  );
+
   const runJump = useCallback(
     async (target: number, jumpLabel: string) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
-      if ((run?.wipCount ?? 0) === 0) {
-        return showToast("Nothing on the floor — release a work order first", "error");
+      // an active policy can feed an empty floor from the backlog, so the
+      // refusal only stands when nothing could land during the jump
+      const manualPolicy = (run?.releasePolicy ?? "manual") === "manual";
+      if (
+        (run?.wipCount ?? 0) === 0 &&
+        (manualPolicy || releasableOrders.length === 0)
+      ) {
+        return showToast(
+          manualPolicy
+            ? "Nothing on the floor — release a work order first"
+            : "Nothing on the floor and nothing left to release",
+          "error",
+        );
       }
       setIsRunning(false);
       if (!(await awaitIdleClock())) {
@@ -336,18 +360,28 @@ export function useSimulationPage() {
       setJump({ label, ticksDone: 0, ticksTotal: target, tickNum: null });
 
       let done = 0;
+      let autoOrders = 0;
+      let autoParts = 0;
       try {
         while (done < target && !stopJumpRef.current) {
           const size = Math.min(CHUNK_TICKS, target - done);
           const result = await advanceRun(runId, size);
           done += result.ticksAdvanced;
+          autoOrders += result.autoReleased.length;
+          autoParts += result.autoReleased.reduce(
+            (total, entry) => total + entry.partsReleased,
+            0,
+          );
           setJump({ label, ticksDone: done, ticksTotal: target, tickNum: result.tickNum });
           try {
             await refresh(runId);
           } catch (error) {
             report(error, "Failed to load run");
           }
-          if (result.wipCount === 0) {
+          // drained only when nothing is left that could refill the floor —
+          // backlogCount is always 0 under manual, so this is the old
+          // condition there
+          if (result.wipCount === 0 && result.backlogCount === 0) {
             showToast(
               `Floor emptied at ${formatTickTime(result.tickNum, run?.dayTicks ?? TICKS_PER_DAY)} — stopped the jump`,
             );
@@ -361,12 +395,50 @@ export function useSimulationPage() {
         setStopping(false);
         advancing.current = false;
       }
+      if (autoOrders > 0) {
+        showToast(
+          `Policy released ${autoOrders} order${autoOrders === 1 ? "" : "s"} (${autoParts.toLocaleString()} parts) during the jump`,
+        );
+      }
       if (done > 0) await loadMetrics(runId, startTick + 1, startTick + done);
       if (done > 0 && activeTab === "trends") {
         await loadSeries(runId, startTick + done);
       }
     },
-    [runId, jump, run, awaitIdleClock, refresh, report, reportAdvance, showToast, loadMetrics, activeTab, loadSeries],
+    [runId, jump, run, releasableOrders, awaitIdleClock, refresh, report, reportAdvance, showToast, loadMetrics, activeTab, loadSeries],
+  );
+
+  /**
+   * Changes the run's release policy — the second writer of its frozen
+   * config, so it follows the capital-action protocol exactly: wait the
+   * clock's beat out and hold `advancing`, since the change takes the same
+   * server-side lock.
+   */
+  const onPolicyChange = useCallback(
+    async (change: PolicyChange) => {
+      if (runId === null) return showToast("Create or select a run first", "error");
+      if (jump) return;
+      setPendingAction("policy");
+      if (!(await awaitIdleClock())) {
+        setPendingAction(null);
+        return showToast("The run is still advancing — try again", "error");
+      }
+      advancing.current = true;
+      try {
+        const updated = await setReleasePolicy(runId, change);
+        await refresh(runId);
+        setPolicyOpen(false);
+        const name = (id: number) =>
+          floor?.workCenters.find((center) => center.workCenterId === id)?.name;
+        showToast(`Release policy set to ${policySummary(updated, name)}`);
+      } catch (error) {
+        report(error, "Failed to change the release policy");
+      } finally {
+        advancing.current = false;
+        setPendingAction(null);
+      }
+    },
+    [runId, jump, awaitIdleClock, refresh, floor, report, showToast],
   );
 
   const onCreateRun = async () => {
@@ -547,16 +619,6 @@ export function useSimulationPage() {
     return mergeCompareNet(base, compareNet);
   }, [series, seriesBucket, run?.throughputCents, run?.netCents, compareRun, compareSeries]);
 
-  const workOrderById = useMemo(() => new Map(workOrders.map((order) => [order.id, order])), [workOrders]);
-  const releasedIds = useMemo(
-    () => new Set((run?.releasedOrders ?? []).map((item) => item.workOrderId)),
-    [run?.releasedOrders],
-  );
-  const releasableOrders = useMemo(
-    () => workOrders.filter((order) => !releasedIds.has(order.id)),
-    [workOrders, releasedIds],
-  );
-
   const changeTab = (next: ActiveTab) => {
     setActiveTab(next);
     if (next === "trends" && runId !== null && run) void loadSeries(runId, run.tickNum);
@@ -573,11 +635,12 @@ export function useSimulationPage() {
     isRunning, jump,
     loadMetrics, metrics, metricsLoading, newRunName, newRunOpen, onCapitalAction,
     onCreateRun,
-    onDeleteRun, onForkRun, onRelease, pendingAction, releasableOrders, run,
+    onDeleteRun, onForkRun, onPolicyChange, onRelease, pendingAction,
+    policyOpen, releasableOrders, run,
     runId, runs,
     runJump, salesOrders, selectCompare, selectRun, selectedOrderId,
     seriesLoading, setCapitalOpen,
-    setForkName, setForkOpen, setIsRunning,
+    setForkName, setForkOpen, setIsRunning, setPolicyOpen,
     setNewRunName, setNewRunOpen, setSelectedOrderId, setStopping, stopping,
     stopJumpRef, trend, workOrderById,
   };

@@ -30,6 +30,13 @@ end-to-end by `npm run check:fork`), and the Trends chart overlays a compared
 run's net curve with a fork-seam line — the payback of one decision, read off
 two nets.
 
+**Release policies (RP) are complete** (2026-09-04): a run can feed its own
+floor while it advances — CONWIP, due-date scheduling, or drum-buffer-rope,
+EDD priority throughout — with defaults in Factory Settings, a frozen per-run
+copy changeable any time under the run's lock, and fork isolation proven
+end-to-end by `npm run check:policy`. A jump now drains only when the floor
+and the releasable backlog are both empty.
+
 **Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
 6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
@@ -89,6 +96,36 @@ pays back in **0.6 of a fed day**.
       Track 8 agent should face: a stream of decisions, not one shot at a static
       book. New randomness, so it needs a draw domain of its own (the 6C
       pattern) and must stay reproducible from `rng_seed` alone.
+
+### Track 7 follow-ups — richer comparison (deferred)
+
+Noted 2026-09-04, to pick up later (after the agent, unless it needs them):
+
+- [ ] **Comparison functionality and display in the Dashboard and Trends.** The
+      dashboard is still deliberately one run's window; revisit what a compared
+      pair should show there, and how the Trends overlay presents beyond the
+      single net curve.
+- [ ] **More compare series on Trends** — e.g. an operating-expense line for
+      the compared run, so the cost side of a decision reads alongside its net.
+
+### Release policies (`feat/release-policy`) — complete
+
+Planned 2026-09-04 from playing the sim: with only manual releases, a long
+fast-forward drains the floor and rent burns on an idle factory. Three
+policies plus manual, defaults in Factory Settings, frozen per run,
+changeable per run under the lock — so forks can test policies against each
+other. Priority is earliest-due-date, undated last, id tie-break.
+
+- [x] RP.1 Schema + migration — five policy columns on `factory_settings` and
+      `simulation_runs`; frozen at create; forkRun copies them
+- [x] RP.2 Pure policy engine + tests — `planReleases` (conwip / due_date /
+      dbr), `buildReleaseParts` shared with manual release, `admitOrderIntoState`
+- [x] RP.3 Advance integration — evaluate per batch, release rows ride the
+      batch transaction, `AdvanceResult.autoReleased` + `backlogCount`
+- [x] RP.4 `POST /api/runs/:id/policy` + settings PATCH + `npm run check:policy`
+- [x] RP.5 UI — settings fields, transport-bar Policy dialog, jump guard and
+      drain-stop learn about backlog
+- [x] RP.6 Ledger + doc sweep
 
 ### Track 8 — re-plan when reached
 

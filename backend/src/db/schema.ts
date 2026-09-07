@@ -88,6 +88,30 @@ export const factorySettings = pgTable("factory_settings", {
    * simulated and not skipped-with-gaps, it simply isn't ticks.
    */
   shifts: integer("shifts").notNull().default(1),
+  /**
+   * Default release policy, frozen onto each run at creation like the rates:
+   * `manual` (today's behaviour) | `conwip` | `due_date` | `dbr`. All five
+   * policy columns are always present; only the ones the active policy reads
+   * matter, so switching policies is one column flip, not a shape change.
+   */
+  releasePolicy: varchar("release_policy", { length: 20 })
+    .notNull()
+    .default("manual"),
+  /** conwip: release the next order while floor WIP is below this many parts */
+  wipCap: integer("wip_cap").notNull().default(200),
+  /** due_date: release each order this many calendar days before it is due */
+  releaseLeadDays: integer("release_lead_days").notNull().default(1),
+  /**
+   * dbr: the drum — the constraint the rope paces releases to. Live config,
+   * so unlike every frozen copy it IS keyed, and deleting the centre nulls
+   * the default rather than dangling it.
+   */
+  drumWorkCenterId: integer("drum_work_center_id").references(
+    () => workCenters.id,
+    { onDelete: "set null" },
+  ),
+  /** dbr: release drum-visiting orders while WIP at the drum is below this */
+  drumBuffer: integer("drum_buffer").notNull().default(50),
 });
 
 export const parts = pgTable("parts", {
@@ -241,6 +265,20 @@ export const simulationRuns = pgTable("simulation_runs", {
    * [0, 10000 * day_ticks), which is at most 2.88e8 and fits int4.
    */
   carryRemainder: integer("carry_remainder").notNull().default(0),
+  /**
+   * The run's release policy, frozen from `factory_settings` at creation and
+   * changed only by `POST /api/runs/:id/policy` under the run's lock — the
+   * second writer of a run's frozen config, after capital actions. A fork
+   * copies these five, so re-policying a parent never reaches its forks.
+   */
+  releasePolicy: varchar("release_policy", { length: 20 })
+    .notNull()
+    .default("manual"),
+  wipCap: integer("wip_cap").notNull().default(200),
+  releaseLeadDays: integer("release_lead_days").notNull().default(1),
+  /** un-keyed on purpose, like every frozen `work_center_id` copy */
+  drumWorkCenterId: integer("drum_work_center_id"),
+  drumBuffer: integer("drum_buffer").notNull().default(50),
 });
 
 /**

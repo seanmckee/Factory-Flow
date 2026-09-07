@@ -1,23 +1,28 @@
-import { Factory, LoaderCircle, Play, Square } from "lucide-react";
+import { Factory, ListOrdered, LoaderCircle, Play, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { JUMP_PRESETS, type SimulationPageController } from "../../simulation/useSimulationPage";
 import { TICKS_PER_DAY } from "../../simulation/simTime";
 import { CapitalDialog } from "./CapitalDialog";
+import { PolicyDialog } from "./PolicyDialog";
+import { POLICY_LABELS } from "../../simulation/releasePolicy";
 
 type Props = Pick<SimulationPageController,
   "capitalOpen" | "floor" | "isRunning" | "jump" | "onCapitalAction" |
-  "onRelease" | "pendingAction" | "releasableOrders" |
+  "onPolicyChange" | "onRelease" | "pendingAction" | "policyOpen" |
+  "releasableOrders" |
   "run" | "runId" | "runJump" | "selectedOrderId" | "setCapitalOpen" |
-  "setIsRunning" | "setSelectedOrderId" |
+  "setIsRunning" | "setPolicyOpen" | "setSelectedOrderId" |
   "setStopping" | "stopping" | "stopJumpRef"
 >;
 
 export function SimulationTransportBar(props: Props) {
-  const { capitalOpen, floor, isRunning, jump, onCapitalAction, onRelease,
-    pendingAction, releasableOrders, run, runId,
-    runJump, selectedOrderId, setCapitalOpen, setIsRunning, setSelectedOrderId,
+  const { capitalOpen, floor, isRunning, jump, onCapitalAction, onPolicyChange,
+    onRelease,
+    pendingAction, policyOpen, releasableOrders, run, runId,
+    runJump, selectedOrderId, setCapitalOpen, setIsRunning, setPolicyOpen,
+    setSelectedOrderId,
     setStopping, stopping, stopJumpRef } = props;
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-2 rounded-lg border bg-card px-3 py-2">
@@ -45,6 +50,12 @@ export function SimulationTransportBar(props: Props) {
         {pendingAction === "capital" ? <LoaderCircle className="size-4 animate-spin" /> : <Factory className="size-4" />}
         Capital
       </Button>
+      {/* the same dialog-not-bar-controls call as Capital: a policy is a
+          run-level decision, and the button names the active one */}
+      <Button size="sm" variant="secondary" onClick={() => setPolicyOpen(true)} disabled={runId === null || jump !== null}>
+        {pendingAction === "policy" ? <LoaderCircle className="size-4 animate-spin" /> : <ListOrdered className="size-4" />}
+        Policy{run ? ` · ${POLICY_LABELS[run.releasePolicy]}` : ""}
+      </Button>
       <div className="h-6 w-px bg-border" />
       <span className="text-xs text-muted-foreground">Fast-forward</span>
       {JUMP_PRESETS.map((preset) => (
@@ -62,6 +73,14 @@ export function SimulationTransportBar(props: Props) {
           </Button>
         </div>
       )}
+      <PolicyDialog
+        open={policyOpen}
+        onOpenChange={setPolicyOpen}
+        run={run}
+        centers={floor?.workCenters ?? []}
+        onApply={(change) => void onPolicyChange(change)}
+        pending={pendingAction === "policy"}
+      />
       <CapitalDialog
         open={capitalOpen}
         onOpenChange={setCapitalOpen}

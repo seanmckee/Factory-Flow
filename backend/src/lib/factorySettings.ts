@@ -31,6 +31,11 @@ export async function updateFactorySettings(updates: {
   facilityOverheadCentsPerDay?: number;
   wipCarryingBpsPerDay?: number;
   shifts?: number;
+  releasePolicy?: string;
+  wipCap?: number;
+  releaseLeadDays?: number;
+  drumWorkCenterId?: number | null;
+  drumBuffer?: number;
 }): Promise<FactorySettingsRow> {
   // ensure the row exists so the first PATCH isn't a silent no-op
   await getFactorySettings();
