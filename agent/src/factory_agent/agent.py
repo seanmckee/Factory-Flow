@@ -53,7 +53,10 @@ report the error message honestly.
 def get_agent():
     """Built lazily so a missing OPENAI_API_KEY surfaces as a chat error, not
     an import-time crash that takes /health down with it."""
-    model = ChatOpenAI(model=settings.openai_model)
+    # Responses API, not chat completions: current OpenAI reasoning models
+    # (the gpt-5.6/6 family) reject function tools over /v1/chat/completions
+    # unless reasoning is turned off entirely.
+    model = ChatOpenAI(model=settings.openai_model, use_responses_api=True)
     return create_react_agent(
         model,
         ANALYST_TOOLS,
