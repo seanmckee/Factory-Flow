@@ -150,11 +150,17 @@ verdict writer); phase 1 builds the foundation.
 - [x] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call
       chips, per-conversation thread memory
 - [x] 8.4 Ledger + doc sweep
+- [x] 8.5 Basic LangSmith evals — `uv run python -m factory_agent.evals.run`:
+      a 7-question suite whose ground truth is computed from the sim at eval
+      time (best run by net, constraint by whole-run utilization, order-book
+      totals, a read-only refusal check), one pure `correctness` evaluator
+      dispatching per-example checks, dataset rebuilt per invocation under one
+      stable name so experiments accumulate against fresh truth
 
 Re-plan when reached: action tools (advance/release/policy/capital/fork), the
-multi-agent experiment graph, the deterministic run comparator, LangSmith eval
-datasets (the sim's determinism makes ground truth computable — score the
-verdict against the replayed reality, not a rubric).
+multi-agent experiment graph, the deterministic run comparator, richer eval
+datasets (experiment verdicts scored against the replayed reality — the sim's
+determinism makes that ground truth computable too).
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — deferred
 

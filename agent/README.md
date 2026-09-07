@@ -41,3 +41,30 @@ tools fail.
 uv run pytest
 uv run ruff check .
 ```
+
+## Evals (LangSmith)
+
+The basic suite asks the analyst questions whose answers are **computed from
+the sim itself** at eval time — how many runs, which run nets the most, its
+constraint by whole-run utilization, its policy, the order-book totals, and a
+read-only refusal check — so a score is a fact, not a judge's opinion.
+
+Setup (once): create a LangSmith account at https://smith.langchain.com →
+Settings → API Keys → create a key, then in `agent/.env`:
+
+```
+LANGSMITH_TRACING=true
+LANGSMITH_API_KEY=lsv2_...
+LANGSMITH_PROJECT=factory-flow-agent
+```
+
+Run (backend must be up; uses real OpenAI calls, one per question):
+
+```bash
+uv run python -m factory_agent.evals.run
+```
+
+Rebuilds the `factory-analyst-basic` dataset from the current sim state,
+runs the agent on each question in a fresh thread, and prints the experiment
+name — scores and traces land in LangSmith. `LANGSMITH_TRACING=true` also
+traces normal `/chat` turns.
