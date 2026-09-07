@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
+  Bot,
   ClipboardList,
   Factory,
   Gauge,
@@ -59,6 +60,9 @@ function Navbar() {
 
       <Item to="/" end icon={Gauge}>
         Simulator
+      </Item>
+      <Item to="/agent" icon={Bot}>
+        Agent
       </Item>
 
       <SectionLabel>Orders</SectionLabel>
