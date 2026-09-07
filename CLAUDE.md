@@ -8,10 +8,15 @@ Factory Flow is a manufacturing simulation platform inspired by Goldratt's _The 
 
 ## Repo layout
 
-Two independent npm projects — no workspace/monorepo tooling. Install and run each separately; a change touching both requires two dev servers.
+Three independent projects — no workspace/monorepo tooling. Install and run each separately; full-stack work needs three dev servers.
 
 - `backend/` — Express 5 REST API + Drizzle ORM over Neon serverless Postgres
 - `frontend/` — Vite + React 19 + Tailwind v4 + React Router; still runs its own copy of the simulation engine, deleted once the backend drives runs
+- `agent/` — Python (uv) FastAPI + LangGraph (Track 8): the AI agent, a **pure
+  HTTP client of the backend** — its entire tool surface is the REST API, so
+  it inherits the run locks, frozen-config semantics and seed reproducibility
+  like any other client. The frontend calls it directly on :8000; Express is
+  never between them.
 
 ## Commands
 
@@ -34,6 +39,13 @@ npm test           # vitest (watch)
 npx vitest run                                   # single pass
 npx vitest run src/simulation/simulationTick.test.ts   # single file
 npx vitest run -t "capacity of 1"                # single test by name
+
+# agent (port 8000; requires agent/.env with OPENAI_API_KEY — see .env.example)
+cd agent
+uv sync                # venv + deps (uv is the Python tooling)
+uv run uvicorn factory_agent.main:app --reload --port 8000
+uv run pytest          # unit tests (no live LLM calls)
+uv run ruff check .
 ```
 
 Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-kit generate` / `npx drizzle-kit migrate` from `backend/` (config: `backend/drizzle.config.ts`).
