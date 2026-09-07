@@ -136,9 +136,9 @@ tool surface is the backend's REST API. The end state is a supervisor with
 specialists (read-only analyst, experiment runner, deterministic comparator,
 verdict writer); phase 1 builds the foundation.
 
-- [ ] 8.1 Scaffolding — uv + FastAPI (`/health` pings the backend), CORS for
+- [x] 8.1 Scaffolding — uv + FastAPI (`/health` pings the backend), CORS for
       :5173, three-terminal dev setup documented
-- [ ] 8.2 Read-only analyst — httpx sim client, read-only tools (runs, P&L,
+- [x] 8.2 Read-only analyst — httpx sim client, read-only tools (runs, P&L,
       metrics, floor, capital log, order book, settings), single LangGraph
       agent, `POST /chat` streaming SSE events (token / tool / done / error)
 - [ ] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call

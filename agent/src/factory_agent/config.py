@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     openai_api_key: str = ""
-    openai_model: str = "gpt-5.1"
+    openai_model: str = "gpt-5.6-terra"
     backend_api_base: str = "http://localhost:3000"
 
 

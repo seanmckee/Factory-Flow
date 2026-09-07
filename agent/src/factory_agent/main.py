@@ -13,11 +13,16 @@ from dotenv import load_dotenv
 # OPENAI_API_KEY and langsmith reads LANGSMITH_* from the environment.
 load_dotenv()
 
-import httpx  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+import uuid
 
-from .config import settings  # noqa: E402
+import httpx
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+
+from .agent import stream_chat
+from .config import settings
 
 app = FastAPI(title="Factory Flow Agent")
 
@@ -45,3 +50,22 @@ async def health() -> dict:
         "backendReachable": backend_reachable,
         "model": settings.openai_model,
     }
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    # omitted = a fresh conversation; pass it back to keep memory
+    threadId: str | None = None
+
+
+@app.post("/chat")
+async def chat(body: ChatRequest) -> StreamingResponse:
+    """One user turn, streamed as SSE events (token / tool / done / error).
+    The threadId keys the conversation's memory (in-process for now), and the
+    done event echoes it so the client can continue the thread."""
+    thread_id = body.threadId or str(uuid.uuid4())
+    return StreamingResponse(
+        stream_chat(body.message, thread_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
