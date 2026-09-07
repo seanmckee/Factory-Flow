@@ -37,6 +37,12 @@ copy changeable any time under the run's lock, and fork isolation proven
 end-to-end by `npm run check:policy`. A jump now drains only when the floor
 and the releasable backlog are both empty.
 
+**Track 8 phase 1 is live** (2026-09-07): the `agent/` service (Python FastAPI
++ LangGraph, OpenAI models via `OPENAI_MODEL`) hosts a read-only analyst over
+the backend's REST API, and the `/agent` page chats with it — streaming SSE,
+tool-call chips, thread memory. Next phases: action tools, the fork-and-compare
+experiment graph, the deterministic comparator, LangSmith evals.
+
 **Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
 6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
@@ -143,7 +149,7 @@ verdict writer); phase 1 builds the foundation.
       agent, `POST /chat` streaming SSE events (token / tool / done / error)
 - [x] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call
       chips, per-conversation thread memory
-- [ ] 8.4 Ledger + doc sweep
+- [x] 8.4 Ledger + doc sweep
 
 Re-plan when reached: action tools (advance/release/policy/capital/fork), the
 multi-agent experiment graph, the deterministic run comparator, LangSmith eval
