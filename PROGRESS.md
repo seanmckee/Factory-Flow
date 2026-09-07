@@ -127,10 +127,28 @@ other. Priority is earliest-due-date, undated last, id tie-break.
       drain-stop learn about backlog
 - [x] RP.6 Ledger + doc sweep
 
-### Track 8 — re-plan when reached
+### Track 8 — the agent (`feat/agent`), phase 1 in progress
 
-- [ ] **Track 8** `feat/agent` — tool layer: create, advance, fork, read
-      metrics, compare.
+Architecture (user calls, 2026-09-07): a separate **Python FastAPI + LangGraph**
+service (`agent/`), OpenAI models (`OPENAI_MODEL` in `agent/.env`), LangSmith
+for tracing/evals; the frontend calls it directly on :8000, and its entire
+tool surface is the backend's REST API. The end state is a supervisor with
+specialists (read-only analyst, experiment runner, deterministic comparator,
+verdict writer); phase 1 builds the foundation.
+
+- [ ] 8.1 Scaffolding — uv + FastAPI (`/health` pings the backend), CORS for
+      :5173, three-terminal dev setup documented
+- [ ] 8.2 Read-only analyst — httpx sim client, read-only tools (runs, P&L,
+      metrics, floor, capital log, order book, settings), single LangGraph
+      agent, `POST /chat` streaming SSE events (token / tool / done / error)
+- [ ] 8.3 Chat UI — `/agent` page with a streaming chat window, tool-call
+      chips, per-conversation thread memory
+- [ ] 8.4 Ledger + doc sweep
+
+Re-plan when reached: action tools (advance/release/policy/capital/fork), the
+multi-agent experiment graph, the deterministic run comparator, LangSmith eval
+datasets (the sim's determinism makes ground truth computable — score the
+verdict against the replayed reality, not a rubric).
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — deferred
 
