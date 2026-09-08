@@ -10,9 +10,30 @@ export type ApprovalRun = {
   id: number;
   name: string;
   tickNum: number;
+  /** the run's own staffed day, so a tick reads as calendar time without
+   * guessing at shifts; null on a run created before the field existed */
+  dayTicks?: number | null;
   status: string;
   netCents: number;
   isFork: boolean;
+};
+
+/**
+ * An experiment a human has authorised on this conversation.
+ *
+ * It outlives the turn that asked for it — which is exactly why the page
+ * shows it and can take it back. The bounds are the four things that make an
+ * experiment finite, and everything outside them still pauses.
+ */
+export type AgentPlan = {
+  purpose: string;
+  runIds: number[];
+  verbs: string[];
+  /** absolute tick the plan may advance to; null = no advancing */
+  toTick: number | null;
+  maxSpendCents: number;
+  /** the sim's own quotes for what has been authorised so far */
+  spentCents: number;
 };
 
 /** one write, paused inside the graph until the person here answers */
@@ -32,6 +53,8 @@ export type ApprovalRequest = {
    * they thought they had already answered.
    */
   outsidePlan?: string;
+  /** the bounds a plan would grant, when this pause is a plan */
+  plan?: AgentPlan;
   /**
    * Every run a *plan* would touch, when the pause is a request for
    * authority over a whole experiment rather than one write. `run` carries
@@ -69,6 +92,12 @@ export type AgentEvent =
       wipCount?: number | null;
     }
   | ({ type: "approval" } & ApprovalRequest)
+  /**
+   * The conversation's granted experiment after it changed — approved, or a
+   * charge counted against its ceiling. Pushed rather than fetched, because
+   * what it prevents is a standing authority nobody can see.
+   */
+  | { type: "plan"; plan: AgentPlan | null }
   | { type: "done"; threadId: string }
   | { type: "error"; message: string };
 

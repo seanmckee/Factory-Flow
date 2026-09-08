@@ -153,3 +153,25 @@ it("parses a pause that fell outside an approved plan", () => {
   const { events } = parseSseChunk("", `data: ${JSON.stringify(payload)}\n\n`);
   expect(events).toEqual([payload]);
 });
+
+it("parses a plan event, including the grant being taken back", () => {
+  const granted = {
+    type: "plan",
+    plan: {
+      purpose: "test a second press",
+      runIds: [58, 59],
+      verbs: ["advance_to_tick", "capital_action"],
+      toTick: 230400,
+      maxSpendCents: 200000,
+      spentCents: 120000,
+    },
+  };
+  expect(parseSseChunk("", `data: ${JSON.stringify(granted)}\n\n`).events).toEqual([
+    granted,
+  ]);
+
+  const revoked = { type: "plan", plan: null };
+  expect(parseSseChunk("", `data: ${JSON.stringify(revoked)}\n\n`).events).toEqual([
+    revoked,
+  ]);
+});

@@ -325,12 +325,17 @@ User calls taken before building:
       bounds, `outsidePlan` explains a pause that happened anyway), which
       works but does not yet show a grant's remaining ceiling or let anyone
       revoke one.
-- [ ] **8.16b The plan card, and revoking a grant.** Per-run rows, the verbs,
-      the horizon and the ceiling laid out rather than in one sentence; the
-      **active grant visible** in the composer with what is left of it; and a
-      way to revoke it that is not "start a new conversation". A standing
-      authority nobody can see or cancel is the part of 8.16 that is not
-      finished.
+- [x] **8.16b The plan card, and revoking a grant** — the half that makes a
+      standing grant defensible. A `plan` SSE event is pushed whenever the
+      grant changes (approval, and each charge against the ceiling, so the
+      banner's remaining figure is live), `POST /chat/revoke` clears it by
+      writing the graph state directly rather than asking the model to stop
+      using its budget, and the page keeps the grant on screen with its four
+      bounds and what is left. The approval card lays those bounds out as
+      four rows, since each pauses on its own. 16 tests.
+      **Still not browser-verified** — the backend has been down for both this
+      and 8.15; one pass covers both, and it needs a throwaway run since a
+      live plan lets the agent act.
 - [ ] **8.17 Evals + ledger/doc sweep.** The comparator is ground truth an
       eval can score a verdict against without a rubric, which is the whole
       reason it comes before richer datasets.

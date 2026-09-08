@@ -82,6 +82,21 @@ export async function stopChat(threadId: string): Promise<void> {
 }
 
 /**
+ * Takes back a granted experiment, so every change pauses again. A grant is
+ * kept with the conversation and outlives the turn that asked for it, so it
+ * has to be cancellable without abandoning the conversation.
+ */
+export async function revokePlan(threadId: string): Promise<boolean> {
+  const response = await fetch(`${AGENT_BASE}/chat/revoke`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ threadId }),
+  });
+  if (!response.ok) throw new Error(`Agent responded ${response.status}`);
+  return ((await response.json()) as { revoked: boolean }).revoked;
+}
+
+/**
  * Answers a paused write and streams what follows. Declining is not a
  * cancellation: the model is told, and replies.
  */

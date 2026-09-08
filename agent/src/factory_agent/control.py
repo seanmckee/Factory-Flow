@@ -61,8 +61,11 @@ def current_thread_id() -> str | None:
     return str(thread_id) if thread_id is not None else None
 
 
-def emit_progress(payload: dict) -> None:
-    """Put one progress payload on the stream, if there is a stream.
+def emit(event: dict) -> None:
+    """Put one event on the stream, if there is a stream.
+
+    The event must carry its own `type`; this is the primitive the typed
+    emitters below are written in terms of.
 
     Best-effort by design, and it takes two exception types to be so, which
     the langgraph source settles rather than intuition:
@@ -77,4 +80,21 @@ def emit_progress(payload: dict) -> None:
         writer = get_stream_writer()
     except (RuntimeError, KeyError):
         return
-    writer({"type": "progress", **payload})
+    writer(event)
+
+
+def emit_plan(plan: dict | None) -> None:
+    """The thread's granted experiment after it changed — approved, or a
+    charge counted against its ceiling.
+
+    Pushed rather than fetched because the thing it prevents is a standing
+    authority nobody can see: a grant that outlives the turn that asked for
+    it has to be on screen, with what is left of it, or "approve the plan"
+    means approving something the person can no longer inspect.
+    """
+    emit({"type": "plan", "plan": plan})
+
+
+def emit_progress(payload: dict) -> None:
+    """How far a long-running tool has got."""
+    emit({"type": "progress", **payload})

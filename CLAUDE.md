@@ -481,7 +481,8 @@ and seed reproducibility like any other client.
   above its `interrupt()` must stay read-only and idempotent. Its reads run
   twice per approved write; that is the price of the pause.
 - SSE vocabulary, shared by `POST /chat` and `POST /chat/resume`:
-  `token` / `tool` / `result` / `progress` / `approval` / `done` / `error`. A turn that ends
+  `token` / `tool` / `result` / `progress` / `plan` / `approval` / `done` /
+  `error`. A turn that ends
   on `approval` is **not finished** — it is paused in the graph. The frontend
   parses it in `src/agent/sse.ts` (pure, unit-tested) and renders the pause as
   a card in the transcript.
@@ -532,6 +533,27 @@ and seed reproducibility like any other client.
   the routing broke and should be loud. A pause that happens *despite* a
   plan carries `outsidePlan` — the sentence explaining why someone is being
   asked something they thought they had answered.
+- **A standing grant is shown, and can be taken back.** The other half of
+  granting authority per experiment: a grant is checkpointed with the
+  conversation, so it outlives the turn that asked for it, and an authority
+  nobody can see or withdraw is not one anybody should give. So the gate
+  **pushes** a `plan` event whenever the grant changes — on approval, and on
+  each charge counted against its ceiling, so the banner's remaining figure
+  is live rather than the one the plan was approved with — and
+  `POST /chat/revoke` clears it. Revoking writes the graph state directly
+  (`aupdate_state`, under the thread's lock) rather than asking the model to
+  stop using its budget, which would be a rule in a prompt again. The page
+  keeps the grant on screen for as long as it stands (`PlanBanner`), with its
+  four bounds and what is left of the ceiling; `agent/planDisplay.ts` holds
+  those pure transforms. The plan **approval** card lays the bounds out as
+  four rows rather than one sentence (`PlanBounds`), because they are four
+  separate limits that each pause on their own, and a sentence is what
+  someone skims when they are about to grant standing authority.
+- **The spend accounting survives the gate's re-execution** because the
+  budget is re-read from the state on every execution of the node rather than
+  mutated in place. The approval node re-runs from the top on each resume, so
+  a budget derived from the checkpoint each time replays to the same total,
+  where one carried across would double-count.
 - **One approval per jump, not per request.** The backend caps an advance at
   20,000 ticks while a staffed day is 28,800, so a 15-day two-branch
   experiment was **44 approvals, 43 of them "yes, keep going"**.

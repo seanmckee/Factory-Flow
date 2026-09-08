@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   Bot,
   Check,
@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Send,
   ShieldAlert,
+  ShieldCheck,
   Square,
   Wrench,
   X,
@@ -14,8 +15,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import PageHeader from "../components/PageHeader";
-import { getAgentHealth, resumeChat, stopChat, streamChat } from "../api/agent";
-import type { AgentEvent, ApprovalRequest } from "../agent/sse";
+import {
+  getAgentHealth,
+  resumeChat,
+  revokePlan,
+  stopChat,
+  streamChat,
+} from "../api/agent";
+import type { AgentEvent, AgentPlan, ApprovalRequest } from "../agent/sse";
+import { isSpent, planBounds, spentFraction } from "../agent/planDisplay";
 import { parseComparison, type RunComparison } from "../agent/verdict";
 import { formatTickTime } from "../simulation/simTime";
 import VerdictCard from "../components/VerdictCard";
@@ -92,6 +100,12 @@ export default function AgentPage() {
    */
   const [progress, setProgress] = useState<AdvanceProgress | null>(null);
   const [stopping, setStopping] = useState(false);
+  /**
+   * The experiment this conversation has authorised, if any. Kept on screen
+   * for as long as it stands: it outlives the turn that granted it, and a
+   * standing authority nobody can see is not one anybody should have given.
+   */
+  const [plan, setPlan] = useState<AgentPlan | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -156,6 +170,8 @@ export default function AgentPage() {
           ...last,
           verdicts: [...last.verdicts, verdict],
         }));
+    } else if (event.type === "plan") {
+      setPlan(event.plan);
     } else if (event.type === "progress") {
       if (event.tickNum !== undefined && event.toTick !== undefined) {
         setProgress({
@@ -268,6 +284,22 @@ export default function AgentPage() {
     setItems([]);
     setThreadId(null);
     setProgress(null);
+    // A new conversation is a new thread, which has no state and therefore no
+    // authority — the server agrees by construction, and this keeps the page
+    // from showing a grant that no longer applies to anything.
+    setPlan(null);
+  };
+
+  /** Takes the grant back, so every change pauses again. */
+  const revoke = async () => {
+    if (threadId === null) return;
+    try {
+      await revokePlan(threadId);
+      setPlan(null);
+      showToast("Plan revoked — changes will ask again");
+    } catch (error) {
+      failed(error);
+    }
   };
 
   return (
@@ -369,6 +401,8 @@ export default function AgentPage() {
         )}
       </div>
 
+      {plan && <PlanBanner plan={plan} busy={busy} onRevoke={revoke} />}
+
       {progress && (
         <AdvanceReadout progress={progress} stopping={stopping} onStop={stop} />
       )}
@@ -399,6 +433,109 @@ export default function AgentPage() {
   );
 }
 
+
+/**
+ * A plan's bounds, laid out rather than said in a sentence.
+ *
+ * Four separate limits, each of which pauses on its own, so they are read as
+ * four rows: a sentence hides that structure, and the sentence is what
+ * someone skims when they are about to grant standing authority. The runs
+ * carry the names the SIM confirmed, which is the whole reason a plan is
+ * built server-side — the model can describe its plan however it likes.
+ */
+function PlanBounds({ request }: { request: ApprovalRequest }) {
+  const plan = request.plan;
+  if (!plan) return null;
+  const dayTicks = request.runs?.find((run) => run.dayTicks)?.dayTicks;
+  return (
+    <div className="flex flex-col gap-2">
+      {plan.purpose && <p className="text-sm leading-relaxed">{plan.purpose}</p>}
+
+      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+        {planBounds(plan, dayTicks ?? undefined).map((bound) => (
+          <Fragment key={bound.label}>
+            <dt className="text-muted-foreground">{bound.label}</dt>
+            <dd className="tabular-nums">{bound.value}</dd>
+          </Fragment>
+        ))}
+      </dl>
+
+      {request.runs && request.runs.length > 0 && (
+        <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          {request.runs.map((run) => (
+            <li key={run.id} className="flex items-center gap-1.5 tabular-nums">
+              {run.isFork && <GitBranch className="size-3 shrink-0" />}#{run.id}{" "}
+              {run.name} · {formatTickTime(run.tickNum, run.dayTicks ?? undefined)}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-xs text-muted-foreground">
+        Anything outside these bounds still asks you first, and you can revoke
+        this at any time.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The standing grant, on screen for as long as it stands.
+ *
+ * This is the half of "approve the experiment once" that makes it defensible.
+ * A grant is kept with the conversation and outlives the turn that asked for
+ * it, so it has to be visible — with what is left of its ceiling — and it has
+ * to be cancellable here rather than by abandoning the conversation.
+ */
+function PlanBanner({
+  plan,
+  busy,
+  onRevoke,
+}: {
+  plan: AgentPlan;
+  busy: boolean;
+  onRevoke: () => void;
+}) {
+  const spent = spentFraction(plan);
+  return (
+    <div className="mt-4 flex shrink-0 flex-col gap-2 rounded-lg border border-running/40 bg-running/5 px-3 py-2">
+      <div className="flex items-center gap-2 text-xs">
+        <ShieldCheck className="size-4 shrink-0 text-running" />
+        <span className="font-medium">Experiment approved</span>
+        {plan.purpose && (
+          <span className="truncate text-muted-foreground">{plan.purpose}</span>
+        )}
+        <Button
+          className="ml-auto shrink-0"
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={onRevoke}
+        >
+          Revoke
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {planBounds(plan).map((bound) => (
+          <span key={bound.label} className="tabular-nums">
+            {bound.label}: <span className="text-foreground">{bound.value}</span>
+          </span>
+        ))}
+      </div>
+
+      {plan.maxSpendCents > 0 && (
+        <div className="h-1 overflow-hidden rounded-full bg-muted">
+          <div
+            className={`h-full rounded-full ${isSpent(plan) ? "bg-saturated" : "bg-chart-2"}`}
+            style={{ width: `${spent * 100}%` }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * A chunked advance mid-flight, with Stop beside it — the simulator page's
@@ -500,7 +637,11 @@ function ApprovalCard({
         </span>
       </div>
 
-      <p className="text-sm leading-relaxed">{request.summary}</p>
+      {request.plan ? (
+        <PlanBounds request={request} />
+      ) : (
+        <p className="text-sm leading-relaxed">{request.summary}</p>
+      )}
 
       {/* Why you are being asked again, when a plan you already approved was
           supposed to cover this. Without it the pause reads as the gate
