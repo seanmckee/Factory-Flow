@@ -19,8 +19,9 @@ Express 5 · Drizzle ORM · Neon serverless Postgres · Zod · Vitest ·
 Python 3.12 · FastAPI · LangGraph · LangSmith
 
 **Status** — the simulator is complete and driveable end to end, and an AI
-analyst reads it over the same REST API the browser uses: 346 unit tests, none
-of which touch a database, an HTTP server or a live model.
+agent reads *and drives* it over the same REST API the browser uses, with
+every change it makes held at a human approval gate. 371 unit tests, none of
+which touch a database, an HTTP server or a live model.
 
 ---
 
@@ -282,14 +283,37 @@ Its entire tool surface is HTTP, so it inherits the run locks, the frozen
 config and the seed reproducibility exactly as the browser does. There is no
 back door into the engine, which is why the API was built first.
 
-Phase 1 is a **read-only analyst**. Ask it *"which run made the most money and
-where is its constraint?"* and it plans over eight GET tools — the run list, a
-run's P&L, windowed metrics, the floor snapshot, the capital log, both sides of
-the order book, the facility settings — and answers with figures it can cite.
-The authority boundary is structural rather than an instruction it is trusted
-to follow: the tool module holds no verb that changes anything. Answers stream
-to the `/agent` page as server-sent events with the tool calls included, so you
-watch what it looked at while it reads.
+Ask it *"which run made the most money and where is its constraint?"* and it
+plans over eight GET tools — the run list, a run's P&L, windowed metrics, the
+floor snapshot, the capital log, both sides of the order book, the facility
+settings — and answers with figures it can cite. Answers stream to the
+`/agent` page as server-sent events with the tool calls included, so you watch
+what it looked at while it reads.
+
+Five more tools let it *act*: fork a run, advance it, buy or retire a machine,
+hire or let go an operator, change a release policy, release a work order —
+which is what turns "the drill press is the constraint" into an experiment
+with an answer.
+
+### The approval gate
+
+Every write stops before it happens. The graph is hand-authored rather than a
+stock ReAct loop for exactly this reason — reads must not pause and writes
+must, and a blanket interrupt cannot tell them apart — so a batch of pure
+reads is routed past the gate entirely while a write suspends the graph and
+waits.
+
+What you approve is **what the sim says, not what the model said**. The gate
+fetches the run itself and shows its real name, its tick and, for a capital
+action, the run's own frozen price and the machine count it would produce:
+*"Buy a machine at Drill Press — $1,200.00 at Day 16 · 0:00:00. Machines 2 → 3,
+operators 2 → 2."* A model can claim anything about which run it means; the
+card states what the backend will actually do.
+
+The boundary is structural, not an instruction the model is trusted to follow:
+the tool cannot execute unless a human resumed that specific call. Declining
+is not a cancellation — the refusal comes back as a tool result, so the agent
+reads it and answers rather than crashing the turn.
 
 The tool docstrings are load-bearing, because they are what the model plans
 with. They carry the domain semantics that a competent reader still gets wrong:
@@ -316,7 +340,15 @@ scoring noise:
 - It named the constraint "work center 98" rather than "Drill Press": metrics
   carries ids only, and nothing told it to resolve names off the floor.
 
-Both are cheap fixes. Finding them is the point — the same suite re-runs after.
+Both were cheap fixes, and the suite now scores **7/7**. Finding them is the
+point.
+
+One example is no longer scored on prose at all. The agent can buy a machine
+now, so "it declined" is the wrong answer; what the gate example checks is
+that the graph **stopped** — on a capital action, against the run the question
+named. Behaviour rather than wording, which is the same determinism argument
+applied to conduct. And because the suite never resumes a pause, running the
+evals cannot change the simulation however the agent answers.
 
 Next in this track: write tools (release, policy, capital, advance, fork)
 behind the same lock protocol the UI obeys, then the experiment graph — fork a
