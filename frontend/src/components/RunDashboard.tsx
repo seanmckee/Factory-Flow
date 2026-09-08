@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -33,6 +34,17 @@ import {
  * The window controls are the only new way `/metrics` gets fetched — it reads
  * and aggregates every observation in the window, so it is still never on the
  * display clock's beat. A jump keeps re-windowing onto its own ticks.
+ *
+ * **The window bar and the cards are fixed; the three tables are panes.** The
+ * page owns the viewport, so this tab gets a fixed budget, and stacking four
+ * `shrink-0` blocks above a `flex-1` table spent all of it before the table:
+ * the work-centre pane — the constraint finder, and the reason to open the
+ * tab — was squeezed to nothing on a 1080p monitor at 100% zoom, with nothing
+ * above it scrolling to reach it. Tabs fix the discoverability half too: a
+ * table you have to scroll to find is a table nobody knows exists. Each pane
+ * owns its own scroll, which is what keeps its `sticky` header working, and
+ * the two floors below — `min-h-56` on the tabs, `min-h-24` on the cards —
+ * are what stop either from squeezing the other away.
  */
 
 /** "Last N ticks" presets. The whole run is the unwindowed request. */
@@ -40,6 +52,25 @@ const WINDOW_PRESETS = [1000, 5000];
 
 /** Utilization at which a centre reads as the constraint at a glance. */
 const SATURATED_UTILIZATION = 0.9;
+
+/** Which of the three tables is on screen. The constraint leads. */
+type Pane = "centers" | "deliveries" | "capital";
+
+/** A pane: its own scrollport, which is what keeps its sticky header sticking. */
+const PANE = "min-h-0 overflow-auto rounded-lg border bg-card";
+
+/** The row count beside a pane's name — what makes an *empty* pane visible. */
+function PaneCount({ count }: { count: number }) {
+  return (
+    <span className="tabular-nums text-muted-foreground">
+      {count.toLocaleString()}
+    </span>
+  );
+}
+
+function PaneEmpty({ children }: { children: ReactNode }) {
+  return <p className="p-4 text-sm text-muted-foreground">{children}</p>;
+}
 
 function StatCard({
   label,
@@ -54,7 +85,7 @@ function StatCard({
   negative?: boolean;
 }) {
   return (
-    <div className="flex min-w-40 flex-col gap-1 rounded-lg border bg-card p-4">
+    <div className="flex flex-col gap-1 rounded-lg border bg-card p-3">
       <span className="text-xs uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
@@ -123,6 +154,7 @@ function RunDashboard({
 }) {
   const [fromDraft, setFromDraft] = useState("");
   const [toDraft, setToDraft] = useState("");
+  const [pane, setPane] = useState<Pane>("centers");
 
   const {
     fromTick,
@@ -157,7 +189,7 @@ function RunDashboard({
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-auto">
       {/* The window: what every figure below is a rate over. */}
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <p className="text-sm text-muted-foreground tabular-nums">
@@ -212,7 +244,14 @@ function RunDashboard({
         </div>
       </div>
 
-      <div className="flex shrink-0 flex-wrap gap-3">
+      {/* The cards are the region that yields. They are the tallest block on
+          the tab, so `shrink-0` here would push the pane tabs below the fold on
+          a short viewport — the very thing the tabs exist to prevent. They
+          shrink and scroll instead, floored at `min-h-24` (one row of cards, so
+          they can never vanish entirely) against the `min-h-56` the Tabs below
+          reserve for the pane. Shorter than both floors together and the root
+          scrolls; that is the last resort, not the normal case. */}
+      <div className="grid min-h-24 grid-cols-2 gap-3 overflow-auto sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6">
         <StatCard
           label="Net profit"
           value={formatSignedCents(netCents)}
@@ -298,170 +337,211 @@ function RunDashboard({
         />
       </div>
 
-      {/* Which promise broke: the same finishes as the card above, per order.
-          Names and quantities are the live order book's; a deleted order's
-          units leave this table (SET NULL) but stay in the card. */}
-      {salesOrderDelivery.length > 0 && (
-        <div className="max-h-64 shrink-0 overflow-auto rounded-lg border bg-card">
-          <Table>
-            <TableHeader className="sticky top-0 bg-card">
-              <TableRow>
-                <TableHead>Deliveries</TableHead>
-                <TableHead className="text-right">Due</TableHead>
-                <TableHead className="text-right">Shipped</TableHead>
-                <TableHead className="text-right">On time</TableHead>
-                <TableHead className="text-right">Late</TableHead>
-                <TableHead className="text-right">Last finish</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {salesOrderDelivery.map((row) => {
-                const order = salesOrderById.get(row.salesOrderId);
-                const unmeasured = row.delivery.measuredCount === 0;
-                return (
-                  <TableRow key={row.salesOrderId}>
+      {/* The three tables are panes, not a stack. Stacked, the work-centre
+          table — the constraint finder, and the reason to open this tab — sat
+          below two tables and a screen of cards, so on a 1080p monitor you had
+          to know it was there to go looking. As tabs each one is named up
+          front, and the count beside the name is what makes an *empty* pane
+          visible: "Capital actions 0" is a fact about the run, where a hidden
+          table is just an absence. The constraint leads, so it is the default
+          pane. */}
+      <Tabs
+        value={pane}
+        onValueChange={(value) => setPane(value as Pane)}
+        className="flex min-h-56 flex-1 flex-col gap-2"
+      >
+        <TabsList variant="line" className="shrink-0 self-start">
+          <TabsTrigger value="centers">
+            Work Centers
+            <PaneCount count={rankedCenters.length} />
+          </TabsTrigger>
+          <TabsTrigger value="deliveries">
+            Deliveries
+            <PaneCount count={salesOrderDelivery.length} />
+          </TabsTrigger>
+          <TabsTrigger value="capital">
+            Capital actions
+            <PaneCount count={actions.length} />
+          </TabsTrigger>
+        </TabsList>
+
+        {/* The constraint finder. Utilization near 1 over a real window is the
+            bottleneck's signature — the instantaneous figure the floor tab
+            deliberately doesn't show. */}
+        <TabsContent value="centers" className={PANE}>
+          {rankedCenters.length === 0 ? (
+            <PaneEmpty>No work center observed a tick in this window.</PaneEmpty>
+          ) : (
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Work Center</TableHead>
+                  {/* current config, not a window figure: a purchase mid-window
+                      means these two are where the run *ended up* */}
+                  <TableHead className="text-right">Machines</TableHead>
+                  <TableHead className="text-right">Operators</TableHead>
+                  <TableHead>Utilization</TableHead>
+                  <TableHead className="text-right">Busy machine-ticks</TableHead>
+                  <TableHead className="text-right">Capacity-ticks</TableHead>
+                  <TableHead className="text-right">Queue mean</TableHead>
+                  <TableHead className="text-right">Queue max</TableHead>
+                  <TableHead className="text-right">Observed ticks</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rankedCenters.map((center) => {
+                  const live = centerById.get(center.workCenterId);
+                  return (
+                    <TableRow key={center.workCenterId}>
+                      <TableCell className="font-medium">
+                        {live?.name ?? `WC ${center.workCenterId}`}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {live?.machines ?? "—"}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right tabular-nums",
+                          live &&
+                            live.operators !== live.machines &&
+                            "font-medium text-starved",
+                        )}
+                      >
+                        {live?.operators ?? "—"}
+                      </TableCell>
+                      <TableCell>
+                        <UtilizationBar utilization={center.utilization} />
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {center.busyMachineTicks.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {center.capacityTicks.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {center.meanQueueDepth.toFixed(1)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {center.maxQueueDepth.toLocaleString()}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {center.observedTicks.toLocaleString()}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+
+        {/* Which promise broke: the same finishes as the cards above, per
+            order. Names and quantities are the live order book's; a deleted
+            order's units leave this table (SET NULL) but stay in the cards. */}
+        <TabsContent value="deliveries" className={PANE}>
+          {salesOrderDelivery.length === 0 ? (
+            <PaneEmpty>
+              No unit against a sales order finished in this window.
+            </PaneEmpty>
+          ) : (
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Sales order</TableHead>
+                  <TableHead className="text-right">Due</TableHead>
+                  <TableHead className="text-right">Shipped</TableHead>
+                  <TableHead className="text-right">On time</TableHead>
+                  <TableHead className="text-right">Late</TableHead>
+                  <TableHead className="text-right">Last finish</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salesOrderDelivery.map((row) => {
+                  const order = salesOrderById.get(row.salesOrderId);
+                  const unmeasured = row.delivery.measuredCount === 0;
+                  return (
+                    <TableRow key={row.salesOrderId}>
+                      <TableCell className="font-medium">
+                        {order?.orderNumber ?? `SO #${row.salesOrderId}`}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.dueAtTick === null
+                          ? "—"
+                          : `Day ${Math.round(row.dueAtTick / dayTicks)}`}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {order
+                          ? `${row.finishedCount} / ${order.quantity}`
+                          : row.finishedCount}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {unmeasured ? "—" : row.delivery.onTimeCount}
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right tabular-nums",
+                          row.delivery.lateCount > 0 && "font-medium text-destructive",
+                        )}
+                      >
+                        {unmeasured ? "—" : row.delivery.lateCount}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {formatTickTime(row.lastCompletedAtTick, dayTicks)}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+
+        {/* How this run's frozen config got to where it is. Whole-run, unlike
+            every figure above it — an action is a decision you took, not a rate
+            over a window, and reading it against the window that contains it is
+            the point. */}
+        <TabsContent value="capital" className={PANE}>
+          {actions.length === 0 ? (
+            <PaneEmpty>
+              Nothing bought, hired, retired or fired in this run.
+            </PaneEmpty>
+          ) : (
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Action · whole run</TableHead>
+                  <TableHead>Work Center</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
+                  <TableHead className="text-right">After</TableHead>
+                  <TableHead className="text-right">When</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {actions.map((action) => (
+                  <TableRow key={action.id}>
                     <TableCell className="font-medium">
-                      {order?.orderNumber ?? `SO #${row.salesOrderId}`}
+                      {CAPITAL_LABELS[action.kind]}
+                    </TableCell>
+                    <TableCell>
+                      {centerById.get(action.workCenterId)?.name ??
+                        `WC ${action.workCenterId}`}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {row.dueAtTick === null
-                        ? "—"
-                        : `Day ${Math.round(row.dueAtTick / dayTicks)}`}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {order
-                        ? `${row.finishedCount} / ${order.quantity}`
-                        : row.finishedCount}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {unmeasured ? "—" : row.delivery.onTimeCount}
-                    </TableCell>
-                    <TableCell
-                      className={cn(
-                        "text-right tabular-nums",
-                        row.delivery.lateCount > 0 && "font-medium text-destructive",
-                      )}
-                    >
-                      {unmeasured ? "—" : row.delivery.lateCount}
+                      {formatSpend(action.spendCents)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
-                      {formatTickTime(row.lastCompletedAtTick, dayTicks)}
+                      {action.machinesAfter} / {action.operatorsAfter}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {formatTickTime(action.appliedAtTick, dayTicks)}
                     </TableCell>
                   </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {/* How this run's frozen config got to where it is. Whole-run, unlike
-          every figure above it — an action is a decision you took, not a rate
-          over a window, and reading it against the window that contains it is
-          the point. */}
-      {actions.length > 0 && (
-        <div className="max-h-48 shrink-0 overflow-auto rounded-lg border bg-card">
-          <Table>
-            <TableHeader className="sticky top-0 bg-card">
-              <TableRow>
-                <TableHead>Capital actions · whole run</TableHead>
-                <TableHead>Work Center</TableHead>
-                <TableHead className="text-right">Cost</TableHead>
-                <TableHead className="text-right">After</TableHead>
-                <TableHead className="text-right">When</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {actions.map((action) => (
-                <TableRow key={action.id}>
-                  <TableCell className="font-medium">
-                    {CAPITAL_LABELS[action.kind]}
-                  </TableCell>
-                  <TableCell>
-                    {centerById.get(action.workCenterId)?.name ??
-                      `WC ${action.workCenterId}`}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {formatSpend(action.spendCents)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {action.machinesAfter} / {action.operatorsAfter}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {formatTickTime(action.appliedAtTick, dayTicks)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      {/* The constraint finder. Utilization near 1 over a real window is the
-          bottleneck's signature — the instantaneous figure the floor tab
-          deliberately doesn't show. */}
-      <div className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card">
-        <Table>
-          <TableHeader className="sticky top-0 bg-card">
-            <TableRow>
-              <TableHead>Work Center</TableHead>
-              {/* current config, not a window figure: a purchase mid-window
-                  means these two are where the run *ended up* */}
-              <TableHead className="text-right">Machines</TableHead>
-              <TableHead className="text-right">Operators</TableHead>
-              <TableHead>Utilization</TableHead>
-              <TableHead className="text-right">Busy machine-ticks</TableHead>
-              <TableHead className="text-right">Capacity-ticks</TableHead>
-              <TableHead className="text-right">Queue mean</TableHead>
-              <TableHead className="text-right">Queue max</TableHead>
-              <TableHead className="text-right">Observed ticks</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rankedCenters.map((center) => {
-              const live = centerById.get(center.workCenterId);
-              return (
-                <TableRow key={center.workCenterId}>
-                  <TableCell className="font-medium">
-                    {live?.name ?? `WC ${center.workCenterId}`}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {live?.machines ?? "—"}
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      "text-right tabular-nums",
-                      live &&
-                        live.operators !== live.machines &&
-                        "font-medium text-starved",
-                    )}
-                  >
-                    {live?.operators ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    <UtilizationBar utilization={center.utilization} />
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {center.busyMachineTicks.toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {center.capacityTicks.toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {center.meanQueueDepth.toFixed(1)}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {center.maxQueueDepth.toLocaleString()}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {center.observedTicks.toLocaleString()}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

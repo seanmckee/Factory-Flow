@@ -588,7 +588,22 @@ every action whole-run with what it cost and the config it produced —
 whole-run on purpose, since an action is a decision taken at a tick, not a
 rate over a window, and reading it against the window containing it is the
 point. The window line shows ≈ days via the run's frozen `dayTicks`
-(`simTime.ts`, 28,800 fallback).
+(`simTime.ts`, 28,800 fallback). **The three tables are panes of an inner tab
+strip** (`variant="line"`, so it reads as a level below the page's own tabs),
+not a stack: Work Centers · Deliveries · Capital actions, the constraint
+leading because it is the reason to open the tab. Stacked, four `shrink-0`
+blocks each with its own `max-h` scroller spent the whole height budget before
+the work-centre table — the `flex-1` one — which read as an empty sliver on a
+1080p monitor at 100% zoom, with nothing above it scrolling to reach it. Tabs
+answer the discoverability half: a table you have to scroll to find is a table
+nobody knows exists, and the **count beside each name** is what makes an empty
+pane a fact about the run ("Capital actions 0") rather than an absence. The
+height rules are the other half — **the cards are the region that yields**,
+shrinking and scrolling behind their `min-h-24` floor, because as the tallest
+block on the tab a `shrink-0` card grid would push the tab strip itself below
+the fold; the pane keeps `min-h-56` and its own scrollport, which is also what
+keeps its `sticky` header sticking (sticky resolves against the nearest
+scrollport, so an `overflow-auto` in between would make it inert).
 
 **The release policy lives in a dialog off the transport bar too**
 (`PolicyDialog`, the button naming the active policy — `Policy · CONWIP`):
