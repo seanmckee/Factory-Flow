@@ -37,13 +37,16 @@ copy changeable any time under the run's lock, and fork isolation proven
 end-to-end by `npm run check:policy`. A jump now drains only when the floor
 and the releasable backlog are both empty.
 
-**Track 8 phase 1 is complete** (2026-09-07): the `agent/` service (Python
-FastAPI + LangGraph, OpenAI models via `OPENAI_MODEL`) hosts a read-only
-analyst over the backend's REST API, the `/agent` page chats with it —
-streaming SSE, tool-call chips, thread memory — and the LangSmith suite scores
-**7/7** against ground truth computed from the sim itself. Next phases: action
-tools, the fork-and-compare experiment graph, the deterministic comparator,
-richer eval datasets.
+**Track 8 phases 1 and 2 are complete** (2026-09-07): the `agent/` service
+(Python FastAPI + LangGraph, OpenAI models via `OPENAI_MODEL`) hosts an
+analyst over the backend's REST API that can now **act** — fork, advance,
+capital action, release policy, manual release — with every write held at a
+**human approval gate**. The graph is hand-authored for that reason: reads
+route past the gate, writes suspend it, and the card a person approves is
+built from the sim rather than from the model's arguments. The LangSmith suite
+scores **7/7**, one example now scoring conduct (did it stop?) rather than
+prose. Next: the deterministic comparator, then the role split the comparator
+justifies, then richer eval datasets.
 
 **Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
 6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
@@ -135,7 +138,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
       drain-stop learn about backlog
 - [x] RP.6 Ledger + doc sweep
 
-### Track 8 — the agent (`feat/agent`), phase 1 complete
+### Track 8 — the agent (`feat/agent`), phases 1–2 complete
 
 Architecture (user calls, 2026-09-07): a separate **Python FastAPI + LangGraph**
 service (`agent/`), OpenAI models (`OPENAI_MODEL` in `agent/.env`), LangSmith
@@ -175,10 +178,37 @@ verdict writer); phase 1 builds the foundation.
       that metrics carry ids only and the name must be resolved through the
       floor ("Drill Press (work center 98)").
 
-Re-plan when reached: action tools (advance/release/policy/capital/fork), the
-multi-agent experiment graph, the deterministic run comparator, richer eval
-datasets (experiment verdicts scored against the replayed reality — the sim's
-determinism makes that ground truth computable too).
+**Phase 2 — the agent can act** (`feat/agent-actions`, 2026-09-07). User
+calls taken before building: full write authority over any run, but a
+human-in-the-loop confirmation naming the run's id and name before anything
+is touched; the confirmation is a **structural pause**, not a prompt rule;
+and the graph is hand-authored now while the analyst/actor **role split
+waits** — the interrupt already supplies the authority boundary the split
+would have provided, and the boundaries that pay are deterministic-vs-model
+(the comparator), not analyst-vs-actor.
+
+- [x] 8.8 Write tools — `actions.py` beside the read-only `tools.py`,
+      `sim_client.post_json`, `ACTION_TOOL_NAMES` derived from the list so a
+      new verb is gated by construction
+- [x] 8.9 The graph and the gate — `agent → approval → tools`, reads routed
+      past it, `interrupt()` + `Command(resume=…)`, `POST /chat/resume`, the
+      approval payload built from the sim; `durability="sync"` and a
+      per-thread lock, both settled by reading the langgraph source
+- [x] 8.10 UI — approval cards in the transcript, decline resumes too, plus
+      the styling pass the page needed (it had no page padding at all)
+- [x] 8.11 Evals + doc sweep — the read-only trap becomes a pause check
+      scoring conduct rather than prose, the runner prints its score
+
+**Next: the deterministic comparator.** Pure function over two runs'
+summaries and metrics — which branch won, by how much, and which line of the
+P&L moved. Not the model's job: the sim is deterministic and the P&L is
+frozen columns, so the verdict is computable, unit-testable and free of
+tokens. It is also the node whose existence justifies splitting roles, and
+the ground truth a richer eval dataset can score experiment verdicts against.
+
+Known limits, deliberately carried rather than fixed: `InMemorySaver` drops
+pending approvals on restart and forbids a second uvicorn worker; there is no
+free-text note on a decline in the UI, though the API takes one.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — deferred
 

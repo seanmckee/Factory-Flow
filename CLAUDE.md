@@ -412,6 +412,64 @@ per-order rows and the overall aggregate agree by construction.
 empty window with **zeroes, not nulls** — zero scrap over observed ticks is a
 real observation, the factory ran clean.
 
+## Agent service (`agent/`)
+
+Python, uv, FastAPI + LangGraph; OpenAI via `OPENAI_MODEL`, LangSmith for
+tracing and evals. A **pure HTTP client of the backend** — no database, no
+import of the engine — so it inherits the run locks, frozen-config semantics
+and seed reproducibility like any other client.
+
+- **The read/write split is a module boundary, on purpose.** `tools.py` holds
+  the eight GETs, `actions.py` the five verbs (fork, advance, capital action,
+  release policy, manual release), and `ACTION_TOOL_NAMES` — derived from the
+  list, never hand-written — is what the approval gate matches on. A verb
+  added to `actions.py` is gated by construction; a verb added anywhere else
+  would not be, which is the one mistake this layout exists to prevent.
+- **Tool docstrings are load-bearing**: they are the descriptions the model
+  plans with, so they carry the domain semantics (cents, throughput is sales
+  money, `netCents` is the score, utilization needs a window, a capital action
+  charges the run's **frozen** price) and the constraints the backend
+  enforces (20,000 ticks per advance; a work order releases into a run once).
+- **The graph is hand-authored** (`agent.py`), not `create_react_agent`:
+  `agent → approval → tools → agent`, with a batch of pure reads routed
+  straight to `tools`. That routing is the point — "a read never pauses" is a
+  property of the graph's shape rather than of the gate's internal logic, so
+  no later edit inside the gate can stop an analyst's question.
+  `interrupt_before=["tools"]` cannot express this: it is all or nothing.
+- **The approval gate is the authority boundary, and it is structural.** A
+  write tool cannot execute unless a human resumed the thread for that
+  specific call — not a rule in the prompt. Its payload is built from the sim
+  (`approval.py`: `GET /api/runs/:id`, plus `/floor` for a capital action),
+  **never from the model's arguments**: the model can claim anything about
+  which run it means, and what a person approves has to be what the backend
+  will do. A target the sim cannot confirm at all — an invented run id — is
+  declined there rather than shown to someone as an unknown.
+- A refusal is a `ToolMessage`, not an exception, so the model reads it and
+  answers. Same for a backend error: `tool_error_message` is narrow **by
+  annotation** (`SimApiError | ToolException` — the tool node infers the
+  caught types from the signature), so our own bugs still crash rather than
+  being laundered into the transcript as facts about the factory.
+- Two details the langgraph source settles, both easy to regress:
+  `durability="sync"` on the stream, because the default is `"async"` and the
+  approval event would otherwise race the checkpoint that makes it resumable;
+  and a per-thread `asyncio.Lock`, because two resumes answered at once would
+  both pass the "is anything pending?" check and both execute the write.
+- The approval node **re-executes from the top** on resume, so everything
+  above its `interrupt()` must stay read-only and idempotent. Its reads run
+  twice per approved write; that is the price of the pause.
+- SSE vocabulary, shared by `POST /chat` and `POST /chat/resume`:
+  `token` / `tool` / `approval` / `done` / `error`. A turn that ends on
+  `approval` is **not finished** — it is paused in the graph. The frontend
+  parses it in `src/agent/sse.ts` (pure, unit-tested) and renders the pause as
+  a card in the transcript.
+- `InMemorySaver` is the checkpointer, so a restart drops pending approvals
+  and the service cannot run with more than one uvicorn worker. Both are fine
+  at this stage and neither is fine later.
+- Evals (`evals/`) compute ground truth **from the sim at eval time** rather
+  than from a rubric. The gate example scores conduct, not prose: that the
+  graph stopped, on the right call, against the right run. The suite never
+  resumes a pause, so running it cannot change the simulation.
+
 ## Frontend architecture
 
 Routing: `main.tsx` defines the router; `App.tsx` is the layout shell (`NavBar` + `<Outlet/>`, wrapped in `ToastProvider`), with `SimulationPage` at `/`, the order entry module under `/orders` — `OrdersLayout` with `SalesOrdersPage` at `/orders/sales` and `WorkOrdersPage` at `/orders/work` — and the factory setup module under `/setup` — `SetupLayout` with `WorkCentersPage` at `/setup/work-centers`, `PartsPage` at `/setup/parts`, `RoutingsPage` at `/setup/routings` and `FactorySettingsPage` at `/setup/settings` (the facility-level cost rates, the shifts-per-day setting and the release-policy defaults as a singleton form with an explicit Save — the tables-are-their-own-edit-surface convention is about rows). `/create` was a stub page and now redirects to `/orders/sales`.
