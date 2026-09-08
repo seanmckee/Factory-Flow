@@ -308,12 +308,29 @@ User calls taken before building:
       finished, and a live pass means advancing a real run, which is
       irreversible; worth doing on a throwaway run before trusting the Stop
       button.
-- [ ] **8.16 Budgeted plan approval.** The plan and its budget become the
-      approved object: one card naming the runs, the verbs, the tick horizon
-      and the spend ceiling, built from the sim as ever; execution proceeds
-      inside it and re-pauses on breach. This is the unit that finally makes
-      **roles** mean something — a plan proposed by the model, executed under
-      a budget, and scored by a comparator that never asks a model anything.
+- [x] **8.16 Budgeted plan approval** — `propose_experiment` +
+      `budget.py`: the model asks for a whole experiment, a person approves
+      the **bounds** (runs, verbs, tick horizon, spend ceiling), and covered
+      writes then run without stopping. A grant can only *skip a pause it
+      covers*, so a wrong or stale one costs an extra question rather than an
+      unapproved write; the ceiling is checked against the sim's frozen quote,
+      never the model's number; spend counts at authorisation, because
+      over-counting costs a question while reconciling against the capital log
+      cannot separate this experiment's spend from what a fork inherited. A
+      grant lives in the checkpointed state, so it outlives its turn and dies
+      with the conversation. 37 tests, 11 of them through the real graph on
+      the authority properties themselves.
+      **Split from the plan:** the plan **card** is 8.16b. This ships the
+      mechanism with the existing card rendering it (the summary states the
+      bounds, `outsidePlan` explains a pause that happened anyway), which
+      works but does not yet show a grant's remaining ceiling or let anyone
+      revoke one.
+- [ ] **8.16b The plan card, and revoking a grant.** Per-run rows, the verbs,
+      the horizon and the ceiling laid out rather than in one sentence; the
+      **active grant visible** in the composer with what is left of it; and a
+      way to revoke it that is not "start a new conversation". A standing
+      authority nobody can see or cancel is the part of 8.16 that is not
+      finished.
 - [ ] **8.17 Evals + ledger/doc sweep.** The comparator is ground truth an
       eval can score a verdict against without a rubric, which is the whole
       reason it comes before richer datasets.

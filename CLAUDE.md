@@ -460,8 +460,8 @@ and seed reproducibility like any other client.
   no later edit inside the gate can stop an analyst's question.
   `interrupt_before=["tools"]` cannot express this: it is all or nothing.
 - **The approval gate is the authority boundary, and it is structural.** A
-  write tool cannot execute unless a human resumed the thread for that
-  specific call — not a rule in the prompt. Its payload is built from the sim
+  write tool cannot execute unless a human authorised it — not a rule in the
+  prompt. Its payload is built from the sim
   (`approval.py`: `GET /api/runs/:id`, plus `/floor` for a capital action),
   **never from the model's arguments**: the model can claim anything about
   which run it means, and what a person approves has to be what the backend
@@ -499,6 +499,39 @@ and seed reproducibility like any other client.
   narrows it with `parseComparison`, which returns null rather than throwing
   on version skew: draw nothing and leave the reply standing, the same rule
   `parseSseChunk` follows for a malformed frame.
+- **Authority is granted per experiment, not per call (`budget.py`).** The
+  per-call gate was the right *boundary* and the wrong *unit*: an experiment
+  is a fork, a decision, two advances and a comparison.
+  `propose_experiment` lets the model ask for the whole thing, a person
+  approves **that**, and the writes it described then execute inside the
+  bounds they approved. What does not change is where authority comes from.
+  A grant can only ever **skip a pause it covers** — anything outside its
+  bounds falls through to the same interrupt as before, so the failure mode
+  of a wrong or stale grant is an extra question, never an unapproved write.
+  The bounds are the four things that make an experiment finite: **which
+  runs** (a call against any other re-pauses, so a plan about a fork cannot
+  quietly reach the control it is measured against), **which verbs**
+  (approving advances is not approving purchases), **a tick horizon**, and a
+  **spend ceiling** in cents — checked against the sim's frozen quote for
+  each action, off the approval payload's own `spendCents`, never against a
+  number the model supplied. Spend is counted at *authorisation*, so a
+  backend 409 still counts against the ceiling: over-counting costs one
+  question, while reconciling against the run's capital log cannot tell this
+  experiment's spend from what a fork inherited from its parent. Two
+  absences from `BUDGETABLE_VERBS` are deliberate — `propose_experiment`,
+  because a grant cannot grant the power to grant, and `advance_run`,
+  because a *duration* cannot be checked against a horizon without reading
+  the run, which is why `advance_to_tick` exists. A **fork's child is not
+  covered by the plan that created it**: its id did not exist when the plan
+  was approved. The grant lives in `ChatState.budget`, checkpointed with the
+  messages — which is what lets it outlive the turn that asked for it, and
+  what means a **new conversation starts with no authority**, since a new
+  thread has no state. `propose_experiment` is not in `ACTION_TOOLS` (it
+  changes nothing) but is in `GATED_TOOL_NAMES`, and its **tool body raises**:
+  the gate answers it with its own `ToolMessage`, so reaching the body means
+  the routing broke and should be loud. A pause that happens *despite* a
+  plan carries `outsidePlan` — the sentence explaining why someone is being
+  asked something they thought they had answered.
 - **One approval per jump, not per request.** The backend caps an advance at
   20,000 ticks while a staffed day is 28,800, so a 15-day two-branch
   experiment was **44 approvals, 43 of them "yes, keep going"**.

@@ -91,3 +91,65 @@ it("parses a progress event from a long-running tool", () => {
   expect(buffer).toBe("");
   expect(events).toEqual([payload]);
 });
+
+it("parses a plan approval, which spans several runs", () => {
+  const payload = {
+    type: "approval",
+    tool: "propose_experiment",
+    args: { purpose: "test a second press", run_ids: [58, 59] },
+    run: {
+      id: 58,
+      name: "Baseline · CONWIP 150",
+      tickNum: 230400,
+      dayTicks: 28800,
+      status: "idle",
+      netCents: 1094433,
+      isFork: false,
+    },
+    runs: [
+      {
+        id: 58,
+        name: "Baseline · CONWIP 150",
+        tickNum: 230400,
+        dayTicks: 28800,
+        status: "idle",
+        netCents: 1094433,
+        isFork: false,
+      },
+      {
+        id: 59,
+        name: "Second drill press",
+        tickNum: 230400,
+        dayTicks: 28800,
+        status: "idle",
+        netCents: 1543208,
+        isFork: true,
+      },
+    ],
+    spendCents: 200000,
+    summary: "Run an experiment on #58 and #59 — spend up to $2,000.00.",
+  };
+  const { events } = parseSseChunk("", `data: ${JSON.stringify(payload)}\n\n`);
+  expect(events).toEqual([payload]);
+});
+
+it("parses a pause that fell outside an approved plan", () => {
+  const payload = {
+    type: "approval",
+    tool: "capital_action",
+    args: { run_id: 61, kind: "buy_machine", work_center_id: 98 },
+    run: {
+      id: 61,
+      name: "agent test",
+      tickNum: 403200,
+      status: "idle",
+      netCents: 0,
+      isFork: false,
+    },
+    spendCents: 120000,
+    outsidePlan: "the approved plan covers #58, #59, not #61",
+    summary: "Buy a machine at Drill Press — $1,200.00.",
+  };
+  const { events } = parseSseChunk("", `data: ${JSON.stringify(payload)}\n\n`);
+  expect(events).toEqual([payload]);
+});

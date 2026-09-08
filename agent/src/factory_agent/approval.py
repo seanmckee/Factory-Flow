@@ -13,6 +13,8 @@ The formatting is pure and tested; only `build_approval` touches the network.
 from typing import Any
 
 from . import sim_client
+from .actions import PROPOSE_TOOL_NAME
+from .budget import Budget, new_budget
 from .sim_client import SimApiError
 
 TICKS_PER_HOUR = 3600
@@ -147,6 +149,38 @@ def capital_effect(kind: str, center: dict) -> tuple[int, int]:
     return machines, operators
 
 
+def describe_plan(budget: Budget, runs: list[dict[str, Any]]) -> str:
+    """The plan as one paragraph a person can grant or refuse.
+
+    It states the bounds rather than the intention, because the bounds are
+    what is being approved: the model's `purpose` is why it wants them, and
+    the runs, verbs, horizon and ceiling are what it gets. It also says what
+    happens at the edges, since "everything else still asks" is the sentence
+    that makes granting this safe.
+    """
+    day_ticks = next(
+        (run.get("dayTicks") for run in runs if run.get("dayTicks")), 0
+    ) or 0
+    where = ", ".join(f"#{run['id']} {run['name']}" for run in runs)
+    verbs = ", ".join(budget["verbs"]) or "nothing"
+    horizon = (
+        f"advance as far as {format_tick(budget['toTick'], day_ticks)}"
+        if budget["toTick"] is not None
+        else "no advancing"
+    )
+    ceiling = (
+        f"spend up to {format_dollars(budget['maxSpendCents'])}"
+        if budget["maxSpendCents"] > 0
+        else "spend nothing"
+    )
+    purpose = budget["purpose"].strip()
+    intent = f"To {purpose[0].lower()}{purpose[1:]}: " if purpose else ""
+    return (
+        f"{intent}run an experiment on {where}, using {verbs} — {horizon}, "
+        f"{ceiling}. Anything outside those bounds still asks you first."
+    )
+
+
 async def build_approval(name: str, args: dict) -> dict[str, Any]:
     """The payload the human sees, or a refusal if the sim can't confirm it.
 
@@ -184,13 +218,74 @@ async def build_approval(name: str, args: dict) -> dict[str, Any]:
     return {
         "tool": name,
         "args": args,
-        "run": {
-            "id": run["id"],
-            "name": run["name"],
-            "tickNum": run["tickNum"],
-            "status": run["status"],
-            "netCents": run["netCents"],
-            "isFork": run["parentRunId"] is not None,
-        },
+        "run": run_side(run),
+        # The sim's own frozen quote for this call, which is what a spend
+        # ceiling must be checked against — never a number the model supplied.
+        # Zero for everything that moves no money.
+        "spendCents": (
+            capital_price(str(args.get("kind")), center)
+            if name == "capital_action" and center is not None
+            else 0
+        ),
         "summary": describe(name, args, run, center),
+    }
+
+
+def run_side(run: dict) -> dict[str, Any]:
+    """One run as a confirmation shows it. Shared by a single write and by a
+    plan, which shows one of these per run it would touch."""
+    return {
+        "id": run["id"],
+        "name": run["name"],
+        "tickNum": run["tickNum"],
+        "dayTicks": run.get("dayTicks"),
+        "status": run["status"],
+        "netCents": run["netCents"],
+        "isFork": run["parentRunId"] is not None,
+    }
+
+
+async def build_plan_approval(args: dict) -> dict[str, Any]:
+    """What a person sees before granting authority over a whole experiment.
+
+    Built from the sim like every other confirmation, and for the same reason:
+    the model can describe its plan however it likes, and what someone
+    approves has to be the runs the backend will actually touch, at the ticks
+    they are actually at. A run the sim cannot confirm makes the whole plan
+    unconfirmable — approving authority over an id that does not resolve is
+    exactly the thing this gate exists to prevent.
+
+    `run` carries the first run as well as `runs` carrying all of them, so a
+    client that only knows how to draw one write still draws something true.
+    """
+    requested = [int(one) for one in (args.get("run_ids") or [])]
+    if not requested:
+        return {"error": "a plan has to name the runs it would touch"}
+
+    runs: list[dict[str, Any]] = []
+    try:
+        for run_id in dict.fromkeys(requested):
+            run = await sim_client.get_json(f"/api/runs/{run_id}")
+            assert isinstance(run, dict)
+            runs.append(run_side(run))
+    except SimApiError as error:
+        return {"error": str(error)}
+
+    granted = new_budget(
+        purpose=str(args.get("purpose") or ""),
+        run_ids=requested,
+        verbs=[str(verb) for verb in (args.get("verbs") or [])],
+        to_tick=(
+            int(args["to_tick"]) if args.get("to_tick") is not None else None
+        ),
+        max_spend_cents=int(args.get("max_spend_cents") or 0),
+    )
+    return {
+        "tool": PROPOSE_TOOL_NAME,
+        "args": args,
+        "run": runs[0],
+        "runs": runs,
+        "plan": granted,
+        "spendCents": granted["maxSpendCents"],
+        "summary": describe_plan(granted, runs),
     }

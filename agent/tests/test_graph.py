@@ -431,6 +431,263 @@ async def test_two_writes_take_two_decisions(monkeypatch):
     ]
 
 
+def propose(**overrides) -> AIMessage:
+    args = {
+        "purpose": "test a second press",
+        "run_ids": [39],
+        "verbs": ["capital_action", "advance_to_tick"],
+        "to_tick": 144_000,
+        "max_spend_cents": 200_000,
+        **overrides,
+    }
+    return call("propose_experiment", args, id="p1")
+
+
+class TestBudgetedPlan:
+    """One approval for a whole experiment. The property under test is not
+    "fewer clicks" — it is that authority still comes from a human, and that
+    everything outside what they bounded still stops."""
+
+    async def test_a_plan_pauses_and_shows_the_runs_the_sim_confirms(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(monkeypatch, propose(), AIMessage(content="Plan approved."))
+        graph = build_graph(InMemorySaver())
+        config = thread("plan")
+
+        await graph.ainvoke(turn("Test a second press"), config)
+
+        state = await graph.aget_state(config)
+        assert len(state.interrupts) == 1
+        payload = state.interrupts[0].value
+        assert payload["tool"] == "propose_experiment"
+        # the runs come from GET /api/runs/39, not from the model's words
+        assert payload["runs"][0]["name"] == "Playground shakedown"
+        assert "$2,000.00" in payload["summary"]
+        assert "Anything outside those bounds still asks you first" in payload["summary"]
+        # and asking for authority changed nothing
+        assert posted == []
+
+    async def test_approving_a_plan_executes_nothing_by_itself(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(monkeypatch, propose(), AIMessage(content="Ready."))
+        graph = build_graph(InMemorySaver())
+        config = thread("plan-only")
+
+        await graph.ainvoke(turn("Test a second press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        # A grant is authority, not an action.
+        assert posted == []
+        state = await graph.aget_state(config)
+        assert state.values["budget"]["runIds"] == [39]
+        assert state.values["budget"]["spentCents"] == 0
+
+    async def test_a_covered_write_then_runs_without_pausing(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Bought it."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("covered")
+
+        await graph.ainvoke(turn("Test a second press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        assert [request.url.path for request in posted] == ["/api/runs/39/actions"]
+        state = await graph.aget_state(config)
+        assert state.interrupts == ()
+        # charged at the SIM's frozen price off the floor, not the model's word
+        assert state.values["budget"]["spentCents"] == 120_000
+
+    async def test_a_write_on_another_run_still_pauses(self, monkeypatch):
+        """The control is the thing being measured against. A plan about one
+        run must not quietly reach another."""
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(run_ids=[39]),
+            call(
+                "capital_action",
+                {"run_id": 61, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Asked again."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("other-run")
+
+        await graph.ainvoke(turn("Test a second press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        state = await graph.aget_state(config)
+        assert len(state.interrupts) == 1
+        # and the pause says why, since the person thought they had answered
+        assert "#61" in state.interrupts[0].value["outsidePlan"]
+        assert posted == []
+
+    async def test_a_verb_outside_the_plan_still_pauses(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(verbs=["advance_to_tick"]),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Asked again."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("other-verb")
+
+        await graph.ainvoke(turn("Advance it"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        state = await graph.aget_state(config)
+        assert len(state.interrupts) == 1
+        assert "not capital_action" in state.interrupts[0].value["outsidePlan"]
+        assert posted == []
+
+    async def test_a_charge_over_the_ceiling_still_pauses(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(max_spend_cents=50_000),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Asked again."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("over-ceiling")
+
+        await graph.ainvoke(turn("Buy a press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        state = await graph.aget_state(config)
+        assert len(state.interrupts) == 1
+        # the machine's frozen price is $1,200 against a $500 ceiling
+        assert "120000" in state.interrupts[0].value["outsidePlan"]
+        assert posted == []
+
+    async def test_a_declined_plan_grants_nothing(self, monkeypatch):
+        posted = sim(monkeypatch)
+        scripted(monkeypatch, propose(), AIMessage(content="Understood."))
+        graph = build_graph(InMemorySaver())
+        config = thread("declined-plan")
+
+        await graph.ainvoke(turn("Test a second press"), config)
+        await graph.ainvoke(
+            Command(resume={"approved": False, "note": "too much money"}), config
+        )
+
+        state = await graph.aget_state(config)
+        assert state.values.get("budget") is None
+        assert posted == []
+        told = state.values["messages"][-2]
+        assert "declined the plan" in told.content
+        assert "too much money" in told.content
+
+    async def test_an_unconfirmable_run_makes_the_whole_plan_unconfirmable(
+        self, monkeypatch
+    ):
+        """Granting authority over an id that does not resolve is the exact
+        thing this gate exists to prevent, so it is refused rather than shown
+        to someone as an unknown."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(404, json={"message": "Run 404 not found"})
+
+        mock_backend(monkeypatch, handler)
+        scripted(monkeypatch, propose(run_ids=[404]), AIMessage(content="No such run."))
+        graph = build_graph(InMemorySaver())
+        config = thread("bad-plan")
+
+        await graph.ainvoke(turn("Test a press on run 404"), config)
+
+        state = await graph.aget_state(config)
+        assert state.interrupts == ()
+        assert state.values.get("budget") is None
+        assert "could not confirm the plan" in state.values["messages"][-2].content
+
+    async def test_a_plan_and_a_covered_write_in_one_batch(self, monkeypatch):
+        """The grant applies to calls after it in the same batch — the model
+        can plan and act in one turn, and the person still approved first."""
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "propose_experiment",
+                        "args": {
+                            "purpose": "test a press",
+                            "run_ids": [39],
+                            "verbs": ["capital_action"],
+                            "max_spend_cents": 200_000,
+                        },
+                        "id": "p1",
+                    },
+                    {
+                        "name": "capital_action",
+                        "args": {
+                            "run_id": 39,
+                            "kind": "buy_machine",
+                            "work_center_id": 98,
+                        },
+                        "id": "c1",
+                    },
+                ],
+            ),
+            AIMessage(content="Done."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("batch")
+
+        await graph.ainvoke(turn("Test a press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+
+        assert [request.url.path for request in posted] == ["/api/runs/39/actions"]
+        assert (await graph.aget_state(config)).interrupts == ()
+
+    async def test_a_grant_does_not_cross_conversations(self, monkeypatch):
+        """A new thread has no state, so it has no authority. This is the only
+        thing standing between "a grant outlives its turn" and "a grant
+        outlives the person who gave it"."""
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(),
+            AIMessage(content="Ready."),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Asked."),
+        )
+        graph = build_graph(InMemorySaver())
+
+        await graph.ainvoke(turn("Test a press"), thread("grant-a"))
+        await graph.ainvoke(Command(resume={"approved": True}), thread("grant-a"))
+
+        await graph.ainvoke(turn("Buy a machine"), thread("grant-b"))
+        state = await graph.aget_state(thread("grant-b"))
+        assert len(state.interrupts) == 1
+        assert "outsidePlan" not in state.interrupts[0].value
+        assert posted == []
+
+
 async def test_resuming_nothing_is_an_error_not_a_fresh_turn(monkeypatch):
     """A stale tab, a double click, or a restart that dropped the in-memory
     checkpoint. Resuming an unknown thread would otherwise start the graph
