@@ -37,11 +37,13 @@ copy changeable any time under the run's lock, and fork isolation proven
 end-to-end by `npm run check:policy`. A jump now drains only when the floor
 and the releasable backlog are both empty.
 
-**Track 8 phase 1 is live** (2026-09-07): the `agent/` service (Python FastAPI
-+ LangGraph, OpenAI models via `OPENAI_MODEL`) hosts a read-only analyst over
-the backend's REST API, and the `/agent` page chats with it — streaming SSE,
-tool-call chips, thread memory. Next phases: action tools, the fork-and-compare
-experiment graph, the deterministic comparator, LangSmith evals.
+**Track 8 phase 1 is complete** (2026-09-07): the `agent/` service (Python
+FastAPI + LangGraph, OpenAI models via `OPENAI_MODEL`) hosts a read-only
+analyst over the backend's REST API, the `/agent` page chats with it —
+streaming SSE, tool-call chips, thread memory — and the LangSmith suite scores
+**7/7** against ground truth computed from the sim itself. Next phases: action
+tools, the fork-and-compare experiment graph, the deterministic comparator,
+richer eval datasets.
 
 **Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
 6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
@@ -133,7 +135,7 @@ other. Priority is earliest-due-date, undated last, id tie-break.
       drain-stop learn about backlog
 - [x] RP.6 Ledger + doc sweep
 
-### Track 8 — the agent (`feat/agent`), phase 1 in progress
+### Track 8 — the agent (`feat/agent`), phase 1 complete
 
 Architecture (user calls, 2026-09-07): a separate **Python FastAPI + LangGraph**
 service (`agent/`), OpenAI models (`OPENAI_MODEL` in `agent/.env`), LangSmith
@@ -157,16 +159,21 @@ verdict writer); phase 1 builds the foundation.
       dispatching per-example checks, dataset rebuilt per invocation under one
       stable name so experiments accumulate against fresh truth
 
-**First eval run (2026-09-07): 5/7.** The two failures are next session's
-starting point:
+**First eval run (2026-09-07): 5/7 → 7/7** after 8.6 and 8.7.
 
-- [ ] 8.6 Tool errors must return to the model, not kill the turn — the
-      "buy a machine" trap died with a raised `SimApiError` (backend 404 from
-      a bad tool argument) instead of the model seeing the error and refusing
-      as intended (`handle_tool_errors` on the tool node).
-- [ ] 8.7 The constraint answer named "work center 98", not "Drill Press" —
-      metrics carries ids only; nudge the prompt to resolve names via the
-      floor, then re-run `evals.run` and watch the score move.
+- [x] 8.6 Tool errors return to the model instead of killing the turn — a
+      shared `ANALYST_TOOL_NODE` with `handle_tool_errors=tool_error_message`,
+      because langgraph 1.x's default handler **re-raises** anything that is
+      not an argument-validation error, so a `SimApiError` escaped the graph
+      and the "buy a machine" trap died on a 404 rather than declining. The
+      handler is narrow *by annotation* (`SimApiError | ToolException` — the
+      tool node infers the caught types from the signature), so our own bugs
+      still crash rather than being laundered into the transcript as facts
+      about the factory. The node is shared with the eval suite deliberately:
+      evals that see different error behaviour measure a different agent.
+- [x] 8.7 The constraint answer names the centre, not its id — a prompt rule
+      that metrics carry ids only and the name must be resolved through the
+      floor ("Drill Press (work center 98)").
 
 Re-plan when reached: action tools (advance/release/policy/capital/fork), the
 multi-agent experiment graph, the deterministic run comparator, richer eval
