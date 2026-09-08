@@ -140,6 +140,14 @@ ALL_TOOLS = [*ANALYST_TOOLS, *COMPARATOR_TOOLS, *ACTION_TOOLS]
 # or the evals measure a different agent than the one the UI talks to.
 TOOL_NODE = ToolNode(ALL_TOOLS, handle_tool_errors=tool_error_message)
 
+#: Tools whose *result* the UI can draw, and therefore the only ones whose
+#: output crosses the wire. Opt-in rather than opt-out: the floor and metrics
+#: payloads are large, the transcript renders none of them, and a chat window
+#: is not a place to ship a run's whole observation series. Derived from the
+#: tool list rather than hand-written, for the same reason ACTION_TOOL_NAMES
+#: is - a name typed twice is a name that eventually disagrees with itself.
+RENDERED_TOOL_NAMES = frozenset(verb.name for verb in COMPARATOR_TOOLS)
+
 
 class ChatState(MessagesState):
     """Messages, plus the tool-call ids a human has cleared to execute.
@@ -312,6 +320,32 @@ def _chunk_text(chunk: AIMessageChunk) -> str:
     )
 
 
+def tool_result_event(message: Any) -> dict[str, Any] | None:
+    """A tool's own output as an SSE event, for the tools the UI can draw.
+
+    This is the channel a computed answer needs. Until now the transcript saw
+    a tool's *name and arguments* and nothing else, so anything a tool worked
+    out could only reach the screen as prose the model retyped - which is
+    exactly what the comparator exists to stop being the case. What a person
+    reads should be built from the tool's own result, the rule `approval.py`
+    already applies to a write.
+
+    Content that is not JSON is skipped rather than forwarded: a failed call
+    comes back as "Tool call failed: ...", a gated write as the gate's own
+    refusal sentence, and both belong to the model to read and explain. A
+    result event is for a payload something can render, so a non-payload
+    simply is not one.
+    """
+    name = getattr(message, "name", None)
+    if name not in RENDERED_TOOL_NAMES:
+        return None
+    try:
+        data = json.loads(message.content)
+    except (TypeError, ValueError):
+        return None
+    return {"type": "result", "name": name, "data": data}
+
+
 #: One lock per conversation. Two approvals answered at once — a double
 #: click, two tabs — would both pass the "is anything pending?" check and both
 #: execute the write. Serialising a thread's turns is what makes that check
@@ -322,7 +356,7 @@ _thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def _stream(agent, payload: Any, thread_id: str) -> AsyncIterator[str]:
     """The shared body of a turn and of a resumed turn: the same SSE
-    vocabulary either way — token / tool / approval / done / error."""
+    vocabulary either way — token / tool / result / approval / done / error."""
     config = {"configurable": {"thread_id": thread_id}}
     try:
         async for mode, chunk in agent.astream(
@@ -354,6 +388,11 @@ async def _stream(agent, payload: Any, thread_id: str) -> AsyncIterator[str]:
                                     "input": call.get("args", {}),
                                 }
                             )
+                elif node == "tools" and update:
+                    for message in update.get("messages", []):
+                        result = tool_result_event(message)
+                        if result is not None:
+                            yield sse_event(result)
         yield sse_event({"type": "done", "threadId": thread_id})
     except Exception as error:  # noqa: BLE001 - surface as an SSE error, never a broken stream
         yield sse_event({"type": "error", "message": str(error)})

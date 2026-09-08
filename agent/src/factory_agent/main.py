@@ -63,9 +63,10 @@ SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 @app.post("/chat")
 async def chat(body: ChatRequest) -> StreamingResponse:
-    """One user turn, streamed as SSE events (token / tool / approval / done /
-    error). The threadId keys the conversation's memory (in-process for now),
-    and the done event echoes it so the client can continue the thread.
+    """One user turn, streamed as SSE events (token / tool / result /
+    approval / done / error). The threadId keys the conversation's memory
+    (in-process for now), and the done event echoes it so the client can
+    continue the thread.
 
     A turn that ends on an `approval` event is not finished — it is paused
     inside the graph, waiting for /chat/resume on the same thread."""

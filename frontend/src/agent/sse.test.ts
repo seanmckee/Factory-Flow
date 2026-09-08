@@ -64,3 +64,14 @@ it("parses an approval event with its nested run", () => {
   // the run is nested, so a shallow cast would have lost it
   expect(event).toMatchObject({ run: { name: "Playground shakedown" } });
 });
+
+it("parses a tool result, whose data stays unknown until narrowed", () => {
+  const payload = {
+    type: "result",
+    name: "compare_runs",
+    data: { netDeltaCents: 448775, summary: "#59 wins by $4,487.75" },
+  };
+  const { events, buffer } = parseSseChunk("", `data: ${JSON.stringify(payload)}\n\n`);
+  expect(buffer).toBe("");
+  expect(events).toEqual([payload]);
+});

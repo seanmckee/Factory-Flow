@@ -27,6 +27,14 @@ export type ApprovalRequest = {
 export type AgentEvent =
   | { type: "token"; text: string }
   | { type: "tool"; name: string; input: Record<string, unknown> }
+  /**
+   * A tool's own *result*, for the few tools whose output the transcript can
+   * draw. The `tool` event above carries only what the model asked for; this
+   * carries what the sim answered, which is the difference between rendering
+   * a computed figure and rendering one a model retyped. `data` is unknown
+   * until narrowed — see `verdict.ts` for the comparator's shape.
+   */
+  | { type: "result"; name: string; data: unknown }
   | ({ type: "approval" } & ApprovalRequest)
   | { type: "done"; threadId: string }
   | { type: "error"; message: string };

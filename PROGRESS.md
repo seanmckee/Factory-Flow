@@ -244,14 +244,22 @@ User calls taken before building:
       seam. Verified live on the drill-press fork pair — +$4,487.75 net for
       $1,488 of capital, and **the constraint moved** (98 at 97.6% → 95 at
       100%), which is the sentence a capacity verdict wants.
-- [ ] **8.13 Structured tool output reaches the UI.** The SSE `tool` event
-      carries name and arguments only, so a tool's *result* has no channel to
-      the screen and a verdict could only arrive as prose the model retyped —
-      which defeats the determinism. Extend the shared vocabulary once, for
-      both cases that need it: a result payload for the verdict, and progress
-      for a long-running call. Parsed in `sse.ts`, pure and tested on both
-      sides. `approval.py`'s rule carries over — what a person is shown is
-      built from the sim, never from how the model described it.
+- [x] **8.13 Structured tool output reaches the UI** — the SSE `tool` event
+      carried a tool's name and arguments but never its *result*, so a
+      computed answer could only reach the screen as prose the model retyped.
+      A `result` event now carries the payload, opt-in per tool
+      (`RENDERED_TOOL_NAMES`, derived from the tool list) because nothing
+      renders a run's observation series; non-JSON content is skipped, so a
+      failed call and a gate refusal stay the model's to explain.
+      `verdict.ts` mirrors the comparator's shape and narrows it, returning
+      null on skew rather than half-drawing. The transcript shows the
+      comparator's own one-line verdict; the table is next. Verified live: the
+      model called the comparator instead of subtracting, resolved both
+      constraints to names off `/floor`, and one `result` event crossed the
+      wire.
+      **Deviation from the plan:** no `progress` event yet — it moves to 8.15
+      with the emitter that needs it, since a vocabulary member with nothing
+      to send is a boundary invented ahead of its caller.
 - [ ] **8.14 The verdict card.** The P&L delta table in the transcript, two
       columns and a signed delta, with an inline signed bar per line so
       "which line moved" reads at a glance (the utilization-bar pattern);
@@ -262,7 +270,8 @@ User calls taken before building:
       comparison shareable, which a transcript is not.
 - [ ] **8.15 `advance_to_tick` — chunk inside the tool.** One call the gate
       sees once, chunking to the backend's cap internally, streaming progress
-      as each committed advance lands, and honouring a Stop. 44 approvals → 2
+      as each committed advance lands (the SSE `progress` event lands here,
+      with its emitter), and honouring a Stop. 44 approvals → 2
       with no change to authority at all — the same trick the page's jump
       already plays. Progress is not optional: the 15-day playthrough is ~5
       wall-minutes, and a silent tool that long reads as a hang. Stop matters

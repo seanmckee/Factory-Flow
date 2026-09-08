@@ -5,6 +5,7 @@ import {
   GitBranch,
   LoaderCircle,
   RotateCcw,
+  Scale,
   Send,
   ShieldAlert,
   Wrench,
@@ -15,13 +16,16 @@ import { Input } from "@/components/ui/input";
 import PageHeader from "../components/PageHeader";
 import { getAgentHealth, resumeChat, streamChat } from "../api/agent";
 import type { AgentEvent, ApprovalRequest } from "../agent/sse";
+import { parseComparison, type RunComparison } from "../agent/verdict";
 import { useToast } from "../toast/ToastContext";
 
 type ToolCall = { name: string; input: Record<string, unknown> };
 type Decision = "pending" | "approved" | "declined";
 type ChatItem =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; tools: ToolCall[] }
+  /** `verdicts` are computed answers a tool returned, shown as themselves
+   * rather than left to the reply to paraphrase */
+  | { kind: "assistant"; text: string; tools: ToolCall[]; verdicts: RunComparison[] }
   | { kind: "approval"; request: ApprovalRequest; decision: Decision };
 
 /** what each tool did, in the user's terms — the chip under a reply */
@@ -39,6 +43,7 @@ const TOOL_LABELS: Record<string, string> = {
   capital_action: "changed the machines",
   set_release_policy: "changed the release policy",
   release_work_order: "released a work order",
+  compare_runs: "compared two runs",
 };
 
 function toolLabel(call: ToolCall): string {
@@ -122,6 +127,16 @@ export default function AgentPage() {
         ...last,
         tools: [...last.tools, { name: event.name, input: event.input }],
       }));
+    } else if (event.type === "result") {
+      // A payload we cannot narrow is dropped, not half-drawn: the model's
+      // own reply still stands, which is a worse answer than the table but
+      // never a wrong one.
+      const verdict = parseComparison(event.data);
+      if (verdict)
+        patchLastAssistant((last) => ({
+          ...last,
+          verdicts: [...last.verdicts, verdict],
+        }));
     } else if (event.type === "approval") {
       const request: ApprovalRequest = {
         tool: event.tool,
@@ -154,7 +169,7 @@ export default function AgentPage() {
     setItems((previous) => [
       ...previous,
       { kind: "user", text: message },
-      { kind: "assistant", text: "", tools: [] },
+      { kind: "assistant", text: "", tools: [], verdicts: [] },
     ]);
     try {
       await streamChat(message, threadId, handleEvent);
@@ -175,7 +190,7 @@ export default function AgentPage() {
           : item,
       ),
       // a fresh target for the continuation's tokens
-      { kind: "assistant" as const, text: "", tools: [] },
+      { kind: "assistant" as const, text: "", tools: [], verdicts: [] },
     ]);
     try {
       await resumeChat(threadId, approved, handleEvent);
@@ -271,6 +286,15 @@ export default function AgentPage() {
                       ))}
                     </div>
                   )}
+                  {item.verdicts.map((verdict, verdictIndex) => (
+                    <p
+                      key={verdictIndex}
+                      className="flex items-start gap-2 border-l-2 border-primary/60 pl-3 text-sm leading-relaxed"
+                    >
+                      <Scale className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                      <span>{verdict.summary}</span>
+                    </p>
+                  ))}
                   {item.text === "" && busy && index === items.length - 1 ? (
                     <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
                   ) : (
