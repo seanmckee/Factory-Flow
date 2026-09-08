@@ -1,5 +1,7 @@
 # 🏭 Factory Flow
 
+[![CI](https://github.com/seanmckee/Factory-Flow/actions/workflows/ci.yml/badge.svg)](https://github.com/seanmckee/Factory-Flow/actions/workflows/ci.yml)
+
 **A manufacturing simulator where the score is net profit, not parts finished.**
 
 Model a shop floor, run it forward through simulated days, fork the run at any
@@ -13,11 +15,12 @@ easy. Optimising the system is the whole problem, and it's only visible once
 running a machine costs money whether or not it produces anything.
 
 **Stack** — React 19 · TypeScript · Vite · Tailwind v4 · Recharts ·
-Express 5 · Drizzle ORM · Neon serverless Postgres · Zod · Vitest
+Express 5 · Drizzle ORM · Neon serverless Postgres · Zod · Vitest ·
+Python 3.12 · FastAPI · LangGraph · LangSmith
 
-**Status** — the simulator is complete and driveable end to end: 323 unit tests,
-none of which touch a database or an HTTP server. An AI agent over its REST API
-is the next track, and everything below is what that agent will be handed.
+**Status** — the simulator is complete and driveable end to end, and an AI
+analyst reads it over the same REST API the browser uses: 346 unit tests, none
+of which touch a database, an HTTP server or a live model.
 
 ---
 
@@ -151,8 +154,8 @@ price — a unit is credited to.
 
 `backend/src/simulation/` is pure functions: tick the floor, sample a process
 time, accrue a rate, credit a finished part, aggregate a window. No database, no
-HTTP, no `Date.now()`. That's why 323 tests run in under a second and why the
-rules are the tests rather than the other way round.
+HTTP, no `Date.now()`. That's why its 231 tests run in 150 milliseconds and why
+the rules are the tests rather than the other way round.
 
 - **One tick is one staffed second.** A calendar day is `shifts × 28,800` ticks.
   Off-shift time isn't simulated and isn't skipped-with-gaps — it simply isn't
@@ -271,12 +274,67 @@ was.
 
 ---
 
+## The agent
+
+A third service — `agent/`, a Python FastAPI app hosting a LangGraph ReAct
+agent — reads the simulation through the backend's REST API and nothing else.
+Its entire tool surface is HTTP, so it inherits the run locks, the frozen
+config and the seed reproducibility exactly as the browser does. There is no
+back door into the engine, which is why the API was built first.
+
+Phase 1 is a **read-only analyst**. Ask it *"which run made the most money and
+where is its constraint?"* and it plans over eight GET tools — the run list, a
+run's P&L, windowed metrics, the floor snapshot, the capital log, both sides of
+the order book, the facility settings — and answers with figures it can cite.
+The authority boundary is structural rather than an instruction it is trusted
+to follow: the tool module holds no verb that changes anything. Answers stream
+to the `/agent` page as server-sent events with the tool calls included, so you
+watch what it looked at while it reads.
+
+The tool docstrings are load-bearing, because they are what the model plans
+with. They carry the domain semantics that a competent reader still gets wrong:
+money is integer cents, throughput is money made through sales and never a
+count of parts, `netCents` is the score and can be negative, and utilization
+has to come from a window rather than from a snapshot.
+
+### Evals scored against the sim, not against a judge
+
+This is what the determinism buys. `uv run python -m factory_agent.evals.run`
+builds a LangSmith dataset whose **ground truth is computed from the same
+backend the agent reads** — argmax net over the run summaries, argmax
+utilization over a run's metrics, the order-book totals — so a wrong answer is
+a wrong answer rather than a disagreement with an LLM judge. The dataset is
+rebuilt from live sim state on each invocation under one stable name, so
+experiments accumulate against fresh truth.
+
+The first suite scored **5/7**, and both failures were real defects rather than
+scoring noise:
+
+- The "buy me a machine" trap died on a raised exception when the model passed
+  a bad argument, instead of the tool error returning to the model so it could
+  refuse the way it was meant to.
+- It named the constraint "work center 98" rather than "Drill Press": metrics
+  carries ids only, and nothing told it to resolve names off the floor.
+
+Both are cheap fixes. Finding them is the point — the same suite re-runs after.
+
+Next in this track: write tools (release, policy, capital, advance, fork)
+behind the same lock protocol the UI obeys, then the experiment graph — fork a
+run, take a decision in the branch, advance both, read the delta in net profit.
+The interesting part was never the tool-calling. It is that the environment can
+already tell the agent whether it was right, and the whole simulator was built
+to make that a measured answer rather than an assertion.
+
+---
+
 ## Running it
 
-Two independent npm projects, no monorepo tooling. Node 20.19+ (Vite 8) and a
+Three independent projects, no monorepo tooling. Node 20.19+ (Vite 8), a
 Postgres connection string (Neon, or anything the serverless driver can reach —
 the WebSocket `Pool` is used rather than the HTTP driver because writes span
-tables and need real transactions).
+tables and need real transactions), and — for the agent — Python 3.12+ with
+[uv](https://docs.astral.sh/uv/) and an OpenAI key. The simulator runs fine
+without the third terminal; only the `/agent` page needs it.
 
 ```bash
 # backend — port 3000, needs backend/.env with DATABASE_URL=postgres://…
@@ -290,13 +348,19 @@ npm run dev
 cd frontend
 npm install
 npm run dev
+
+# agent — port 8000, needs agent/.env with OPENAI_API_KEY (see .env.example)
+cd agent
+uv sync
+uv run uvicorn factory_agent.main:app --reload --port 8000
 ```
 
 Then open the simulator, click **New Run**, pick a release policy, and
 fast-forward a day.
 
 ```bash
-npx vitest run          # in either project: 231 tests backend, 92 frontend
+npx vitest run          # backend 231 tests, frontend 96
+uv run pytest           # agent 19 tests, no live model calls
 npm run check:fork      # backend, live DB: a fork replays its parent exactly
 npm run check:policy    # backend, live DB: policies stay isolated per run
 ```
@@ -343,16 +407,9 @@ omissions:
 
 ## What's next
 
-An **AI agent** over the REST API. The API is already the whole surface — create
-a run, release work, set a policy, buy a machine, advance, fork, read the P&L
-and the metrics, compare two runs — so the agent is a pure HTTP client with no
-privileged access to the engine, inheriting the same locks, the same frozen
-config and the same reproducibility as the UI.
-
-The interesting part isn't tool-calling. It's that the environment can already
-tell it whether it was right: fork, take a decision in one branch, advance both,
-and read the delta in net profit. That's a measured answer rather than an
-assertion — and the whole simulator was built to make it one.
+The agent's remaining phases, described above: write tools behind the run
+lock, then the experiment graph that forks a run, takes a decision in one
+branch and reads the delta.
 
 Further out, in rough order of how much of it is grounded in something the
 system can already cite:
