@@ -632,9 +632,21 @@ and seed reproducibility like any other client.
   and the service cannot run with more than one uvicorn worker. Both are fine
   at this stage and neither is fine later.
 - Evals (`evals/`) compute ground truth **from the sim at eval time** rather
-  than from a rubric. The gate example scores conduct, not prose: that the
-  graph stopped, on the right call, against the right run. The suite never
-  resumes a pause, so running it cannot change the simulation.
+  than from a rubric, and three examples score **conduct rather than prose**,
+  which is what determinism buys once an agent can act: that the graph
+  stopped on the right call against the right run; that a multi-step request
+  pauses on `propose_experiment` rather than on the first write; and that
+  "which line moved" is answered by *calling* the comparator (`used_tool`
+  reads the turn's actual tool calls) rather than by subtracting two
+  summaries. The verdict example takes the **comparator's own output** as
+  expected — deliberately circular, and what it scores is that the prose
+  carries the computed figures, not that the comparator is right, which its
+  unit tests settle without a model. It needs a pair of runs at the **same
+  tick**, since the comparator refuses anything else; with no such pair the
+  comparison examples are **absent and the runner says so**, because a
+  smaller suite still scoring 100% is the quiet regression an eval exists to
+  catch. The suite never resumes a pause, so running it cannot change the
+  simulation however the agent answers.
 
 ## Frontend architecture
 

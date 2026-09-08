@@ -47,14 +47,24 @@ built from the sim rather than from the model's arguments. The LangSmith suite
 scores **7/7**, one example now scoring conduct (did it stop?) rather than
 prose.
 
-**Next: Track 8 phase 3** (planned 2026-09-08) — the deterministic
-comparator, a verdict the UI can show as a table rather than as prose the
-model retyped, and **one approval per experiment** instead of per HTTP call:
-running two branches for 15 days costs ~44 approvals today, 43 of them "yes,
-keep going", because an advance caps at 20,000 ticks and a staffed day is
-28,800. Chunking that loop inside the tool fixes most of it without touching
-authority; budgeting the plan fixes the rest while keeping the gate
-structural.
+**Track 8 phase 3 is complete** (2026-09-08): the agent runs experiments
+rather than describing them. The **verdict is computed** — a pure comparator
+over two runs' frozen P&L columns, drawn in the transcript as the table it is,
+with a link to the two net curves on Trends — and **authority is granted per
+experiment** rather than per HTTP call. Running two branches for 15 days used
+to cost ~44 approvals, 43 of them "yes, keep going"; chunking the advance
+inside its tool took that to one without touching authority, and a budgeted
+plan (which runs, which verbs, how far, how much) took the rest. The gate is
+still structural: a grant can only *skip a pause it covers*, so the failure
+mode of a wrong one is an extra question, never an unapproved write — and the
+grant is visible while it stands and revocable. Replies render as markdown,
+and three eval examples now score **conduct** rather than prose.
+
+**Next, if the agent continues: the role split** the comparator justifies —
+supervisor over a read-only analyst, an experiment runner, the deterministic
+comparator and a verdict writer. It is now the boundary that pays, since the
+comparator is the node that needs no model at all. `InMemorySaver` is the
+first thing to fix if it does continue: it drops granted plans on restart.
 
 **The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
 6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
@@ -207,8 +217,8 @@ would have provided, and the boundaries that pay are deterministic-vs-model
 - [x] 8.11 Evals + doc sweep — the read-only trap becomes a pause check
       scoring conduct rather than prose, the runner prints its score
 
-**Phase 3 — the verdict, and one approval per experiment**
-(`feat/agent-comparator`). Planned 2026-09-08 from driving the phase-2 agent.
+**Phase 3 — the verdict, and one approval per experiment — is complete**
+(2026-09-08). Planned the same day from driving the phase-2 agent.
 Two findings drove it. The verdict was being written *by the model* from
 numbers it retyped, when both runs' P&L is frozen columns and the delta is
 arithmetic. And a two-branch experiment cost **~44 approvals**, 43 of them
@@ -335,13 +345,27 @@ User calls taken before building:
       **Still not browser-verified** — the backend has been down for both this
       and 8.15; one pass covers both, and it needs a throwaway run since a
       live plan lets the agent act.
-- [ ] **8.17 Evals + ledger/doc sweep.** The comparator is ground truth an
-      eval can score a verdict against without a rubric, which is the whole
-      reason it comes before richer datasets.
+- [x] **8.17 Evals + doc sweep** — the comparator is ground truth an eval can
+      score a verdict against with no rubric, and three examples now score
+      **conduct**: that the graph stopped on the right call, that a multi-step
+      request pauses on `propose_experiment` rather than the first write, and
+      that "which line moved" is answered by *calling* the comparator rather
+      than subtracting two summaries by hand (`used_tool` reads the turn's
+      real tool calls). The verdict example needs a pair at the same tick,
+      since the comparator refuses anything else; with no such pair the
+      comparison examples are absent **and the runner says so**, because a
+      smaller suite still scoring 100% is the quiet regression an eval exists
+      to catch.
 
 Known limits, deliberately carried rather than fixed: `InMemorySaver` drops
-pending approvals on restart and forbids a second uvicorn worker; there is no
-free-text note on a decline in the UI, though the API takes one.
+pending approvals **and granted plans** on restart and forbids a second
+uvicorn worker — it was tolerable when a lost pause cost one click, and a
+lost *grant* is a bigger thing to drop, so this is the first candidate if
+phase 4 goes further; there is no free-text note on a decline in the UI,
+though the API takes one; and the chunked advance and the plan banner have
+**not had a hands-on browser pass** (the backend was down through both), which
+wants a throwaway run, since an approved plan is permission for the agent to
+act and advancing cannot be undone.
 
 ### Track 6F — Shift calendar and overtime (`feat/overtime`) — deferred
 

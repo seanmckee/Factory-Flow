@@ -7,17 +7,28 @@ run locks, the frozen-config semantics and seed reproducibility for free. The
 frontend's `/agent` page calls this service directly (CORS for `:5173`);
 Express is never between them.
 
-Scope: an **analyst that can also act**. Eight read tools answer questions
-like "which run made the most money and where is its constraint?"; five write
-tools — fork, advance, capital action, release policy, manual release — let it
-test a decision rather than only describe one.
+Scope: an **analyst that runs experiments**. Eight read tools answer
+questions like "which run made the most money and where is its constraint?";
+six write tools — fork, advance, advance to a tick, capital action, release
+policy, manual release — let it test a decision rather than only describe one;
+and a **comparator** returns the verdict.
 
-Every write **pauses for a human**. The graph stops before the call executes
-and surfaces the run's real name, its tick and the run's own frozen price;
-nothing is written until someone approves it on the `/agent` page. That is
-structural rather than a rule in the prompt — the tool cannot run unless the
-thread is resumed for that specific call — and reads are routed past the gate
-entirely, so asking a question never stops for anyone.
+The verdict is **computed, not narrated**. Both runs' P&L is frozen columns
+and the sim is deterministic, so "which branch won, by how much, and which
+line of the P&L moved" is arithmetic — the model asks for it and interprets
+it, and the figures it reports are figures the sim produced. The chat draws
+the answer as the table it is.
+
+Changes **wait for a human**, and that boundary is structural rather than a
+rule in the prompt: a write tool cannot execute unless a person authorised
+it, and reads are routed past the gate entirely, so asking a question never
+stops for anyone. Authority is granted **per experiment**: the agent proposes
+what it wants to do — which runs, which verbs, how far to advance, the most it
+may spend — a person approves those bounds once, and anything outside them
+still asks. The grant stays on screen while it stands, with what is left of
+its ceiling, and can be revoked. A long advance is one approval too: it chunks
+to the backend's cap inside the tool, reports progress as each hour commits,
+and can be stopped on a committed boundary.
 
 ## Setup
 
@@ -51,13 +62,22 @@ uv run ruff check .
 
 ## Evals (LangSmith)
 
-The basic suite asks the analyst questions whose answers are **computed from
-the sim itself** at eval time — how many runs, which run nets the most, its
-constraint by whole-run utilization, its policy, the order-book totals, and a
-gate check — so a score is a fact, not a judge's opinion. The gate example
-scores conduct rather than prose: the agent is told to buy a machine, and what
-is scored is that the graph *stopped* on that call against that run. The suite
-never resumes a pause, so running the evals cannot change the simulation.
+The suite asks the analyst questions whose answers are **computed from the
+sim itself** at eval time — how many runs, which run nets the most, its
+constraint by whole-run utilization, its policy, the order-book totals — so a
+score is a fact, not a judge's opinion. Where a pair of runs sits at the same
+tick it also asks for a verdict, with the **comparator's own output** as the
+expected answer; what that scores is whether the prose carries the computed
+figures rather than whether the comparator is right, which its unit tests
+settle without a model.
+
+Three examples score **conduct rather than prose**, which is what determinism
+buys once an agent can act: that the graph *stopped* when told to buy a
+machine, on that call against that run; that a multi-step request asks once
+for a whole plan instead of stopping at the first write; and that a "which
+line moved" question is answered by *calling the comparator*, not by
+subtracting two summaries by hand. The suite never resumes a pause, so running
+the evals cannot change the simulation however the agent answers.
 
 Setup (once): create a LangSmith account at https://smith.langchain.com →
 Settings → API Keys → create a key, then in `agent/.env`:
