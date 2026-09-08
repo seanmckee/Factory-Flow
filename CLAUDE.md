@@ -770,7 +770,22 @@ compared pair is parent/child in either direction, a vertical "fork" reference
 line marks where the shared history ends — the seam the payback question
 starts from. Compare state lives in `useSimulationPage` (`compareRunId`,
 `compareRun`, `compareSeries`, `selectCompare`) because `loadSeries` owns the
-shared-bucket rule; `selectRun` resets it. Both branches still read **live
+shared-bucket rule; `selectRun` resets it. **The pair is also URL state** —
+`?run=&compare=`, built and parsed in one place (`simulation/runLink.ts`,
+pure and tested) so a link and the URL a selection writes cannot drift. The
+page seeds from the URL as it was *on open* (read from `window.location`, not
+subscribed — the list-loading effect must not re-run and re-seed every time a
+selection rewrites the query), applies a compare only once the primary run's
+summary is in (`selectCompare` needs its `tickNum` for the shared bucket),
+and opens **Trends** when a compare is present, since a compare parameter has
+no other purpose. Ids are validated against the loaded list rather than left
+to a 404: a link outlives the run it points at, so a missing id toasts and
+falls back to the newest run instead of opening a page that reports a failed
+fetch. Selection writes back with `replace`, not a push — picking runs is
+adjusting a view, and every click of the compare Select would otherwise be a
+history entry to back out of. This is what lets the agent's verdict card link
+at the pair it just judged (variant primary, control dashed), and what makes
+a comparison shareable at all. Both branches still read **live
 demand** (orders, prices, allocations) via `loadRunState`, so editing demand
 between branch advances diverges them for a reason the seed doesn't explain —
 same as two same-seed runs, not an RNG bug. The dashboard deliberately stays

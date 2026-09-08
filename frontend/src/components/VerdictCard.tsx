@@ -1,6 +1,8 @@
-import { Scale } from "lucide-react";
+import { ChartLine, Scale } from "lucide-react";
+import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { formatDays, ticksToDays } from "../simulation/simTime";
+import { runLink } from "../simulation/runLink";
 import type { ComparisonConstraint, RunComparison } from "../agent/verdict";
 import {
   barFraction,
@@ -129,6 +131,19 @@ export default function VerdictCard({ verdict }: { verdict: RunComparison }) {
       <p className="text-xs leading-relaxed text-muted-foreground">
         {verdict.summary}
       </p>
+
+      {/* The table is the money; the chart is the shape of it over time —
+          where the branches parted and when the decision earned its cost
+          back. That chart already exists, so the card links at it rather
+          than redrawing it. The variant leads, since it is the run under
+          test; the control overlays it dashed. */}
+      <Link
+        to={runLink(verdict.variant.runId, verdict.baseline.runId)}
+        className="flex w-fit items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+      >
+        <ChartLine className="size-3.5" />
+        Open both net curves on Trends
+      </Link>
     </section>
   );
 }
