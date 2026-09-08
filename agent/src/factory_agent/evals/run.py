@@ -23,8 +23,15 @@ from langsmith import Client, aevaluate
 
 from .. import sim_client
 from ..agent import get_agent
+from ..comparator import compare
 from ..config import settings
-from .dataset import best_run, build_examples, correctness
+from .dataset import (
+    best_run,
+    build_examples,
+    comparable_pair,
+    correctness,
+    verdict_window,
+)
 
 DATASET_NAME = "factory-analyst-basic"
 
@@ -54,7 +61,10 @@ async def build_dataset(client: Client) -> str:
     best_floor = await sim_client.get_json(f"/api/runs/{best['id']}/floor")
     work_orders = await sim_client.get_json("/api/work-orders")
 
-    examples = build_examples(runs, summaries, best_metrics, best_floor, work_orders)
+    verdict = await build_verdict(summaries)
+    examples = build_examples(
+        runs, summaries, best_metrics, best_floor, work_orders, verdict
+    )
 
     if client.has_dataset(dataset_name=DATASET_NAME):
         dataset = client.read_dataset(dataset_name=DATASET_NAME)
@@ -67,8 +77,43 @@ async def build_dataset(client: Client) -> str:
             description="Factory Flow analyst: questions with ground truth computed from the sim itself.",
         )
     client.create_examples(dataset_id=dataset.id, examples=examples)
-    print(f"dataset '{DATASET_NAME}': {len(examples)} examples (best run #{best['id']})")
+    print(
+        f"dataset '{DATASET_NAME}': {len(examples)} examples "
+        f"(best run #{best['id']})"
+    )
+    if verdict is None:
+        # said out loud, because a smaller suite that still scores 100% is the
+        # kind of quiet regression an eval is supposed to catch
+        print(
+            "  no two runs share a tick, so the comparison examples are absent "
+            "— advance a fork and its parent to the same tick to get them back"
+        )
     return DATASET_NAME
+
+
+async def build_verdict(summaries: list[dict]) -> dict | None:
+    """The deterministic verdict for a comparable pair, or None if the sim
+    holds none.
+
+    Ground truth computed the way the tool computes it: the comparator's own
+    window rule, its own windowed metrics, its own arithmetic. What the
+    examples then score is whether the agent's prose carries those figures —
+    not whether the comparator is right, which is what its unit tests are
+    for and which needs no model.
+    """
+    pair = comparable_pair(summaries)
+    if pair is None:
+        return None
+    baseline, variant = pair
+    window = verdict_window(baseline, variant)
+    params = {"fromTick": window["fromTick"], "toTick": window["toTick"]}
+    baseline_metrics = await sim_client.get_json(
+        f"/api/runs/{baseline['id']}/metrics", params
+    )
+    variant_metrics = await sim_client.get_json(
+        f"/api/runs/{variant['id']}/metrics", params
+    )
+    return compare(baseline, baseline_metrics, variant, variant_metrics)
 
 
 async def target(inputs: dict) -> dict:
@@ -90,7 +135,22 @@ async def target(inputs: dict) -> dict:
     return {
         "answer": message_text(result["messages"][-1]),
         "paused": [pause.value for pause in state.interrupts],
+        # Which tools the turn actually ran, so an example can score conduct
+        # rather than phrasing — "did it compute the verdict or retype one".
+        "tools": tools_used(result["messages"]),
     }
+
+
+def tools_used(messages: list) -> list[str]:
+    """Every tool the turn asked for, in order. Read off the AI messages
+    rather than the tool results, so a call the gate refused still counts as
+    an attempt — which is what a conduct check about *reaching for the right
+    tool* wants to know."""
+    names: list[str] = []
+    for message in messages:
+        for call in getattr(message, "tool_calls", None) or []:
+            names.append(call["name"])
+    return names
 
 
 async def main() -> None:

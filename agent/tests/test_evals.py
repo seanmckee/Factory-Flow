@@ -11,10 +11,12 @@ from factory_agent.evals.answers import (
 from factory_agent.evals.dataset import (
     best_run,
     build_examples,
+    comparable_pair,
     constraint_center,
     correctness,
     policy_forms,
 )
+from factory_agent.evals.run import tools_used
 
 
 class TestAnswerMatching:
@@ -86,7 +88,7 @@ class TestGroundTruth:
         examples = build_examples(
             [{"id": 5}], summaries, metrics, floor, orders
         )
-        assert len(examples) == 7
+        assert len(examples) == 8
         by_check = [example["outputs"]["check"] for example in examples]
         assert by_check.count("any_text") == 1  # the policy's spoken forms
         numbers = next(e for e in examples if e["outputs"]["check"] == "numbers")
@@ -99,6 +101,91 @@ class TestGroundTruth:
             "tool": "capital_action",
             "runId": 5,
         }
+        # and a multi-step request should ask once for the whole plan rather
+        # than stopping at the first write
+        assert {
+            "check": "pause",
+            "tool": "propose_experiment",
+            "runId": 5,
+        } in [example["outputs"] for example in examples]
+
+    def test_comparison_examples_are_absent_without_a_comparable_pair(self):
+        """A smaller suite that still scores 100% is exactly the quiet
+        regression an eval exists to catch, so the runner says so — but a
+        faked pair would score the agent against arithmetic nobody can
+        check."""
+        summaries = [
+            {"id": 5, "name": "Base", "netCents": 100, "releasePolicy": "conwip"},
+        ]
+        metrics = {"flow": {"workCenters": [{"workCenterId": 1, "utilization": 0.9}]}}
+        floor = {"workCenters": [{"workCenterId": 1, "name": "Cutter"}]}
+        without = build_examples([{"id": 5}], summaries, metrics, floor, [], None)
+        verdict = {
+            "baseline": {"runId": 58},
+            "variant": {"runId": 59},
+            "winnerRunId": 59,
+            "netDeltaCents": 448_775,
+        }
+        with_pair = build_examples(
+            [{"id": 5}], summaries, metrics, floor, [], verdict
+        )
+        assert len(with_pair) - len(without) == 2
+        checks = [example["outputs"]["check"] for example in with_pair]
+        assert "verdict" in checks
+        assert "used_tool" in checks
+
+
+class TestComparablePair:
+    def test_a_fork_and_its_parent_are_preferred(self):
+        runs = [
+            {"id": 58, "tickNum": 100, "parentRunId": None},
+            {"id": 59, "tickNum": 100, "parentRunId": 58},
+            {"id": 60, "tickNum": 100, "parentRunId": None},
+        ]
+        assert comparable_pair(runs) == (runs[0], runs[1])
+
+    def test_two_unrelated_runs_at_one_tick_will_do(self):
+        runs = [
+            {"id": 58, "tickNum": 100, "parentRunId": None},
+            {"id": 60, "tickNum": 100, "parentRunId": None},
+        ]
+        assert comparable_pair(runs) == (runs[0], runs[1])
+
+    def test_runs_at_different_ticks_are_no_pair(self):
+        # The comparator refuses an unequal-tick pair, so ground truth cannot
+        # be built from one — that comparison measures durations.
+        runs = [
+            {"id": 58, "tickNum": 100, "parentRunId": None},
+            {"id": 59, "tickNum": 200, "parentRunId": 58},
+        ]
+        assert comparable_pair(runs) is None
+
+    def test_one_run_is_no_pair(self):
+        assert comparable_pair([{"id": 58, "tickNum": 100}]) is None
+        assert comparable_pair([]) is None
+
+
+class TestToolsUsed:
+    def test_it_reads_the_calls_the_turn_asked_for_in_order(self):
+        from langchain_core.messages import AIMessage
+
+        messages = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "get_run", "args": {}, "id": "a"}],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "compare_runs", "args": {}, "id": "b"}],
+            ),
+            AIMessage(content="Done."),
+        ]
+        assert tools_used(messages) == ["get_run", "compare_runs"]
+
+    def test_a_turn_with_no_tools_used_none(self):
+        from langchain_core.messages import AIMessage
+
+        assert tools_used([AIMessage(content="Hello.")]) == []
 
 
 class TestCorrectnessDispatch:
@@ -140,6 +227,37 @@ class TestCorrectnessDispatch:
             )
             == 1
         )
+
+    def test_a_verdict_needs_the_winner_and_the_delta(self):
+        reference = {
+            "check": "verdict",
+            "winnerRunId": 59,
+            "netDeltaCents": 448_775,
+        }
+        assert (
+            self.score("Run #59 won by $4,487.75 of net profit.", reference) == 1
+        )
+        # naming the winner without the figure is the half that could be
+        # guessed, so it is not enough
+        assert self.score("Run #59 won.", reference) == 0
+        assert self.score("It won by $4,487.75.", reference) == 0
+
+    def test_a_dead_heat_needs_only_the_delta(self):
+        # There is no winner to name, and inventing one would be wrong.
+        reference = {"check": "verdict", "winnerRunId": None, "netDeltaCents": 0}
+        assert self.score("They net the same — a $0.00 difference.", reference) == 1
+
+    def test_used_tool_scores_the_call_not_the_claim(self):
+        reference = {"check": "used_tool", "tool": "compare_runs"}
+        ran = {"answer": "Throughput moved most.", "tools": ["compare_runs"]}
+        assert correctness({}, ran, reference)["score"] == 1
+        # subtracting two summaries by hand is the thing this check exists to
+        # catch, however confident the prose sounds
+        by_hand = {
+            "answer": "Throughput moved most.",
+            "tools": ["get_run", "get_run"],
+        }
+        assert correctness({}, by_hand, reference)["score"] == 0
 
     def test_wrong_answers_score_zero(self):
         assert self.score("7 runs", {"check": "number", "value": 6}) == 0
