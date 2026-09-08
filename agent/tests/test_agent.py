@@ -9,7 +9,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt.tool_node import _infer_handled_types
 
 from factory_agent.agent import (
-    ANALYST_TOOL_NODE,
+    TOOL_NODE,
     _chunk_text,
     sse_event,
     tool_error_message,
@@ -59,7 +59,7 @@ def tool_graph():
     """The tool node behind a one-node graph — a ToolNode needs a runtime, and
     compiling one is the public way to give it one."""
     builder = StateGraph(MessagesState)
-    builder.add_node("tools", ANALYST_TOOL_NODE)
+    builder.add_node("tools", TOOL_NODE)
     builder.add_edge(START, "tools")
     builder.add_edge("tools", END)
     return builder.compile()

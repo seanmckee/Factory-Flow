@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .agent import stream_chat
+from .agent import stream_chat, stream_resume
 from .config import settings
 
 app = FastAPI(title="Factory Flow Agent")
@@ -58,14 +58,40 @@ class ChatRequest(BaseModel):
     threadId: str | None = None
 
 
+SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+
+
 @app.post("/chat")
 async def chat(body: ChatRequest) -> StreamingResponse:
-    """One user turn, streamed as SSE events (token / tool / done / error).
-    The threadId keys the conversation's memory (in-process for now), and the
-    done event echoes it so the client can continue the thread."""
+    """One user turn, streamed as SSE events (token / tool / approval / done /
+    error). The threadId keys the conversation's memory (in-process for now),
+    and the done event echoes it so the client can continue the thread.
+
+    A turn that ends on an `approval` event is not finished — it is paused
+    inside the graph, waiting for /chat/resume on the same thread."""
     thread_id = body.threadId or str(uuid.uuid4())
     return StreamingResponse(
         stream_chat(body.message, thread_id),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers=SSE_HEADERS,
+    )
+
+
+class ResumeRequest(BaseModel):
+    threadId: str = Field(min_length=1)
+    approved: bool
+    # why it was declined, passed to the model as part of the tool result so
+    # it can answer sensibly instead of guessing
+    note: str | None = Field(default=None, max_length=1000)
+
+
+@app.post("/chat/resume")
+async def resume(body: ResumeRequest) -> StreamingResponse:
+    """A human's decision on a paused write. Streams the continuation on the
+    same SSE vocabulary as /chat, so the client reuses one reader — including
+    a further `approval` event when the model asked for more than one write."""
+    return StreamingResponse(
+        stream_resume(body.threadId, body.approved, body.note),
+        media_type="text/event-stream",
+        headers=SSE_HEADERS,
     )
