@@ -35,6 +35,22 @@ export type AgentEvent =
    * until narrowed — see `verdict.ts` for the comparator's shape.
    */
   | { type: "result"; name: string; data: unknown }
+  /**
+   * A long-running tool saying how far it has got. Only the chunked advance
+   * emits these today — a jump of many committed requests, minutes long,
+   * which would otherwise be silence. Fields are optional because the channel
+   * is generic and each tool shapes its own payload; `tool` says whose it is.
+   */
+  | {
+      type: "progress";
+      tool: string;
+      runId?: number;
+      tickNum?: number;
+      fromTick?: number;
+      toTick?: number;
+      dayTicks?: number | null;
+      wipCount?: number | null;
+    }
   | ({ type: "approval" } & ApprovalRequest)
   | { type: "done"; threadId: string }
   | { type: "error"; message: string };

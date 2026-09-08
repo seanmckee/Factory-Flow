@@ -420,8 +420,9 @@ import of the engine — so it inherits the run locks, frozen-config semantics
 and seed reproducibility like any other client.
 
 - **The read/write split is a module boundary, on purpose.** `tools.py` holds
-  the eight GETs, `actions.py` the five verbs (fork, advance, capital action,
-  release policy, manual release), and `ACTION_TOOL_NAMES` — derived from the
+  the eight GETs, `actions.py` the six verbs (fork, advance, advance to a
+  tick, capital action, release policy, manual release), and
+  `ACTION_TOOL_NAMES` — derived from the
   list, never hand-written — is what the approval gate matches on. A verb
   added to `actions.py` is gated by construction; a verb added anywhere else
   would not be, which is the one mistake this layout exists to prevent. The
@@ -480,7 +481,7 @@ and seed reproducibility like any other client.
   above its `interrupt()` must stay read-only and idempotent. Its reads run
   twice per approved write; that is the price of the pause.
 - SSE vocabulary, shared by `POST /chat` and `POST /chat/resume`:
-  `token` / `tool` / `result` / `approval` / `done` / `error`. A turn that ends
+  `token` / `tool` / `result` / `progress` / `approval` / `done` / `error`. A turn that ends
   on `approval` is **not finished** — it is paused in the graph. The frontend
   parses it in `src/agent/sse.ts` (pure, unit-tested) and renders the pause as
   a card in the transcript.
@@ -498,6 +499,39 @@ and seed reproducibility like any other client.
   narrows it with `parseComparison`, which returns null rather than throwing
   on version skew: draw nothing and leave the reply standing, the same rule
   `parseSseChunk` follows for a malformed frame.
+- **One approval per jump, not per request.** The backend caps an advance at
+  20,000 ticks while a staffed day is 28,800, so a 15-day two-branch
+  experiment was **44 approvals, 43 of them "yes, keep going"**.
+  `advance_to_tick` does that chunking inside the tool, which takes it to one
+  approval and changes nothing about authority — the cap is about synchronous
+  request time, not permission. It takes an **absolute target**, not a
+  duration, because that is what makes a fair comparison fair by
+  construction: two branches advanced to the same `to_tick` have run the same
+  time whatever state each was in.
+- **`control.py` is the transport around a long tool**, and neither half may
+  be load-bearing for correctness. `emit_progress` is best-effort and catches
+  **both** `RuntimeError` and `KeyError` — the langgraph source settles this,
+  not intuition: `get_stream_writer` is
+  `get_config()[CONF][CONFIG_KEY_RUNTIME].stream_writer`, so with no runnable
+  context `get_config` raises RuntimeError, while inside a bare
+  `tool.ainvoke()` (a runnable context with no pregel runtime — how every
+  unit test calls a tool) the lookup raises KeyError. Catching only the first
+  left the tool working in production and failing in its own tests. Progress
+  rides `stream_mode="custom"`, which is the only mode that surfaces what a
+  tool writes. And a **stop is a request to stop dispatching, never an abort
+  mid-flight**: the backend commits every advance it accepted whether or not
+  anyone is listening, so the only honest place to stop is a boundary the run
+  has already committed — the same rule the simulator page's jump follows. A
+  stop is one-shot and cleared at the start of every turn, or a click about
+  the last tool would cut the next one short. `POST /chat/stop` sets it; the
+  answer comes back on the stream that is still open, with `stopped: true`
+  and the tick reached, which is a real result rather than a failure since
+  advancing is resumable.
+- **The chat page owns the thread id from the first turn** (a client
+  `crypto.randomUUID()`), rather than learning it from the `done` event. It
+  used to arrive at the end of a turn, which is too late to stop anything —
+  a chunked advance runs for minutes *inside* the turn that would have told
+  the page where to send the stop.
 - **The verdict is a table, and `VerdictCard` draws it, not a chart.** "Which
   branch won, by how much, and which line moved" is six rows of exact cents
   against two columns; a chart reads that worse than a table and a paragraph

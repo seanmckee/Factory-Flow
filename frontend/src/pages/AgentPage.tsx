@@ -7,19 +7,29 @@ import {
   RotateCcw,
   Send,
   ShieldAlert,
+  Square,
   Wrench,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import PageHeader from "../components/PageHeader";
-import { getAgentHealth, resumeChat, streamChat } from "../api/agent";
+import { getAgentHealth, resumeChat, stopChat, streamChat } from "../api/agent";
 import type { AgentEvent, ApprovalRequest } from "../agent/sse";
 import { parseComparison, type RunComparison } from "../agent/verdict";
+import { formatTickTime } from "../simulation/simTime";
 import VerdictCard from "../components/VerdictCard";
 import { useToast } from "../toast/ToastContext";
 
 type ToolCall = { name: string; input: Record<string, unknown> };
+/** a chunked advance mid-flight: where it started, where it is, where it ends */
+type AdvanceProgress = {
+  runId: number | null;
+  tickNum: number;
+  fromTick: number;
+  toTick: number;
+  dayTicks: number | null;
+};
 type Decision = "pending" | "approved" | "declined";
 type ChatItem =
   | { kind: "user"; text: string }
@@ -44,6 +54,7 @@ const TOOL_LABELS: Record<string, string> = {
   set_release_policy: "changed the release policy",
   release_work_order: "released a work order",
   compare_runs: "compared two runs",
+  advance_to_tick: "advanced a run",
 };
 
 function toolLabel(call: ToolCall): string {
@@ -73,6 +84,14 @@ export default function AgentPage() {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [threadId, setThreadId] = useState<string | null>(null);
+  /**
+   * The newest progress payload from a long-running tool, or null when
+   * nothing long is running. Held outside the transcript because it is a
+   * *replacing* readout rather than a message — an advance emits one per
+   * committed request, and appending them would bury the conversation.
+   */
+  const [progress, setProgress] = useState<AdvanceProgress | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [warning, setWarning] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -137,6 +156,16 @@ export default function AgentPage() {
           ...last,
           verdicts: [...last.verdicts, verdict],
         }));
+    } else if (event.type === "progress") {
+      if (event.tickNum !== undefined && event.toTick !== undefined) {
+        setProgress({
+          runId: event.runId ?? null,
+          tickNum: event.tickNum,
+          fromTick: event.fromTick ?? event.tickNum,
+          toTick: event.toTick,
+          dayTicks: event.dayTicks ?? null,
+        });
+      }
     } else if (event.type === "approval") {
       const request: ApprovalRequest = {
         tool: event.tool,
@@ -164,6 +193,12 @@ export default function AgentPage() {
   const send = async (text: string) => {
     const message = text.trim();
     if (!message || busy || awaiting) return;
+    // The thread id is the client's from the first turn, not the server's.
+    // It used to arrive on `done`, which is too late to stop anything: a
+    // chunked advance runs for minutes inside the very turn that would have
+    // told us where to send the stop.
+    const id = threadId ?? crypto.randomUUID();
+    setThreadId(id);
     setDraft("");
     setBusy(true);
     setItems((previous) => [
@@ -172,11 +207,13 @@ export default function AgentPage() {
       { kind: "assistant", text: "", tools: [], verdicts: [] },
     ]);
     try {
-      await streamChat(message, threadId, handleEvent);
+      await streamChat(message, id, handleEvent);
     } catch (error) {
       failed(error);
     } finally {
       setBusy(false);
+      setProgress(null);
+      setStopping(false);
     }
   };
 
@@ -198,12 +235,32 @@ export default function AgentPage() {
       failed(error);
     } finally {
       setBusy(false);
+      setProgress(null);
+      setStopping(false);
+    }
+  };
+
+  /**
+   * Stops a long tool at its next committed boundary. Deliberately not a
+   * cancel of the request: the backend commits each advance it accepted, so
+   * aborting here would only leave this page claiming a tick the run has
+   * already passed. The tool answers on the stream that is still open.
+   */
+  const stop = async () => {
+    if (threadId === null || stopping) return;
+    setStopping(true);
+    try {
+      await stopChat(threadId);
+    } catch (error) {
+      failed(error);
+      setStopping(false);
     }
   };
 
   const reset = () => {
     setItems([]);
     setThreadId(null);
+    setProgress(null);
   };
 
   return (
@@ -305,6 +362,10 @@ export default function AgentPage() {
         )}
       </div>
 
+      {progress && (
+        <AdvanceReadout progress={progress} stopping={stopping} onStop={stop} />
+      )}
+
       <form
         className="mt-4 flex shrink-0 items-center gap-2"
         onSubmit={(event) => {
@@ -327,6 +388,59 @@ export default function AgentPage() {
           Send
         </Button>
       </form>
+    </div>
+  );
+}
+
+
+/**
+ * A chunked advance mid-flight, with Stop beside it — the simulator page's
+ * own convention for a fast-forward: progress inline, never a modal, and Stop
+ * lands on a committed boundary rather than aborting in flight.
+ *
+ * It replaces itself rather than accumulating. An advance emits one of these
+ * per committed request, and a day is 22 of them; appended, they would bury
+ * the conversation they are supposed to be part of.
+ */
+function AdvanceReadout({
+  progress,
+  stopping,
+  onStop,
+}: {
+  progress: AdvanceProgress;
+  stopping: boolean;
+  onStop: () => void;
+}) {
+  const span = progress.toTick - progress.fromTick;
+  const done = span > 0 ? (progress.tickNum - progress.fromTick) / span : 1;
+  const dayTicks = progress.dayTicks ?? undefined;
+  return (
+    <div className="mt-4 flex shrink-0 items-center gap-3 rounded-lg border bg-card px-3 py-2 text-xs">
+      <LoaderCircle className="size-4 shrink-0 animate-spin text-muted-foreground" />
+      <span className="tabular-nums">
+        {progress.runId === null ? "Advancing" : `Advancing #${progress.runId}`} ·{" "}
+        {formatTickTime(progress.tickNum, dayTicks)} →{" "}
+        {formatTickTime(progress.toTick, dayTicks)}
+      </span>
+      <div className="h-1.5 min-w-16 flex-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-chart-2"
+          style={{ width: `${Math.min(100, Math.max(0, done * 100))}%` }}
+        />
+      </div>
+      <span className="shrink-0 tabular-nums text-muted-foreground">
+        {Math.round(done * 100)}%
+      </span>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={onStop}
+        disabled={stopping}
+      >
+        <Square className="size-3" />
+        {stopping ? "Stopping…" : "Stop"}
+      </Button>
     </div>
   );
 }

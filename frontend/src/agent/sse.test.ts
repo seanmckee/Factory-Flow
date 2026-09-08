@@ -75,3 +75,19 @@ it("parses a tool result, whose data stays unknown until narrowed", () => {
   expect(buffer).toBe("");
   expect(events).toEqual([payload]);
 });
+
+it("parses a progress event from a long-running tool", () => {
+  const payload = {
+    type: "progress",
+    tool: "advance_to_tick",
+    runId: 59,
+    tickNum: 106_400,
+    fromTick: 86_400,
+    toTick: 144_000,
+    dayTicks: 28_800,
+    wipCount: 4,
+  };
+  const { events, buffer } = parseSseChunk("", `data: ${JSON.stringify(payload)}\n\n`);
+  expect(buffer).toBe("");
+  expect(events).toEqual([payload]);
+});

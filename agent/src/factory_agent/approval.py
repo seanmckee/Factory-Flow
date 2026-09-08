@@ -17,6 +17,10 @@ from .sim_client import SimApiError
 
 TICKS_PER_HOUR = 3600
 
+#: Mirrors the backend cap, so the card can say how many requests a jump is —
+#: the number that used to be the number of approvals.
+MAX_TICKS_PER_REQUEST = 20000
+
 
 def format_dollars(cents: int) -> str:
     """Cents as money, signed. Salvage comes back negative."""
@@ -75,6 +79,18 @@ def describe(name: str, args: dict, run: dict, center: dict | None) -> str:
         return (
             f"Advance {format_span(ticks, day_ticks)} — {at} → {end}. "
             "Rent, wages and carrying accrue the whole way."
+        )
+
+    if name == "advance_to_tick":
+        target = int(args.get("to_tick") or 0)
+        current = int(run.get("tickNum") or 0)
+        ticks = max(0, target - current)
+        requests = -(-ticks // MAX_TICKS_PER_REQUEST)  # ceiling division
+        return (
+            f"Advance to {format_tick(target, day_ticks)} — "
+            f"{format_span(ticks, day_ticks)} from {at}, in {requests} "
+            f"request{'' if requests == 1 else 's'}. Rent, wages and carrying "
+            "accrue the whole way, and it can be stopped part-way."
         )
 
     if name == "capital_action":

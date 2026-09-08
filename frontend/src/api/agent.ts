@@ -67,6 +67,21 @@ export async function streamChat(
 }
 
 /**
+ * Asks a long-running tool on this thread to stop at its next committed
+ * boundary. Not a cancel: the backend commits every advance it accepted, so
+ * the run keeps those ticks and the tool reports where it stopped. Fire and
+ * forget — the answer arrives on the open stream, not here.
+ */
+export async function stopChat(threadId: string): Promise<void> {
+  const response = await fetch(`${AGENT_BASE}/chat/stop`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ threadId }),
+  });
+  if (!response.ok) throw new Error(`Agent responded ${response.status}`);
+}
+
+/**
  * Answers a paused write and streams what follows. Declining is not a
  * cancellation: the model is told, and replies.
  */

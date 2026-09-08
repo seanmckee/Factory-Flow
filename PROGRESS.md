@@ -292,15 +292,22 @@ User calls taken before building:
       whether to take a markdown dependency or render the small subset the
       model actually emits; a dependency that runs model output through an
       HTML renderer wants a look at sanitisation either way.
-- [ ] **8.15 `advance_to_tick` — chunk inside the tool.** One call the gate
-      sees once, chunking to the backend's cap internally, streaming progress
-      as each committed advance lands (the SSE `progress` event lands here,
-      with its emitter), and honouring a Stop. 44 approvals → 2
-      with no change to authority at all — the same trick the page's jump
-      already plays. Progress is not optional: the 15-day playthrough is ~5
-      wall-minutes, and a silent tool that long reads as a hang. Stop matters
-      more here than anywhere else, because `advance` is the one verb with no
-      inverse.
+- [x] **8.15 `advance_to_tick`** — one approval for a jump of many requests
+      (44 → 1 for a 15-day branch), taking an **absolute target** so two
+      branches land on the same tick by construction. `control.py` carries
+      the transport: `progress` on `stream_mode="custom"`, and a stop that
+      stops *dispatching* at a committed boundary rather than aborting in
+      flight, one-shot and cleared per turn. The chat page now owns its
+      thread id from the first turn — it used to arrive on `done`, too late
+      to stop a tool running inside that same turn. Two things the langgraph
+      source settled: `get_stream_writer` raises **KeyError** (not
+      RuntimeError) inside a bare `tool.ainvoke()`, so best-effort progress
+      has to catch both or it works in production and fails in its own tests;
+      and `custom` is the only stream mode that surfaces a tool's writes.
+      **Not yet browser-verified** — the backend was down when this was
+      finished, and a live pass means advancing a real run, which is
+      irreversible; worth doing on a throwaway run before trusting the Stop
+      button.
 - [ ] **8.16 Budgeted plan approval.** The plan and its budget become the
       approved object: one card naming the runs, the verbs, the tick horizon
       and the spend ceiling, built from the sim as ever; execution proceeds

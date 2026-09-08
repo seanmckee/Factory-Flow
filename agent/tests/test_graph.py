@@ -254,6 +254,64 @@ async def test_approving_executes_the_write(monkeypatch):
     assert state.interrupts == ()
 
 
+async def test_a_long_advance_streams_progress_and_pauses_once(monkeypatch):
+    """The point of the chunked advance: ONE approval for a jump that is many
+    requests, and progress on the stream so minutes of advancing are not
+    silence. The custom stream mode is what carries it — no other mode
+    surfaces what a tool writes."""
+    advances: list[int] = []
+    state = {"tick": 86_400}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={**RUN, "tickNum": state["tick"]})
+        advances.append(json.loads(request.content)["ticks"])
+        state["tick"] += advances[-1]
+        return httpx.Response(
+            200,
+            json={
+                "tickNum": state["tick"],
+                "throughputCents": 0,
+                "operatingExpenseCents": 0,
+                "carryingCostCents": 0,
+                "wageCents": 0,
+                "scrappedCount": 0,
+                "wipCount": 4,
+                "backlogCount": 0,
+                "autoReleased": [],
+            },
+        )
+
+    mock_backend(monkeypatch, handler)
+    scripted(
+        monkeypatch,
+        call("advance_to_tick", {"run_id": 39, "to_tick": 144_000}),
+        AIMessage(content="Advanced to Day 5."),
+    )
+    graph = build_graph(InMemorySaver())
+    config = thread("jump")
+
+    await graph.ainvoke(turn("Advance run 39 to day 5"), config)
+    # one pause for the whole jump, not one per request
+    pause = (await graph.aget_state(config)).interrupts
+    assert len(pause) == 1
+    assert pause[0].value["tool"] == "advance_to_tick"
+    assert "in 3 requests" in pause[0].value["summary"]
+    assert advances == []
+
+    events = [
+        json.loads(line.removeprefix("data: ").strip())
+        async for line in agent_module._stream(
+            graph, Command(resume={"approved": True}), "jump"
+        )
+    ]
+
+    assert advances == [20_000, 20_000, 17_600]
+    progress = [event for event in events if event["type"] == "progress"]
+    assert [event["tickNum"] for event in progress] == [106_400, 126_400, 144_000]
+    assert progress[0]["toTick"] == 144_000
+
+
 async def test_rejecting_changes_nothing_and_tells_the_model_why(monkeypatch):
     posted = sim(monkeypatch)
     scripted(
