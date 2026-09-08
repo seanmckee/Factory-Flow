@@ -281,17 +281,16 @@ User calls taken before building:
       both ways: the link lands on the overlaid curves with the fork seam, and
       `?run=999` fell back to the newest run and rewrote its own URL.
 
-- [ ] **8.14c Render the agent's markdown** (user call, 2026-09-08: soon, and
-      probably during this stretch of work). The transcript draws replies with
-      `whitespace-pre-wrap`, so the model's `**bold**`, headings and bullets
-      arrive as literal asterisks and hyphens — and the model leans on them
-      heavily, because a P&L answer is a list of labelled figures. It reads as
-      broken beside the verdict card, which is exactly the comparison a reader
-      makes. Predates the card (it shipped with the chat window in 8.10) and
-      is deliberately not folded into a feature commit. The open question is
-      whether to take a markdown dependency or render the small subset the
-      model actually emits; a dependency that runs model output through an
-      HTML renderer wants a look at sanitisation either way.
+- [x] **8.14c Render the agent's markdown** — `react-markdown` +
+      `remark-gfm` behind a component map, so styling stays on semantic
+      tokens and every heading flattens to one weight. Chose the dependency
+      over a subset renderer because the alternative is a parser, not a
+      formatter, and because react-markdown yields React elements — no
+      `dangerouslySetInnerHTML` in the path. `rehype-raw` deliberately
+      absent: model output is untrusted text, so raw HTML is escaped, and
+      there is a test for it. 9 tests via `renderToStaticMarkup` (no DOM
+      needed), and browser-verified — bold, bullets, italics and a real
+      table.
 - [x] **8.15 `advance_to_tick`** — one approval for a jump of many requests
       (44 → 1 for a 15-day branch), taking an **absolute target** so two
       branches land on the same tick by construction. `control.py` carries

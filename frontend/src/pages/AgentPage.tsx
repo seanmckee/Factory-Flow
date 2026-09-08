@@ -24,6 +24,7 @@ import {
 } from "../api/agent";
 import type { AgentEvent, AgentPlan, ApprovalRequest } from "../agent/sse";
 import { isSpent, planBounds, spentFraction } from "../agent/planDisplay";
+import Markdown from "../agent/Markdown";
 import { parseComparison, type RunComparison } from "../agent/verdict";
 import { formatTickTime } from "../simulation/simTime";
 import VerdictCard from "../components/VerdictCard";
@@ -388,11 +389,7 @@ export default function AgentPage() {
                   {item.text === "" && busy && index === items.length - 1 ? (
                     <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
                   ) : (
-                    item.text !== "" && (
-                      <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                        {item.text}
-                      </p>
-                    )
+                    item.text !== "" && <Markdown>{item.text}</Markdown>
                   )}
                 </div>
               );

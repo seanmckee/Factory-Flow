@@ -587,6 +587,23 @@ and seed reproducibility like any other client.
   used to arrive at the end of a turn, which is too late to stop anything —
   a chunked advance runs for minutes *inside* the turn that would have told
   the page where to send the stop.
+- **The agent's replies are rendered markdown** (`agent/Markdown.tsx`), not
+  `whitespace-pre-wrap`. The model leans on bold, bullets and tables because
+  a P&L answer *is* a list of labelled figures, and literal asterisks read as
+  broken beside the verdict card. It is `react-markdown` + `remark-gfm`
+  rather than a subset renderer of our own, on two grounds: the alternative
+  is a *parser*, not a formatter (an asterisk inside a code span is not
+  emphasis), and react-markdown yields React elements, so there is no
+  `dangerouslySetInnerHTML` in the path. **`rehype-raw` is deliberately
+  absent** — model output is untrusted text here, so raw HTML is escaped
+  rather than rendered; don't add a raw-HTML plugin. `remark-gfm` is for
+  **tables** specifically, which the model reaches for on any comparison.
+  Styling is a component map, not a typography plugin, so every value stays a
+  semantic token; every heading level flattens to one weight, because the
+  model's `h2` and `h4` are emphasis rather than a document outline. The
+  parser lands in the code-split `/agent` chunk, not the main bundle. Tested
+  with `renderToStaticMarkup` — the suite is `environment: node` and needs no
+  DOM for this.
 - **The verdict is a table, and `VerdictCard` draws it, not a chart.** "Which
   branch won, by how much, and which line moved" is six rows of exact cents
   against two columns; a chart reads that worse than a table and a paragraph
