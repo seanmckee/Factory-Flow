@@ -272,9 +272,26 @@ User calls taken before building:
       compare state has to become URL-addressable first, which is
       `SimulationPage` work and independently useful, since it also makes a
       comparison shareable.
-- [ ] **8.14b Open on Trends** — put `run` and `compare` in the URL so
-      `useSimulationPage` seeds from it, then link the verdict card at the
-      pair it just judged. Shareable comparisons fall out of the same change.
+- [x] **8.14b Open on Trends** — `?run=&compare=` as URL state, built and
+      parsed by the pure `simulation/runLink.ts`; the page seeds from the URL
+      on open, opens Trends when a compare is present, validates ids against
+      the loaded list (a shared link outlives a deleted run, so it toasts and
+      falls back rather than 404ing), and writes back with `replace`. The
+      verdict card links the pair it judged, variant primary. Browser-verified
+      both ways: the link lands on the overlaid curves with the fork seam, and
+      `?run=999` fell back to the newest run and rewrote its own URL.
+
+- [ ] **8.14c Render the agent's markdown** (user call, 2026-09-08: soon, and
+      probably during this stretch of work). The transcript draws replies with
+      `whitespace-pre-wrap`, so the model's `**bold**`, headings and bullets
+      arrive as literal asterisks and hyphens — and the model leans on them
+      heavily, because a P&L answer is a list of labelled figures. It reads as
+      broken beside the verdict card, which is exactly the comparison a reader
+      makes. Predates the card (it shipped with the chat window in 8.10) and
+      is deliberately not folded into a feature commit. The open question is
+      whether to take a markdown dependency or render the small subset the
+      model actually emits; a dependency that runs model output through an
+      HTML renderer wants a look at sanitisation either way.
 - [ ] **8.15 `advance_to_tick` — chunk inside the tool.** One call the gate
       sees once, chunking to the backend's cap internally, streaming progress
       as each committed advance lands (the SSE `progress` event lands here,

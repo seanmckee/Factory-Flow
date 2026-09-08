@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { parseRunLink, runLinkParams } from "./runLink";
 import { ApiError, getJson } from "../api/client";
 import {
   advanceRun,
@@ -86,6 +88,16 @@ export function useSimulationPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRunLoading, setIsRunLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<ActiveTab>("floor");
+  const [, setSearchParams] = useSearchParams();
+  /**
+   * URL seeding happens once, on the first run list. Until it has, the sync
+   * effect below must not write — it would strip the very parameters it is
+   * about to read, since `runId` is still null while the list loads.
+   */
+  const seeded = useRef(false);
+  /** a compare id from the URL, held until the primary run's summary lands:
+   * `selectCompare` needs `run.tickNum` to pick the shared chart bucket */
+  const pendingCompare = useRef<number | null>(null);
   const [seriesLoading, setSeriesLoading] = useState(false);
   const [metricsLoading, setMetricsLoading] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
@@ -242,10 +254,31 @@ export function useSimulationPage() {
         setRuns(runList);
         setWorkOrders(orders);
         setSalesOrders(demand);
-        const latest = runList.at(-1);
-        if (latest) {
+        // A link decides what opens; otherwise the newest run does, as before.
+        // The URL as it was when the page opened, read rather than
+        // subscribed: this effect loads the run list, and re-running it every
+        // time a selection rewrites the query string would reload the world
+        // and re-seed from it.
+        const linked = parseRunLink(
+          new URLSearchParams(window.location.search),
+          runList,
+        );
+        if (linked.missing.length > 0) {
+          report(
+            new Error(
+              `Run ${linked.missing.join(" and ")} ${
+                linked.missing.length > 1 ? "are" : "is"
+              } no longer here`,
+            ),
+            "That link points at a deleted run",
+          );
+        }
+        pendingCompare.current = linked.compareRunId;
+        seeded.current = true;
+        const opening = linked.runId ?? runList.at(-1)?.id ?? null;
+        if (opening !== null) {
           setIsRunLoading(true);
-          setRunId(latest.id);
+          setRunId(opening);
         }
       } catch (error) {
         if (!cancelled) report(error, "Failed to load runs");
@@ -618,6 +651,35 @@ export function useSimulationPage() {
     );
     return mergeCompareNet(base, compareNet);
   }, [series, seriesBucket, run?.throughputCents, run?.netCents, compareRun, compareSeries]);
+
+  /**
+   * A compared pair from the URL, applied once the primary run's summary is
+   * in: `selectCompare` needs its `tickNum` to fetch both series at one
+   * shared chart bucket, which is what lands the two curves on the same
+   * ticks. Trends opens with it, because a compare parameter has no other
+   * purpose — the Floor and Dashboard tabs are one run's.
+   */
+  useEffect(() => {
+    const compareId = pendingCompare.current;
+    if (compareId === null || runId === null || !run) return;
+    pendingCompare.current = null;
+    setActiveTab("trends");
+    selectCompare(compareId);
+  }, [runId, run, selectCompare]);
+
+  /**
+   * The URL follows the selection, so what is on screen is always what a
+   * copied link reproduces. `replace` rather than a push: picking runs is
+   * adjusting a view, and every click of the compare Select would otherwise
+   * become a history entry to back out of.
+   */
+  useEffect(() => {
+    if (!seeded.current || pendingCompare.current !== null) return;
+    setSearchParams(
+      runId === null ? new URLSearchParams() : runLinkParams(runId, compareRunId),
+      { replace: true },
+    );
+  }, [runId, compareRunId, setSearchParams]);
 
   const changeTab = (next: ActiveTab) => {
     setActiveTab(next);
