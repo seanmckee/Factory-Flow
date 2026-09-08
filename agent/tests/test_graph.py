@@ -660,6 +660,75 @@ class TestBudgetedPlan:
         assert [request.url.path for request in posted] == ["/api/runs/39/actions"]
         assert (await graph.aget_state(config)).interrupts == ()
 
+    async def test_a_grant_can_be_revoked(self, monkeypatch):
+        """An authority nobody can withdraw is not one anybody should give.
+        Revoking writes the state directly — asking the model to please stop
+        using its budget would be a rule in a prompt again."""
+        posted = sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(),
+            AIMessage(content="Ready."),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Asked again."),
+        )
+        graph = build_graph(InMemorySaver())
+        monkeypatch.setattr(agent_module, "get_agent", lambda: graph)
+        config = thread("revoke")
+
+        await graph.ainvoke(turn("Test a press"), config)
+        await graph.ainvoke(Command(resume={"approved": True}), config)
+        assert (await graph.aget_state(config)).values["budget"] is not None
+
+        assert await agent_module.revoke_plan("revoke") is True
+        assert (await graph.aget_state(config)).values["budget"] is None
+
+        # and the write it used to cover now pauses again
+        await graph.ainvoke(turn("Buy the machine"), config)
+        assert len((await graph.aget_state(config)).interrupts) == 1
+        assert posted == []
+
+    async def test_revoking_nothing_is_not_an_error(self, monkeypatch):
+        graph = build_graph(InMemorySaver())
+        monkeypatch.setattr(agent_module, "get_agent", lambda: graph)
+        assert await agent_module.revoke_plan("never-granted") is False
+
+    async def test_the_grant_is_pushed_to_the_client_when_it_changes(
+        self, monkeypatch
+    ):
+        """The banner's remaining ceiling has to be live, or it states the
+        figure the plan was approved with rather than what is left."""
+        sim(monkeypatch)
+        scripted(
+            monkeypatch,
+            propose(),
+            call(
+                "capital_action",
+                {"run_id": 39, "kind": "buy_machine", "work_center_id": 98},
+                id="c1",
+            ),
+            AIMessage(content="Bought it."),
+        )
+        graph = build_graph(InMemorySaver())
+        config = thread("plan-events")
+
+        await graph.ainvoke(turn("Test a press"), config)
+        events = [
+            json.loads(line.removeprefix("data: ").strip())
+            async for line in agent_module._stream(
+                graph, Command(resume={"approved": True}), "plan-events"
+            )
+        ]
+
+        plans = [event["plan"] for event in events if event["type"] == "plan"]
+        # granted, then charged the sim's frozen $1,200
+        assert plans[-1]["spentCents"] == 120_000
+        assert plans[-1]["maxSpendCents"] == 200_000
+
     async def test_a_grant_does_not_cross_conversations(self, monkeypatch):
         """A new thread has no state, so it has no authority. This is the only
         thing standing between "a grant outlives its turn" and "a grant

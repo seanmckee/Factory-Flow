@@ -59,7 +59,7 @@ from .approval import build_approval, build_plan_approval
 from .budget import Budget, covers, spend
 from .comparator import COMPARATOR_TOOLS
 from .config import settings
-from .control import clear_stop
+from .control import clear_stop, emit_plan
 from .sim_client import SimApiError
 from .tools import ANALYST_TOOLS
 
@@ -233,6 +233,10 @@ async def review_calls(state: ChatState) -> dict:
     if pending is None:
         return {"approved": []}
 
+    # Read fresh from the state on every execution of this node, which is
+    # what makes the spend accounting safe: the node re-runs from the top on
+    # each resume, and a budget derived from the checkpoint each time replays
+    # to the same total, where one mutated in place would double-count.
     budget = state.get("budget")
     approved: list[str] = []
     answers: list[ToolMessage] = []
@@ -261,6 +265,7 @@ async def review_calls(state: ChatState) -> dict:
                 )
                 continue
             budget = payload["plan"]
+            emit_plan(budget)
             # Answered here rather than executed: the whole effect of asking
             # is the pause and the grant, so there is no tool to run.
             answers.append(
@@ -296,6 +301,10 @@ async def review_calls(state: ChatState) -> dict:
         if budget is not None and outside is None:
             approved.append(call["id"])
             budget = spend(budget, quoted)
+            # so the banner's remaining ceiling is live rather than the figure
+            # the plan was approved with
+            if quoted > 0:
+                emit_plan(budget)
             continue
 
         # `outsidePlan` is present only when a plan IS active and this call
@@ -504,6 +513,28 @@ async def stream_chat(message: str, thread_id: str) -> AsyncIterator[str]:
             agent, {"messages": [{"role": "user", "content": message}]}, thread_id
         ):
             yield event
+
+
+async def revoke_plan(thread_id: str) -> bool:
+    """Take back a granted experiment, so every write pauses again.
+
+    The counterpart to granting: an authority that outlives the turn that
+    asked for it must be cancellable without abandoning the conversation.
+    Writing the state directly rather than routing it through the model is
+    the point — revoking is the human's act, and asking the model to please
+    stop using its budget would be a rule in a prompt again.
+
+    Returns whether there was anything to revoke. Takes the thread's lock,
+    like every other write to a thread's state.
+    """
+    agent = get_agent()
+    config = {"configurable": {"thread_id": thread_id}}
+    async with _thread_locks[thread_id]:
+        state = await agent.aget_state(config)
+        if not (state.values or {}).get("budget"):
+            return False
+        await agent.aupdate_state(config, {"budget": None})
+        return True
 
 
 async def stream_resume(

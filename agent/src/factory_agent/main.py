@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from .agent import stream_chat, stream_resume
+from .agent import revoke_plan, stream_chat, stream_resume
 from .config import settings
 from .control import request_stop
 
@@ -99,6 +99,22 @@ async def stop(body: StopRequest) -> dict:
     """
     request_stop(body.threadId)
     return {"stopping": True, "threadId": body.threadId}
+
+
+@app.post("/chat/revoke")
+async def revoke(body: StopRequest) -> dict:
+    """Take back a granted experiment on this thread, so every change pauses
+    again.
+
+    The counterpart to approving a plan. A grant is checkpointed with the
+    conversation and therefore outlives the turn that asked for it, so it has
+    to be cancellable without abandoning the conversation — an authority
+    nobody can withdraw is not one anybody should give.
+
+    `revoked` is false when there was nothing to take back, which is not an
+    error: a second click, or a grant already exhausted.
+    """
+    return {"revoked": await revoke_plan(body.threadId), "threadId": body.threadId}
 
 
 class ResumeRequest(BaseModel):
