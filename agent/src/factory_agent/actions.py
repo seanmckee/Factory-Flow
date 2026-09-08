@@ -13,9 +13,10 @@ sim's rules rather than being trusted to follow them.
 
 import json
 
-from langchain_core.tools import tool
+from langchain_core.tools import ToolException, tool
 
 from . import sim_client
+from .control import emit_progress, stop_requested
 
 #: The backend caps one advance request; a run is resumable, so a longer jump
 #: is simply more calls. Mirrors MAX_TICKS_PER_REQUEST in the API's schemas.
@@ -58,6 +59,101 @@ async def advance_run(run_id: int, ticks: int) -> str:
     """
     return _compact(
         await sim_client.post_json(f"/api/runs/{run_id}/advance", {"ticks": ticks})
+    )
+
+
+@tool
+async def advance_to_tick(run_id: int, to_tick: int) -> str:
+    """Advance a run all the way to an absolute tick, in as many requests as
+    that takes. Use this rather than calling advance_run in a loop.
+
+    Give the TARGET tick, not a duration. That is what makes a fair comparison
+    fair by construction: advance both branches to the same to_tick and they
+    have run for the same time whatever state each was in. A run's dayTicks
+    ticks make one calendar day, so day N ends at N * dayTicks.
+
+    It can take minutes for a long jump and reports progress as it goes. A
+    human can stop it; if they do, the run keeps every tick it committed and
+    the result says where it stopped, which is a real answer and not a
+    failure — advancing is resumable, so calling again continues from there.
+
+    Returns the tick reached, the money accrued over the whole advance, the
+    surviving wipCount, scrappedCount, everything the run's release policy put
+    on the floor, the releasable backlogCount, and how many requests it took.
+    A floor that empties does NOT stop it: rent and wages accrue against time,
+    and an idle factory losing money is a finding, not a reason to stop.
+    """
+    run = await sim_client.get_json(f"/api/runs/{run_id}")
+    if not isinstance(run, dict):
+        raise ToolException(f"the backend did not return run {run_id}")
+    start = int(run["tickNum"])
+    if to_tick <= start:
+        raise ToolException(
+            f"run {run_id} is already at tick {start}, so it cannot advance to "
+            f"{to_tick}. A run only moves forward; re-creating it from its seed "
+            "is how you get an earlier tick back."
+        )
+
+    totals = {
+        "throughputCents": 0,
+        "operatingExpenseCents": 0,
+        "carryingCostCents": 0,
+        "wageCents": 0,
+        "scrappedCount": 0,
+    }
+    auto_released: list[dict] = []
+    tick = start
+    requests = 0
+    stopped = False
+    # Seeded from the summary so a stop that lands before the first chunk
+    # still reports the floor honestly. The backlog is not on a summary — it
+    # is read per advance — so it stays unknown until one happens, which is
+    # the truth rather than a zero.
+    last: dict = {"wipCount": run.get("wipCount")}
+
+    while tick < to_tick:
+        if stop_requested():
+            stopped = True
+            break
+        step = min(to_tick - tick, MAX_TICKS_PER_REQUEST)
+        result = await sim_client.post_json(
+            f"/api/runs/{run_id}/advance", {"ticks": step}
+        )
+        requests += 1
+        for key in totals:
+            totals[key] += result.get(key, 0)
+        auto_released.extend(result.get("autoReleased") or [])
+        tick = int(result["tickNum"])
+        last = result
+        emit_progress(
+            {
+                "tool": "advance_to_tick",
+                "runId": run_id,
+                "tickNum": tick,
+                "fromTick": start,
+                "toTick": to_tick,
+                # the run's own staffed day, so a watcher can read the tick as
+                # calendar time without guessing at shifts
+                "dayTicks": run.get("dayTicks"),
+                "wipCount": result.get("wipCount"),
+            }
+        )
+
+    return _compact(
+        {
+            "runId": run_id,
+            "tickNum": tick,
+            "fromTick": start,
+            "requestedToTick": to_tick,
+            "ticksAdvanced": tick - start,
+            "requests": requests,
+            # a stop is a real outcome: the run kept every committed tick
+            "stopped": stopped,
+            **totals,
+            "wipCount": last.get("wipCount"),
+            "backlogCount": last.get("backlogCount"),
+            "autoReleased": auto_released,
+        }
     )
 
 
@@ -143,6 +239,7 @@ async def release_work_order(run_id: int, work_order_id: int) -> str:
 ACTION_TOOLS = [
     fork_run,
     advance_run,
+    advance_to_tick,
     capital_action,
     set_release_policy,
     release_work_order,

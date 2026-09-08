@@ -52,6 +52,7 @@ from .actions import ACTION_TOOL_NAMES, ACTION_TOOLS
 from .approval import build_approval
 from .comparator import COMPARATOR_TOOLS
 from .config import settings
+from .control import clear_stop
 from .sim_client import SimApiError
 from .tools import ANALYST_TOOLS
 
@@ -356,17 +357,25 @@ _thread_locks: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 async def _stream(agent, payload: Any, thread_id: str) -> AsyncIterator[str]:
     """The shared body of a turn and of a resumed turn: the same SSE
-    vocabulary either way — token / tool / result / approval / done / error."""
+    vocabulary either way — token / tool / result / progress / approval /
+    done / error."""
     config = {"configurable": {"thread_id": thread_id}}
     try:
         async for mode, chunk in agent.astream(
             payload,
             config,
-            stream_mode=["updates", "messages"],
+            # "custom" is how a long-running tool reports progress: it writes
+            # through `get_stream_writer`, which no other mode surfaces.
+            stream_mode=["updates", "messages", "custom"],
             # the pause must be checkpointed before the client is told about
             # it, or a fast Approve can race the write that makes it resumable
             durability="sync",
         ):
+            if mode == "custom":
+                # a tool's own progress payload, already shaped as an event
+                if isinstance(chunk, dict):
+                    yield sse_event(chunk)
+                continue
             if mode == "messages":
                 message, _meta = chunk
                 if isinstance(message, AIMessageChunk):
@@ -407,6 +416,10 @@ async def stream_chat(message: str, thread_id: str) -> AsyncIterator[str]:
         yield sse_event({"type": "error", "message": str(error)})
         return
     async with _thread_locks[thread_id]:
+        # A Stop that landed after the last long tool finished belongs to that
+        # tool, not to this turn — clear it, or a fresh advance is cut short by
+        # a click the user made about something else.
+        clear_stop(thread_id)
         async for event in _stream(
             agent, {"messages": [{"role": "user", "content": message}]}, thread_id
         ):
@@ -424,6 +437,9 @@ async def stream_resume(
         return
 
     async with _thread_locks[thread_id]:
+        # Same rule as a fresh turn: the human has just approved this write,
+        # so a stop from before the pause is not about it.
+        clear_stop(thread_id)
         async for event in _resume(agent, thread_id, approved, note):
             yield event
 

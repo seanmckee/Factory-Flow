@@ -5,13 +5,17 @@ snake_case Python arguments onto the API's camelCase bodies, and a silently
 mistyped key is a 400 the model has to puzzle out at runtime.
 """
 
+import json as jsonlib
+
 import httpx
 import pytest
+from langchain_core.tools import ToolException
 
-from factory_agent import sim_client
+from factory_agent import control, sim_client
 from factory_agent.actions import (
     ACTION_TOOL_NAMES,
     advance_run,
+    advance_to_tick,
     capital_action,
     fork_run,
     release_work_order,
@@ -172,6 +176,153 @@ async def test_a_domain_conflict_is_the_same_shape(monkeypatch):
     assert caught.value.status == 409
 
 
+
+
+class TestAdvanceToTick:
+    """The chunking loop. The backend caps one advance at 20,000 ticks and a
+    staffed day is 28,800, so a 15-day jump was 22 approvals a branch — 44 for
+    an experiment, 43 of them "yes, keep going". Doing the chunking inside one
+    tool takes that to one approval without changing anything about authority.
+    """
+
+    def sim(self, monkeypatch, *, day_ticks: int = 28_800, start: int = 0):
+        """A backend that advances a run for real, in whatever steps it is
+        asked for, and records each request."""
+        state = {"tick": start}
+        asked: list[int] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": 39,
+                        "name": "run",
+                        "tickNum": state["tick"],
+                        "dayTicks": day_ticks,
+                        "wipCount": 7,
+                    },
+                )
+            ticks = jsonlib.loads(request.content)["ticks"]
+            asked.append(ticks)
+            state["tick"] += ticks
+            return httpx.Response(
+                200,
+                json={
+                    "tickNum": state["tick"],
+                    "ticksAdvanced": ticks,
+                    "throughputCents": 100 * ticks,
+                    "operatingExpenseCents": 10 * ticks,
+                    "carryingCostCents": ticks,
+                    "wageCents": 2 * ticks,
+                    "scrappedCount": 1,
+                    "wipCount": 12,
+                    "backlogCount": 3,
+                    "autoReleased": [{"workOrderId": 5, "partsReleased": 10}],
+                },
+            )
+
+        mock_backend(monkeypatch, handler)
+        return asked
+
+    async def test_one_call_chunks_a_long_jump_to_the_backend_cap(self, monkeypatch):
+        asked = self.sim(monkeypatch)
+        result = jsonlib.loads(
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 50_000})
+        )
+        assert asked == [20_000, 20_000, 10_000]
+        assert result["tickNum"] == 50_000
+        assert result["requests"] == 3
+        assert result["ticksAdvanced"] == 50_000
+        assert result["stopped"] is False
+
+    async def test_it_lands_exactly_on_the_target(self, monkeypatch):
+        # The whole point of an absolute target: two branches advanced to the
+        # same to_tick have run for the same time, which is what makes the
+        # comparison a comparison of decisions.
+        self.sim(monkeypatch, start=13_000)
+        result = jsonlib.loads(
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 28_800})
+        )
+        assert result["tickNum"] == 28_800
+        assert result["fromTick"] == 13_000
+
+    async def test_money_and_counts_are_summed_over_every_chunk(self, monkeypatch):
+        self.sim(monkeypatch)
+        result = jsonlib.loads(
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 30_000})
+        )
+        # 30,000 ticks at the fixture's rates, however it was chunked
+        assert result["throughputCents"] == 3_000_000
+        assert result["wageCents"] == 60_000
+        assert result["scrappedCount"] == 2  # one per request
+        assert len(result["autoReleased"]) == 2
+
+    async def test_the_last_chunk_reports_the_floor_and_the_backlog(self, monkeypatch):
+        self.sim(monkeypatch)
+        result = jsonlib.loads(
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 5_000})
+        )
+        assert result["wipCount"] == 12
+        assert result["backlogCount"] == 3
+
+    async def test_a_target_already_passed_is_refused_not_silently_ignored(
+        self, monkeypatch
+    ):
+        self.sim(monkeypatch, start=50_000)
+        with pytest.raises(ToolException) as caught:
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 20_000})
+        assert "only moves forward" in str(caught.value)
+
+    async def test_a_stop_lands_on_a_committed_boundary(self, monkeypatch):
+        """Stopping keeps every tick the backend committed and says where it
+        got to. Not a failure: advancing is resumable, so this is an answer."""
+        asked = self.sim(monkeypatch)
+        calls = {"n": 0}
+
+        def stop_after_two() -> bool:
+            calls["n"] += 1
+            return calls["n"] > 2
+
+        monkeypatch.setattr("factory_agent.actions.stop_requested", stop_after_two)
+        result = jsonlib.loads(
+            await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 100_000})
+        )
+        assert asked == [20_000, 20_000]
+        assert result["stopped"] is True
+        assert result["tickNum"] == 40_000
+        assert result["requestedToTick"] == 100_000
+
+    async def test_progress_is_emitted_per_committed_chunk(self, monkeypatch):
+        seen: list[dict] = []
+        self.sim(monkeypatch)
+        monkeypatch.setattr(
+            "factory_agent.actions.emit_progress", lambda payload: seen.append(payload)
+        )
+        await advance_to_tick.ainvoke({"run_id": 39, "to_tick": 45_000})
+        assert [event["tickNum"] for event in seen] == [20_000, 40_000, 45_000]
+        assert seen[0]["toTick"] == 45_000
+        assert seen[0]["runId"] == 39
+
+
+class TestStopRegistry:
+    def test_a_stop_is_one_shot(self):
+        control.request_stop("t1")
+        assert "t1" in control._stop_requests
+        control.clear_stop("t1")
+        assert "t1" not in control._stop_requests
+
+    def test_clearing_an_unknown_thread_is_harmless(self):
+        control.clear_stop("never-seen")
+
+    def test_outside_a_graph_run_nothing_is_stopping(self):
+        # A tool called from a test or a script has no thread and no stream;
+        # neither may be load-bearing for it doing its work.
+        assert control.current_thread_id() is None
+        assert control.stop_requested() is False
+        control.emit_progress({"tickNum": 1})  # must not raise
+
+
 def test_every_verb_is_registered_for_approval():
     """ACTION_TOOL_NAMES is what the approval gate matches on — a verb missing
     from it would execute without a pause, which is the one failure this
@@ -179,6 +330,7 @@ def test_every_verb_is_registered_for_approval():
     assert ACTION_TOOL_NAMES == {
         "fork_run",
         "advance_run",
+        "advance_to_tick",
         "capital_action",
         "set_release_policy",
         "release_work_order",

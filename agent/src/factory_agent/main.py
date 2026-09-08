@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from .agent import stream_chat, stream_resume
 from .config import settings
+from .control import request_stop
 
 app = FastAPI(title="Factory Flow Agent")
 
@@ -76,6 +77,28 @@ async def chat(body: ChatRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers=SSE_HEADERS,
     )
+
+
+class StopRequest(BaseModel):
+    threadId: str = Field(min_length=1)
+
+
+@app.post("/chat/stop")
+async def stop(body: StopRequest) -> dict:
+    """Ask a long-running tool on this thread to stop at its next committed
+    boundary.
+
+    Not a cancel: the backend commits every advance it has accepted whether or
+    not anyone is still listening, so stopping mid-request would only leave
+    the caller claiming a tick the run has already passed. The tool stops
+    dispatching, keeps what it committed, and says where it got to — the same
+    protocol the simulator page's Stop follows for a fast-forward.
+
+    Returns immediately, and is harmless when nothing is running: the request
+    is cleared at the start of the next turn.
+    """
+    request_stop(body.threadId)
+    return {"stopping": True, "threadId": body.threadId}
 
 
 class ResumeRequest(BaseModel):
