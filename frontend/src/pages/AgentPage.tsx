@@ -1,17 +1,30 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, LoaderCircle, RotateCcw, Send, Wrench } from "lucide-react";
+import {
+  Bot,
+  Check,
+  GitBranch,
+  LoaderCircle,
+  RotateCcw,
+  Send,
+  ShieldAlert,
+  Wrench,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import PageHeader from "../components/PageHeader";
-import { getAgentHealth, streamChat } from "../api/agent";
+import { getAgentHealth, resumeChat, streamChat } from "../api/agent";
+import type { AgentEvent, ApprovalRequest } from "../agent/sse";
 import { useToast } from "../toast/ToastContext";
 
 type ToolCall = { name: string; input: Record<string, unknown> };
+type Decision = "pending" | "approved" | "declined";
 type ChatItem =
   | { kind: "user"; text: string }
-  | { kind: "assistant"; text: string; tools: ToolCall[] };
+  | { kind: "assistant"; text: string; tools: ToolCall[] }
+  | { kind: "approval"; request: ApprovalRequest; decision: Decision };
 
-/** what each tool read, in the user's terms — the chip under a reply */
+/** what each tool did, in the user's terms — the chip under a reply */
 const TOOL_LABELS: Record<string, string> = {
   list_runs: "listed the runs",
   get_run: "read a run's P&L",
@@ -21,6 +34,11 @@ const TOOL_LABELS: Record<string, string> = {
   list_work_orders: "read the work orders",
   list_sales_orders: "read the order book",
   get_factory_settings: "read factory settings",
+  fork_run: "forked a run",
+  advance_run: "advanced a run",
+  capital_action: "changed the machines",
+  set_release_policy: "changed the release policy",
+  release_work_order: "released a work order",
 };
 
 function toolLabel(call: ToolCall): string {
@@ -31,14 +49,18 @@ function toolLabel(call: ToolCall): string {
 
 const SUGGESTIONS = [
   "Which run made the most money, and where is its constraint?",
+  "Fork the best run and buy a machine at its constraint — is it worth it?",
   "How is the current run doing on on-time delivery?",
-  "What's still unreleased in the order book?",
 ];
 
+const CHIP =
+  "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground";
+
 /**
- * The Track 8 chat window — phase 1, a read-only analyst. The page talks to
- * the agent service on :8000 directly; the agent talks to the backend. It
- * can read everything and change nothing, so ask freely.
+ * The Track 8 chat window. The agent reads the sim freely and can also change
+ * it — every write pauses in the graph and surfaces here as an approval card,
+ * showing the run's real name and the run's own frozen price. Nothing is
+ * written until it is approved from this page.
  */
 export default function AgentPage() {
   const { showToast } = useToast();
@@ -48,6 +70,10 @@ export default function AgentPage() {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+
+  const awaiting = items.some(
+    (item) => item.kind === "approval" && item.decision === "pending",
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -87,9 +113,42 @@ export default function AgentPage() {
       return next;
     });
 
+  /** shared by a turn and by the continuation after a decision */
+  const handleEvent = (event: AgentEvent) => {
+    if (event.type === "token") {
+      patchLastAssistant((last) => ({ ...last, text: last.text + event.text }));
+    } else if (event.type === "tool") {
+      patchLastAssistant((last) => ({
+        ...last,
+        tools: [...last.tools, { name: event.name, input: event.input }],
+      }));
+    } else if (event.type === "approval") {
+      const request: ApprovalRequest = {
+        tool: event.tool,
+        args: event.args,
+        run: event.run,
+        summary: event.summary,
+      };
+      setItems((previous) => [
+        ...previous,
+        { kind: "approval", request, decision: "pending" },
+      ]);
+    } else if (event.type === "done") {
+      setThreadId(event.threadId);
+    } else if (event.type === "error") {
+      showToast(event.message, "error");
+    }
+  };
+
+  const failed = (error: unknown) =>
+    showToast(
+      error instanceof Error ? error.message : "The agent request failed",
+      "error",
+    );
+
   const send = async (text: string) => {
     const message = text.trim();
-    if (!message || busy) return;
+    if (!message || busy || awaiting) return;
     setDraft("");
     setBusy(true);
     setItems((previous) => [
@@ -98,25 +157,30 @@ export default function AgentPage() {
       { kind: "assistant", text: "", tools: [] },
     ]);
     try {
-      await streamChat(message, threadId, (event) => {
-        if (event.type === "token") {
-          patchLastAssistant((last) => ({ ...last, text: last.text + event.text }));
-        } else if (event.type === "tool") {
-          patchLastAssistant((last) => ({
-            ...last,
-            tools: [...last.tools, { name: event.name, input: event.input }],
-          }));
-        } else if (event.type === "done") {
-          setThreadId(event.threadId);
-        } else if (event.type === "error") {
-          showToast(event.message, "error");
-        }
-      });
+      await streamChat(message, threadId, handleEvent);
     } catch (error) {
-      showToast(
-        error instanceof Error ? error.message : "The agent request failed",
-        "error",
-      );
+      failed(error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const decide = async (approved: boolean) => {
+    if (threadId === null || busy) return;
+    setBusy(true);
+    setItems((previous) => [
+      ...previous.map((item) =>
+        item.kind === "approval" && item.decision === "pending"
+          ? { ...item, decision: approved ? ("approved" as const) : ("declined" as const) }
+          : item,
+      ),
+      // a fresh target for the continuation's tokens
+      { kind: "assistant" as const, text: "", tools: [] },
+    ]);
+    try {
+      await resumeChat(threadId, approved, handleEvent);
+    } catch (error) {
+      failed(error);
     } finally {
       setBusy(false);
     }
@@ -128,12 +192,16 @@ export default function AgentPage() {
   };
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col p-6">
       <PageHeader
         title="Agent"
-        description="A read-only analyst over the sim — it can read every run, metric and order, and change nothing."
+        description="An analyst over the sim that can also act — every change waits for your approval."
       >
-        <Button variant="outline" onClick={reset} disabled={busy || items.length === 0}>
+        <Button
+          variant="outline"
+          onClick={reset}
+          disabled={busy || items.length === 0}
+        >
           <RotateCcw className="size-4" /> New conversation
         </Button>
       </PageHeader>
@@ -146,21 +214,22 @@ export default function AgentPage() {
 
       <div
         ref={scrollRef}
-        className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card p-4"
+        className="min-h-0 flex-1 overflow-auto rounded-lg border bg-card p-5"
       >
         {items.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+          <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
             <Bot className="size-8 text-muted-foreground" />
-            <p className="text-sm text-muted-foreground">
-              Ask about your runs, the constraint, the P&L, or the order book.
+            <p className="max-w-md text-sm text-muted-foreground">
+              Ask about your runs, the constraint, the P&amp;L or the order book — or
+              ask it to test a decision by forking a run.
             </p>
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col items-stretch gap-2">
               {SUGGESTIONS.map((suggestion) => (
                 <button
                   key={suggestion}
                   type="button"
                   onClick={() => void send(suggestion)}
-                  className="rounded-md border px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  className="rounded-md border px-3.5 py-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                 >
                   {suggestion}
                 </button>
@@ -168,23 +237,35 @@ export default function AgentPage() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-4">
-            {items.map((item, index) =>
-              item.kind === "user" ? (
-                <div key={index} className="self-end">
-                  <p className="max-w-xl rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground">
+          <div className="flex flex-col gap-5">
+            {items.map((item, index) => {
+              if (item.kind === "user") {
+                return (
+                  <p
+                    key={index}
+                    className="max-w-xl self-end rounded-lg bg-primary px-3.5 py-2 text-sm text-primary-foreground"
+                  >
                     {item.text}
                   </p>
-                </div>
-              ) : (
-                <div key={index} className="flex max-w-3xl flex-col gap-1.5 self-start">
+                );
+              }
+              if (item.kind === "approval") {
+                return (
+                  <ApprovalCard
+                    key={index}
+                    request={item.request}
+                    decision={item.decision}
+                    busy={busy}
+                    onDecide={decide}
+                  />
+                );
+              }
+              return (
+                <div key={index} className="flex max-w-3xl flex-col gap-2 self-start">
                   {item.tools.length > 0 && (
                     <div className="flex flex-wrap gap-1.5">
                       {item.tools.map((call, toolIndex) => (
-                        <span
-                          key={toolIndex}
-                          className="flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
-                        >
+                        <span key={toolIndex} className={CHIP}>
                           <Wrench className="size-3" /> {toolLabel(call)}
                         </span>
                       ))}
@@ -193,19 +274,21 @@ export default function AgentPage() {
                   {item.text === "" && busy && index === items.length - 1 ? (
                     <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
                   ) : (
-                    <p className="whitespace-pre-wrap text-sm leading-relaxed">
-                      {item.text}
-                    </p>
+                    item.text !== "" && (
+                      <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                        {item.text}
+                      </p>
+                    )
                   )}
                 </div>
-              ),
-            )}
+              );
+            })}
           </div>
         )}
       </div>
 
       <form
-        className="mt-3 flex shrink-0 items-center gap-2"
+        className="mt-4 flex shrink-0 items-center gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           void send(draft);
@@ -214,14 +297,89 @@ export default function AgentPage() {
         <Input
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          placeholder="Ask the analyst…"
-          disabled={busy}
+          placeholder={awaiting ? "Answer the approval above to continue…" : "Ask the analyst…"}
+          disabled={busy || awaiting}
         />
-        <Button type="submit" disabled={busy || draft.trim() === ""}>
-          {busy ? <LoaderCircle className="size-4 animate-spin" /> : <Send className="size-4" />}
+        <Button type="submit" disabled={busy || awaiting || draft.trim() === ""}>
+          {busy ? (
+            <LoaderCircle className="size-4 animate-spin" />
+          ) : (
+            <Send className="size-4" />
+          )}
           Send
         </Button>
       </form>
+    </div>
+  );
+}
+
+const DECIDED: Record<
+  Exclude<Decision, "pending">,
+  { label: string; className: string }
+> = {
+  approved: { label: "Approved — the agent carried it out", className: "text-running" },
+  declined: { label: "Declined — nothing was changed", className: "text-muted-foreground" },
+};
+
+/**
+ * One paused write. Everything shown here came from the sim at approval time,
+ * not from the model: the run's name and tick off its summary, the price off
+ * the run's own frozen config. Approving is the only thing that lets the write
+ * run at all — the graph is stopped until this is answered.
+ */
+function ApprovalCard({
+  request,
+  decision,
+  busy,
+  onDecide,
+}: {
+  request: ApprovalRequest;
+  decision: Decision;
+  busy: boolean;
+  onDecide: (approved: boolean) => void;
+}) {
+  const { run } = request;
+  const pending = decision === "pending";
+  return (
+    <div
+      className={`flex max-w-3xl flex-col gap-3 self-start rounded-lg border p-4 ${
+        pending ? "border-starved/50 bg-starved/5" : "bg-background"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <ShieldAlert
+          className={`size-4 ${pending ? "text-starved" : "text-muted-foreground"}`}
+        />
+        <span className="text-sm font-medium">
+          {pending ? "Approval needed" : "Approval"}
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
+          {run.isFork && <GitBranch className="size-3" />}
+          run #{run.id} · {run.name}
+        </span>
+      </div>
+
+      <p className="text-sm leading-relaxed">{request.summary}</p>
+
+      {pending ? (
+        <div className="flex items-center gap-2">
+          <Button size="sm" disabled={busy} onClick={() => onDecide(true)}>
+            <Check className="size-4" /> Approve
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => onDecide(false)}
+          >
+            <X className="size-4" /> Decline
+          </Button>
+        </div>
+      ) : (
+        <p className={`text-xs ${DECIDED[decision].className}`}>
+          {DECIDED[decision].label}
+        </p>
+      )}
     </div>
   );
 }

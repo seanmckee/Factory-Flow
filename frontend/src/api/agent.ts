@@ -20,19 +20,19 @@ export const getAgentHealth = async (): Promise<AgentHealth> => {
 };
 
 /**
- * One chat turn, streamed. POSTs the message and reads the SSE body off the
- * fetch stream, invoking `onEvent` per event; resolves when the stream ends.
- * Pass the threadId from a previous turn's `done` event to keep memory.
+ * POSTs a body and reads the SSE response, invoking `onEvent` per event;
+ * resolves when the stream ends. Shared by a turn and by a resumed turn —
+ * both speak the same event vocabulary, so the caller handles one stream.
  */
-export async function streamChat(
-  message: string,
-  threadId: string | null,
+async function streamPost(
+  path: string,
+  body: unknown,
   onEvent: (event: AgentEvent) => void,
 ): Promise<void> {
-  const response = await fetch(`${AGENT_BASE}/chat`, {
+  const response = await fetch(`${AGENT_BASE}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(threadId === null ? { message } : { message, threadId }),
+    body: JSON.stringify(body),
   });
   if (!response.ok || response.body === null) {
     throw new Error(`Agent responded ${response.status}`);
@@ -47,4 +47,34 @@ export async function streamChat(
     buffer = parsed.buffer;
     for (const event of parsed.events) onEvent(event);
   }
+}
+
+/**
+ * One chat turn, streamed. Pass the threadId from a previous turn's `done`
+ * event to keep memory. A turn that ends on an `approval` event is not
+ * finished — it is paused in the graph, waiting for `resumeChat`.
+ */
+export async function streamChat(
+  message: string,
+  threadId: string | null,
+  onEvent: (event: AgentEvent) => void,
+): Promise<void> {
+  return streamPost(
+    "/chat",
+    threadId === null ? { message } : { message, threadId },
+    onEvent,
+  );
+}
+
+/**
+ * Answers a paused write and streams what follows. Declining is not a
+ * cancellation: the model is told, and replies.
+ */
+export async function resumeChat(
+  threadId: string,
+  approved: boolean,
+  onEvent: (event: AgentEvent) => void,
+  note?: string,
+): Promise<void> {
+  return streamPost("/chat/resume", { threadId, approved, note }, onEvent);
 }

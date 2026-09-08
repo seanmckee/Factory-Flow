@@ -4,9 +4,30 @@
  * `fetch` and feeds chunks through here. Pure, so it's testable like the
  * simulation transforms.
  */
+/** the run an approval would touch, as the SIM reports it — not as the model
+ * described it, which is the whole point of confirming against this */
+export type ApprovalRun = {
+  id: number;
+  name: string;
+  tickNum: number;
+  status: string;
+  netCents: number;
+  isFork: boolean;
+};
+
+/** one write, paused inside the graph until the person here answers */
+export type ApprovalRequest = {
+  tool: string;
+  args: Record<string, unknown>;
+  run: ApprovalRun;
+  /** the server's own one-line description, including money where there is any */
+  summary: string;
+};
+
 export type AgentEvent =
   | { type: "token"; text: string }
   | { type: "tool"; name: string; input: Record<string, unknown> }
+  | ({ type: "approval" } & ApprovalRequest)
   | { type: "done"; threadId: string }
   | { type: "error"; message: string };
 
