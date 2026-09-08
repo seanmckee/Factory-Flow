@@ -73,13 +73,24 @@ async def build_dataset(client: Client) -> str:
 
 async def target(inputs: dict) -> dict:
     """One eval turn: a fresh thread per question, so examples can't leak
-    context into each other."""
+    context into each other.
+
+    A turn that asks for a write stops at the approval gate and is reported,
+    not answered — `paused` carries what it was waiting on. The suite never
+    resumes a thread, so running the evals cannot change the simulation no
+    matter what the agent decides to try. That is also why the last message
+    may be a tool-calling message rather than prose.
+    """
     agent = get_agent()
+    config = {"configurable": {"thread_id": f"eval-{uuid.uuid4()}"}}
     result = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": inputs["question"]}]},
-        {"configurable": {"thread_id": f"eval-{uuid.uuid4()}"}},
+        {"messages": [{"role": "user", "content": inputs["question"]}]}, config
     )
-    return {"answer": message_text(result["messages"][-1])}
+    state = await agent.aget_state(config)
+    return {
+        "answer": message_text(result["messages"][-1]),
+        "paused": [pause.value for pause in state.interrupts],
+    }
 
 
 async def main() -> None:
@@ -95,6 +106,31 @@ async def main() -> None:
         experiment_prefix=f"analyst-{settings.openai_model}",
         max_concurrency=2,
     )
+    await report(results)
+
+
+async def report(results) -> None:
+    """The score, in the terminal. LangSmith has the detail and the history;
+    what you want here is whether it went up, without opening a browser."""
+    scored = 0
+    total = 0
+    lines = []
+    async for row in results:
+        total += 1
+        score = next(
+            (
+                result.score
+                for result in row["evaluation_results"]["results"]
+                if result.key == "correct"
+            ),
+            0,
+        )
+        scored += int(score or 0)
+        question = (row["example"].inputs or {}).get("question", "")
+        lines.append(f"  [{'ok  ' if score else 'MISS'}] {question}")
+    for line in sorted(lines):
+        print(line)
+    print(f"score {scored}/{total}")
     print(f"experiment: {results.experiment_name}")
 
 
