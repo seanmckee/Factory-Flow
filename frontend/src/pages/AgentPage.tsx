@@ -5,7 +5,6 @@ import {
   GitBranch,
   LoaderCircle,
   RotateCcw,
-  Scale,
   Send,
   ShieldAlert,
   Wrench,
@@ -17,6 +16,7 @@ import PageHeader from "../components/PageHeader";
 import { getAgentHealth, resumeChat, streamChat } from "../api/agent";
 import type { AgentEvent, ApprovalRequest } from "../agent/sse";
 import { parseComparison, type RunComparison } from "../agent/verdict";
+import VerdictCard from "../components/VerdictCard";
 import { useToast } from "../toast/ToastContext";
 
 type ToolCall = { name: string; input: Record<string, unknown> };
@@ -287,13 +287,7 @@ export default function AgentPage() {
                     </div>
                   )}
                   {item.verdicts.map((verdict, verdictIndex) => (
-                    <p
-                      key={verdictIndex}
-                      className="flex items-start gap-2 border-l-2 border-primary/60 pl-3 text-sm leading-relaxed"
-                    >
-                      <Scale className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-                      <span>{verdict.summary}</span>
-                    </p>
+                    <VerdictCard key={verdictIndex} verdict={verdict} />
                   ))}
                   {item.text === "" && busy && index === items.length - 1 ? (
                     <LoaderCircle className="size-4 animate-spin text-muted-foreground" />
