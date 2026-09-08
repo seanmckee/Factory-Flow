@@ -13,6 +13,7 @@ from factory_agent.agent import (
     _chunk_text,
     sse_event,
     tool_error_message,
+    tool_result_event,
 )
 from factory_agent.sim_client import SimApiError
 
@@ -41,6 +42,44 @@ def test_chunk_text_reads_block_lists_and_skips_non_text():
         ]
     )
     assert _chunk_text(chunk) == "ab"
+
+
+def test_a_rendered_tool_result_crosses_the_wire_as_data():
+    message = ToolMessage(
+        content='{"netDeltaCents":448775,"summary":"#59 wins"}',
+        name="compare_runs",
+        tool_call_id="c1",
+    )
+    assert tool_result_event(message) == {
+        "type": "result",
+        "name": "compare_runs",
+        "data": {"netDeltaCents": 448775, "summary": "#59 wins"},
+    }
+
+
+def test_a_read_the_ui_cannot_draw_sends_no_result():
+    # Opt-in, not opt-out: a run's whole observation series has no business in
+    # a chat transcript, and nothing renders it.
+    message = ToolMessage(
+        content='{"tickNum":432000}', name="get_run", tool_call_id="c1"
+    )
+    assert tool_result_event(message) is None
+
+
+def test_a_failed_call_is_left_to_the_model_to_explain():
+    # "Tool call failed: ..." is not a payload. It is already going back to the
+    # model, which reads it and answers - forwarding it as a result would ask
+    # the UI to render a sentence as data.
+    message = ToolMessage(
+        content="Tool call failed: backend 404: Run 99 not found",
+        name="compare_runs",
+        tool_call_id="c1",
+    )
+    assert tool_result_event(message) is None
+
+
+def test_a_message_with_no_name_is_not_a_result():
+    assert tool_result_event(ToolMessage(content="{}", tool_call_id="c1")) is None
 
 
 def call_tool(name: str, args: dict) -> dict:

@@ -132,6 +132,85 @@ async def test_a_read_never_enters_the_gate(monkeypatch):
     assert state.values["messages"][-1].content == "Run 39…"
 
 
+async def test_a_computed_verdict_reaches_the_transcript_as_data(monkeypatch):
+    """The channel the comparator needs. A tool that works something out must
+    be able to put the *result* on the wire, or the only route to the screen
+    is prose the model retyped — which is the thing the comparator exists to
+    stop."""
+    runs = {
+        39: {**RUN, "id": 39, "name": "control"},
+        40: {
+            **RUN,
+            "id": 40,
+            "name": "second press",
+            "parentRunId": 39,
+            "forkedAtTick": 28800,
+        },
+    }
+    nets = {39: 100_000, 40: 250_000}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        run_id = int(path.split("/")[3])
+        if path.endswith("/metrics"):
+            return httpx.Response(
+                200,
+                json={
+                    "fromTick": 28_800,
+                    "toTick": 86_400,
+                    "throughputCents": nets[run_id] + 1_000,
+                    "operatingExpenseCents": 1_000,
+                    "carryingCostCents": 0,
+                    "wageCents": 0,
+                    "capitalSpendCents": 0,
+                    "netCents": nets[run_id],
+                    "flow": {"meanWip": 1, "maxWip": 2, "workCenters": []},
+                    "cycleTime": {"count": 1, "meanSeconds": 10.0, "p95Seconds": 10},
+                    "onTimeDelivery": {"measuredCount": 1, "onTimeFraction": 1.0},
+                    "scrap": {"scrappedCount": 0, "scrappedMaterialCents": 0},
+                },
+            )
+        return httpx.Response(200, json=runs[run_id])
+
+    mock_backend(monkeypatch, handler)
+    scripted(
+        monkeypatch,
+        call("compare_runs", {"baseline_run_id": 39, "variant_run_id": 40}),
+        AIMessage(content="The press paid back."),
+    )
+    graph = build_graph(InMemorySaver())
+
+    events = [
+        json.loads(line.removeprefix("data: ").strip())
+        async for line in agent_module._stream(
+            graph, turn("Was it worth it?"), "verdict"
+        )
+    ]
+
+    results = [event for event in events if event["type"] == "result"]
+    assert len(results) == 1
+    assert results[0]["name"] == "compare_runs"
+    assert results[0]["data"]["netDeltaCents"] == 150_000
+    assert results[0]["data"]["winnerRunId"] == 40
+    # and the tool call itself still announces itself, as every tool does
+    assert [event["name"] for event in events if event["type"] == "tool"] == [
+        "compare_runs"
+    ]
+
+
+async def test_a_read_the_ui_cannot_draw_puts_nothing_on_the_wire(monkeypatch):
+    sim(monkeypatch)
+    scripted(monkeypatch, call("get_run", {"run_id": 39}), AIMessage(content="Fine."))
+    graph = build_graph(InMemorySaver())
+
+    events = [
+        json.loads(line.removeprefix("data: ").strip())
+        async for line in agent_module._stream(graph, turn("How is run 39?"), "plain")
+    ]
+
+    assert [event["type"] for event in events if event["type"] == "result"] == []
+
+
 async def test_a_write_pauses_and_shows_the_sim_s_own_numbers(monkeypatch):
     posted = sim(monkeypatch)
     scripted(

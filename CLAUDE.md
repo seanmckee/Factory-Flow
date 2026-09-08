@@ -480,10 +480,24 @@ and seed reproducibility like any other client.
   above its `interrupt()` must stay read-only and idempotent. Its reads run
   twice per approved write; that is the price of the pause.
 - SSE vocabulary, shared by `POST /chat` and `POST /chat/resume`:
-  `token` / `tool` / `approval` / `done` / `error`. A turn that ends on
-  `approval` is **not finished** — it is paused in the graph. The frontend
+  `token` / `tool` / `result` / `approval` / `done` / `error`. A turn that ends
+  on `approval` is **not finished** — it is paused in the graph. The frontend
   parses it in `src/agent/sse.ts` (pure, unit-tested) and renders the pause as
   a card in the transcript.
+- **`tool` says what was asked; `result` says what the sim answered.** A tool
+  call reaches the transcript as its name and arguments, so anything a tool
+  *worked out* could otherwise only arrive as prose the model retyped — which
+  is precisely what the comparator exists to prevent. `tool_result_event` puts
+  the payload itself on the wire, and only for tools on `RENDERED_TOOL_NAMES`
+  (derived from `COMPARATOR_TOOLS`, never hand-written): opt-in, because the
+  floor and metrics payloads are large and a chat window is no place to ship a
+  run's observation series. Content that isn't JSON is **skipped, not
+  forwarded** — a failed call comes back as `Tool call failed: …` and a gated
+  write as the gate's refusal sentence, and both belong to the model to read
+  and explain. `src/agent/verdict.ts` mirrors the comparator's shape and
+  narrows it with `parseComparison`, which returns null rather than throwing
+  on version skew: draw nothing and leave the reply standing, the same rule
+  `parseSseChunk` follows for a malformed frame.
 - `InMemorySaver` is the checkpointer, so a restart drops pending approvals
   and the service cannot run with more than one uvicorn worker. Both are fine
   at this stage and neither is fine later.
