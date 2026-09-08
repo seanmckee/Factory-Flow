@@ -45,11 +45,19 @@ capital action, release policy, manual release — with every write held at a
 route past the gate, writes suspend it, and the card a person approves is
 built from the sim rather than from the model's arguments. The LangSmith suite
 scores **7/7**, one example now scoring conduct (did it stop?) rather than
-prose. Next: the deterministic comparator, then the role split the comparator
-justifies, then richer eval datasets.
+prose.
 
-**Next: Track 8 (the agent).** The remaining sim units — 6G.2, 6G.3, 6H.2,
-6H.3 — are **deferred behind it** (user call, 2026-09-04). The sim is done: it
+**Next: Track 8 phase 3** (planned 2026-09-08) — the deterministic
+comparator, a verdict the UI can show as a table rather than as prose the
+model retyped, and **one approval per experiment** instead of per HTTP call:
+running two branches for 15 days costs ~44 approvals today, 43 of them "yes,
+keep going", because an advance caps at 20,000 ticks and a staffed day is
+28,800. Chunking that loop inside the tool fixes most of it without touching
+authority; budgeting the plan fixes the rest while keeping the gate
+structural.
+
+**The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
+6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
 already drive. What is left there is polish and perf, and playing the sim kept
 generating more of it — 6F, 6G and 6H were all invented while driving 6E. Pick
@@ -199,12 +207,76 @@ would have provided, and the boundaries that pay are deterministic-vs-model
 - [x] 8.11 Evals + doc sweep — the read-only trap becomes a pause check
       scoring conduct rather than prose, the runner prints its score
 
-**Next: the deterministic comparator.** Pure function over two runs'
-summaries and metrics — which branch won, by how much, and which line of the
-P&L moved. Not the model's job: the sim is deterministic and the P&L is
-frozen columns, so the verdict is computable, unit-testable and free of
-tokens. It is also the node whose existence justifies splitting roles, and
-the ground truth a richer eval dataset can score experiment verdicts against.
+**Phase 3 — the verdict, and one approval per experiment**
+(`feat/agent-comparator`). Planned 2026-09-08 from driving the phase-2 agent.
+Two findings drove it. The verdict was being written *by the model* from
+numbers it retyped, when both runs' P&L is frozen columns and the delta is
+arithmetic. And a two-branch experiment cost **~44 approvals**, 43 of them
+"yes, keep going": the backend caps an advance at 20,000 ticks while a
+staffed day is 28,800, so 15 days is 22 calls a branch. The cap is about
+synchronous request time, not authority, and it was spending human attention.
+
+User calls taken before building:
+
+- **The verdict displays as a card *and* prose** — the table is the fact, the
+  paragraph is the interpretation, which is exactly the deterministic/model
+  split this phase exists to draw. Shown on the model's own determination or
+  on request, not on every read.
+- **Charts are not rebuilt in the transcript.** The Trends overlay already
+  draws two nets on one clock with the fork seam marked; the card deep-links
+  it rather than shipping a worse copy in a chat bubble.
+- **Authority is budgeted per experiment, not per call.** The model proposes
+  the experiment — which runs, which verbs, how far to advance, how much it
+  may spend — a human approves *that*, once, and the graph executes inside
+  those bounds while streaming every step with a Stop. Anything outside the
+  budget re-pauses. The boundary stays structural: a write still cannot run
+  unless a human authorized it. What changes is the unit of authorization.
+  Rejected: per-verb tiers (static — cannot tell an hour from 200 days, and
+  caps no total spend) and show-and-go (removes the boundary 8.9 built, and
+  neither `advance` nor a capital charge has an undo).
+
+- [x] **8.12 The comparator** — `comparator.py`: pure over two runs'
+      summaries and `/metrics`, returning the winner, the five P&L lines each
+      signed against the score (they sum to the net delta by construction),
+      the biggest mover, and the outcomes behind it including each side's
+      constraint by id. Enforces what the prompt only asked for: an unequal-
+      `tickNum` pair is refused, and a lineage pair windows from the fork
+      seam. Verified live on the drill-press fork pair — +$4,487.75 net for
+      $1,488 of capital, and **the constraint moved** (98 at 97.6% → 95 at
+      100%), which is the sentence a capacity verdict wants.
+- [ ] **8.13 Structured tool output reaches the UI.** The SSE `tool` event
+      carries name and arguments only, so a tool's *result* has no channel to
+      the screen and a verdict could only arrive as prose the model retyped —
+      which defeats the determinism. Extend the shared vocabulary once, for
+      both cases that need it: a result payload for the verdict, and progress
+      for a long-running call. Parsed in `sse.ts`, pure and tested on both
+      sides. `approval.py`'s rule carries over — what a person is shown is
+      built from the sim, never from how the model described it.
+- [ ] **8.14 The verdict card.** The P&L delta table in the transcript, two
+      columns and a signed delta, with an inline signed bar per line so
+      "which line moved" reads at a glance (the utilization-bar pattern);
+      window and both tick numbers in the header, since the fair-window rule
+      is what makes the rows true. Prose sits alongside it. Plus **"Open on
+      Trends"**, which needs the compare state URL-addressable
+      (`useSimulationPage` holds it in memory today) — that also makes a
+      comparison shareable, which a transcript is not.
+- [ ] **8.15 `advance_to_tick` — chunk inside the tool.** One call the gate
+      sees once, chunking to the backend's cap internally, streaming progress
+      as each committed advance lands, and honouring a Stop. 44 approvals → 2
+      with no change to authority at all — the same trick the page's jump
+      already plays. Progress is not optional: the 15-day playthrough is ~5
+      wall-minutes, and a silent tool that long reads as a hang. Stop matters
+      more here than anywhere else, because `advance` is the one verb with no
+      inverse.
+- [ ] **8.16 Budgeted plan approval.** The plan and its budget become the
+      approved object: one card naming the runs, the verbs, the tick horizon
+      and the spend ceiling, built from the sim as ever; execution proceeds
+      inside it and re-pauses on breach. This is the unit that finally makes
+      **roles** mean something — a plan proposed by the model, executed under
+      a budget, and scored by a comparator that never asks a model anything.
+- [ ] **8.17 Evals + ledger/doc sweep.** The comparator is ground truth an
+      eval can score a verdict against without a rubric, which is the whole
+      reason it comes before richer datasets.
 
 Known limits, deliberately carried rather than fixed: `InMemorySaver` drops
 pending approvals on restart and forbids a second uvicorn worker; there is no

@@ -424,7 +424,29 @@ and seed reproducibility like any other client.
   release policy, manual release), and `ACTION_TOOL_NAMES` — derived from the
   list, never hand-written — is what the approval gate matches on. A verb
   added to `actions.py` is gated by construction; a verb added anywhere else
-  would not be, which is the one mistake this layout exists to prevent.
+  would not be, which is the one mistake this layout exists to prevent. The
+  corollary is that `comparator.py` needs no permission to be safe: it changes
+  nothing, so it routes past the gate like any other read without appearing on
+  a list of things declared harmless.
+- **`comparator.py` is the verdict, and it is arithmetic rather than prose.**
+  Both runs' P&L is frozen columns and the sim is deterministic, so "which
+  branch won, by how much, and which line of the P&L moved" is computable —
+  and the one number an experiment exists to report is exactly the one worth
+  refusing to let a model retype. Everything but the `compare_runs` tool is
+  pure, so the verdict is unit-tested with no LLM, no network and no DB (the
+  `approval.py` split). Two rules it **enforces** rather than asks the prompt
+  for: an unequal-`tickNum` pair is refused, because a comparison of unequal
+  ticks measures durations dressed as decisions; and a lineage pair (parent
+  and fork either way round, or two siblings of one fork at one tick) windows
+  from the **fork seam**, since before it the branches are byte-identical and
+  that history belongs to neither decision. `netEffectCents` per line is
+  signed against the score, and the five sum to the net delta by construction
+  — the same rule the engine holds between `calculateThroughput` and its
+  per-part credits. The constraint is reported per side by **id**, resolved to
+  a name by the caller through `/floor`, and a centre retired to no machines
+  contributes no capacity-ticks so it can never win the ranking with a
+  divide-by-nothing 0. A dead heat is a real answer, not a missing one: it is
+  what two same-seed branches with no decision between them must report.
 - **Tool docstrings are load-bearing**: they are the descriptions the model
   plans with, so they carry the domain semantics (cents, throughput is sales
   money, `netCents` is the score, utilization needs a window, a capital action

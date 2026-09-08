@@ -50,6 +50,7 @@ from langgraph.types import Command, interrupt
 
 from .actions import ACTION_TOOL_NAMES, ACTION_TOOLS
 from .approval import build_approval
+from .comparator import COMPARATOR_TOOLS
 from .config import settings
 from .sim_client import SimApiError
 from .tools import ANALYST_TOOLS
@@ -88,8 +89,13 @@ How to test a decision, which is what this simulator is for:
    measured.
 3. advance_run BOTH branches to the same tickNum, or the comparison is a
    comparison of durations.
-4. Read get_run on each and report the difference in netCents, with the line
-   of the P&L that moved.
+4. Call compare_runs(baseline=the control, variant=the branch that acted). It
+   computes the verdict from both runs' frozen money columns - never do that
+   subtraction yourself, and never report a delta no tool returned. When the
+   pair is a fork and its parent it windows from the fork seam for you. Your
+   job is to interpret what it returns: which line moved the score, whether
+   the decision paid back, and what it cost in on-time delivery, cycle time,
+   WIP or scrap.
 
 Every write pauses for a human to approve, and they see the run's real name,
 its tick and the run's own frozen price - so say plainly what you intend to do
@@ -125,7 +131,10 @@ def tool_error_message(error: SimApiError | ToolException) -> str:
     return f"Tool call failed: {error}"
 
 
-ALL_TOOLS = [*ANALYST_TOOLS, *ACTION_TOOLS]
+# The comparator sits with the reads deliberately: it changes nothing, so the
+# gate (which matches on ACTION_TOOL_NAMES, derived from actions.py) routes it
+# straight past the approval node like any other question.
+ALL_TOOLS = [*ANALYST_TOOLS, *COMPARATOR_TOOLS, *ACTION_TOOLS]
 
 # Shared by /chat and the eval suite - both must see the same error behaviour,
 # or the evals measure a different agent than the one the UI talks to.
