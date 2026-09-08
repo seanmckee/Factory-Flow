@@ -498,6 +498,30 @@ and seed reproducibility like any other client.
   narrows it with `parseComparison`, which returns null rather than throwing
   on version skew: draw nothing and leave the reply standing, the same rule
   `parseSseChunk` follows for a malformed frame.
+- **The verdict is a table, and `VerdictCard` draws it, not a chart.** "Which
+  branch won, by how much, and which line moved" is six rows of exact cents
+  against two columns; a chart reads that worse than a table and a paragraph
+  reads it worst. The chart that *is* worth drawing — two net curves with the
+  fork seam — already exists on Trends, so the card ships no smaller copy of
+  it. `agent/verdictDisplay.ts` holds the pure transforms (`netEffectScale`,
+  `barFraction`, the formatters, `outcomeRows`), tested like
+  `src/simulation/`'s display transforms, and it **formats only** — the moment
+  it re-derived a delta there would be two answers to which branch won.
+  Details that are load-bearing rather than cosmetic: bars are **diverging**
+  and scaled against the biggest mover, never against the net delta, because
+  the lines routinely offset each other (a purchase that pays back is
+  throughput up and capital down) and a net-delta scale draws the two largest
+  forces wider than the track whenever they nearly cancel; `outcomeRows`
+  carries `higherIsBetter` per row, since cycle time, WIP and scrap improve by
+  **falling** and a table colouring every rise green would recommend the wrong
+  decision; a fraction delta reads in percentage **points**, because calling
+  five points "5%" is the standard way to overstate a move from 90% to 95%;
+  `formatDurationDelta` exists because `formatDurationSeconds` assumes a
+  *duration*, so its two-minute threshold catches every negative and an
+  improvement rendered as "−11238s" instead of "−3.1h"; and money here groups
+  thousands (`formatMoneyCents`) unlike the order forms' `formatCents`, so the
+  table cannot contradict the comparator's own summary sentence printed inside
+  the same card.
 - `InMemorySaver` is the checkpointer, so a restart drops pending approvals
   and the service cannot run with more than one uvicorn worker. Both are fine
   at this stage and neither is fine later.

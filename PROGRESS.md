@@ -260,14 +260,21 @@ User calls taken before building:
       **Deviation from the plan:** no `progress` event yet — it moves to 8.15
       with the emitter that needs it, since a vocabulary member with nothing
       to send is a boundary invented ahead of its caller.
-- [ ] **8.14 The verdict card.** The P&L delta table in the transcript, two
-      columns and a signed delta, with an inline signed bar per line so
-      "which line moved" reads at a glance (the utilization-bar pattern);
-      window and both tick numbers in the header, since the fair-window rule
-      is what makes the rows true. Prose sits alongside it. Plus **"Open on
-      Trends"**, which needs the compare state URL-addressable
-      (`useSimulationPage` holds it in memory today) — that also makes a
-      comparison shareable, which a transcript is not.
+- [x] **8.14 The verdict card** — `VerdictCard` draws the P&L delta as the
+      table it is: diverging bars scaled against the biggest mover, the net
+      row summing the column above it, the outcomes grid (finished, OTD,
+      cycle, WIP, scrap) and a constraint line that says when the constraint
+      **moved**. Pure transforms in `agent/verdictDisplay.ts`, 32 tests.
+      Browser pass caught what the unit tests did not: cycle-time *deltas*
+      rendered as raw seconds, because `formatDurationSeconds` assumes a
+      duration and its two-minute bound catches every negative.
+      **Split from the plan:** "Open on Trends" is its own unit (8.14b) — the
+      compare state has to become URL-addressable first, which is
+      `SimulationPage` work and independently useful, since it also makes a
+      comparison shareable.
+- [ ] **8.14b Open on Trends** — put `run` and `compare` in the URL so
+      `useSimulationPage` seeds from it, then link the verdict card at the
+      pair it just judged. Shareable comparisons fall out of the same change.
 - [ ] **8.15 `advance_to_tick` — chunk inside the tool.** One call the gate
       sees once, chunking to the backend's cap internally, streaming progress
       as each committed advance lands (the SSE `progress` event lands here,
