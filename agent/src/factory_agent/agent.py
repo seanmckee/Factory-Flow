@@ -48,8 +48,15 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.types import Command, interrupt
 
-from .actions import ACTION_TOOL_NAMES, ACTION_TOOLS
-from .approval import build_approval
+from .actions import (
+    ACTION_TOOL_NAMES,
+    ACTION_TOOLS,
+    GATED_TOOL_NAMES,
+    PROPOSE_TOOL,
+    PROPOSE_TOOL_NAME,
+)
+from .approval import build_approval, build_plan_approval
+from .budget import Budget, covers, spend
 from .comparator import COMPARATOR_TOOLS
 from .config import settings
 from .control import clear_stop
@@ -98,11 +105,22 @@ How to test a decision, which is what this simulator is for:
    the decision paid back, and what it cost in on-time delivery, cycle time,
    WIP or scrap.
 
-Every write pauses for a human to approve, and they see the run's real name,
-its tick and the run's own frozen price - so say plainly what you intend to do
-and why before you call it. If a call comes back declined, do not try to route
-around the refusal: say what you would have done and stop. A declined call
-changed nothing.
+Changes need a human's approval, and they see the run's real name, its tick
+and the run's own frozen price - so say plainly what you intend to do and why
+before you call it. If a call comes back declined, do not try to route around
+the refusal: say what you would have done and stop. A declined call changed
+nothing.
+
+When you intend to take MORE THAN ONE action, call propose_experiment first
+and get the whole plan approved at once. Then the actions it covers run
+without stopping, and only what falls outside the plan asks again. Ask for the
+least that does the job: name the runs you know, the verbs you need, the tick
+you will advance to and the most it may spend. A plan that is too small costs
+one extra question; a plan that is too large asks a person to hand you power
+you did not need, which is worse. Note two things about the bounds: a fork's
+new run is NOT covered by the plan that created it, because its id did not
+exist when the plan was approved, and a plan cannot cover advance_run - use
+advance_to_tick, whose target can be checked against the plan's horizon.
 
 Be concrete and quantitative: name runs by id and name, cite the window your
 figures cover, and convert cents to dollars in prose.
@@ -135,7 +153,7 @@ def tool_error_message(error: SimApiError | ToolException) -> str:
 # The comparator sits with the reads deliberately: it changes nothing, so the
 # gate (which matches on ACTION_TOOL_NAMES, derived from actions.py) routes it
 # straight past the approval node like any other question.
-ALL_TOOLS = [*ANALYST_TOOLS, *COMPARATOR_TOOLS, *ACTION_TOOLS]
+ALL_TOOLS = [*ANALYST_TOOLS, *COMPARATOR_TOOLS, *ACTION_TOOLS, PROPOSE_TOOL]
 
 # Shared by /chat and the eval suite - both must see the same error behaviour,
 # or the evals measure a different agent than the one the UI talks to.
@@ -158,6 +176,11 @@ class ChatState(MessagesState):
     """
 
     approved: list[str]
+    #: The experiment a human has authorised on this thread, or absent. It is
+    #: checkpointed with the messages, which is what lets a grant outlive the
+    #: turn that asked for it — and what makes a new conversation start with
+    #: no authority, since a new thread has no state.
+    budget: Budget | None
 
 
 def _pending_call_message(messages: list) -> AIMessage | None:
@@ -210,16 +233,50 @@ async def review_calls(state: ChatState) -> dict:
     if pending is None:
         return {"approved": []}
 
+    budget = state.get("budget")
     approved: list[str] = []
-    refusals: list[ToolMessage] = []
+    answers: list[ToolMessage] = []
     for call in pending.tool_calls:
-        if call["name"] not in ACTION_TOOL_NAMES:
+        if call["name"] not in GATED_TOOL_NAMES:
             approved.append(call["id"])
+            continue
+
+        if call["name"] == PROPOSE_TOOL_NAME:
+            payload = await build_plan_approval(call["args"])
+            if "error" in payload:
+                answers.append(
+                    refusal(
+                        call["id"],
+                        "the simulation could not confirm the plan: "
+                        f"{payload['error']}.",
+                    )
+                )
+                continue
+            decision = interrupt(payload) or {}
+            if not decision.get("approved"):
+                note = str(decision.get("note") or "").strip()
+                because = f" They said: {note}" if note else ""
+                answers.append(
+                    refusal(call["id"], f"a human declined the plan.{because}")
+                )
+                continue
+            budget = payload["plan"]
+            # Answered here rather than executed: the whole effect of asking
+            # is the pause and the grant, so there is no tool to run.
+            answers.append(
+                ToolMessage(
+                    content=(
+                        "Approved: " + payload["summary"] + " Proceed within "
+                        "those bounds; anything outside them will pause again."
+                    ),
+                    tool_call_id=call["id"],
+                )
+            )
             continue
 
         payload = await build_approval(call["name"], call["args"])
         if "error" in payload:
-            refusals.append(
+            answers.append(
                 refusal(
                     call["id"],
                     f"the simulation could not confirm it: {payload['error']}.",
@@ -227,15 +284,35 @@ async def review_calls(state: ChatState) -> dict:
             )
             continue
 
-        decision = interrupt(payload) or {}
+        # An approved plan skips the pause for what it covers — and only that.
+        # The spend it is checked against is the sim's own frozen quote off
+        # the payload, never a number the model supplied.
+        quoted = int(payload.get("spendCents") or 0)
+        outside = (
+            covers(budget, call["name"], call["args"], quoted)
+            if budget is not None
+            else None
+        )
+        if budget is not None and outside is None:
+            approved.append(call["id"])
+            budget = spend(budget, quoted)
+            continue
+
+        # `outsidePlan` is present only when a plan IS active and this call
+        # falls outside it — the sentence a person needs to judge a pause they
+        # thought they had already answered. On a plain one-off write there is
+        # no plan to be outside of, and the field would be noise.
+        decision = interrupt(
+            payload if outside is None else {**payload, "outsidePlan": outside}
+        ) or {}
         if decision.get("approved"):
             approved.append(call["id"])
         else:
             note = str(decision.get("note") or "").strip()
             because = f" They said: {note}" if note else ""
-            refusals.append(refusal(call["id"], f"a human declined it.{because}"))
+            answers.append(refusal(call["id"], f"a human declined it.{because}"))
 
-    return {"messages": refusals, "approved": approved}
+    return {"messages": answers, "approved": approved, "budget": budget}
 
 
 async def run_tools(state: ChatState) -> dict:
@@ -255,7 +332,10 @@ async def run_tools(state: ChatState) -> dict:
     calls = [
         call
         for call in waiting
-        if call["name"] not in ACTION_TOOL_NAMES or call["id"] in approved
+        # A plan request is never executed — the gate answered it with its own
+        # ToolMessage — so it must not reach the tool node even when cleared.
+        if call["name"] != PROPOSE_TOOL_NAME
+        and (call["name"] not in ACTION_TOOL_NAMES or call["id"] in approved)
     ]
     if not calls:
         return {"approved": []}
@@ -274,7 +354,7 @@ def route_after_model(state: ChatState) -> str:
     calls = getattr(state["messages"][-1], "tool_calls", None)
     if not calls:
         return END
-    gated = any(call["name"] in ACTION_TOOL_NAMES for call in calls)
+    gated = any(call["name"] in GATED_TOOL_NAMES for call in calls)
     return "approval" if gated else "tools"
 
 

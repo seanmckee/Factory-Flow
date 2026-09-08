@@ -22,6 +22,23 @@ export type ApprovalRequest = {
   run: ApprovalRun;
   /** the server's own one-line description, including money where there is any */
   summary: string;
+  /** the sim's frozen quote for this call — 0 where no money moves */
+  spendCents?: number;
+  /**
+   * Why this paused **despite** an approved plan covering the thread: the
+   * wrong run, a verb the plan didn't ask for, a longer advance, a bigger
+   * charge. Present only when a plan is active and this call falls outside
+   * it, because that is the case where a person is being asked something
+   * they thought they had already answered.
+   */
+  outsidePlan?: string;
+  /**
+   * Every run a *plan* would touch, when the pause is a request for
+   * authority over a whole experiment rather than one write. `run` carries
+   * the first of them, so a client that only knows how to draw one write
+   * still draws something true.
+   */
+  runs?: ApprovalRun[];
 };
 
 export type AgentEvent =

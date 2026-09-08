@@ -172,6 +172,13 @@ export default function AgentPage() {
         args: event.args,
         run: event.run,
         summary: event.summary,
+        ...(event.spendCents === undefined
+          ? {}
+          : { spendCents: event.spendCents }),
+        ...(event.outsidePlan === undefined
+          ? {}
+          : { outsidePlan: event.outsidePlan }),
+        ...(event.runs === undefined ? {} : { runs: event.runs }),
       };
       setItems((previous) => [
         ...previous,
@@ -487,11 +494,22 @@ function ApprovalCard({
         </span>
         <span className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground">
           {run.isFork && <GitBranch className="size-3" />}
-          run #{run.id} · {run.name}
+          {request.runs && request.runs.length > 1
+            ? request.runs.map((one) => `#${one.id}`).join(" · ")
+            : `run #${run.id} · ${run.name}`}
         </span>
       </div>
 
       <p className="text-sm leading-relaxed">{request.summary}</p>
+
+      {/* Why you are being asked again, when a plan you already approved was
+          supposed to cover this. Without it the pause reads as the gate
+          having forgotten. */}
+      {request.outsidePlan && (
+        <p className="text-xs leading-relaxed text-starved">
+          Outside the approved plan: {request.outsidePlan}.
+        </p>
+      )}
 
       {pending ? (
         <div className="flex items-center gap-2">

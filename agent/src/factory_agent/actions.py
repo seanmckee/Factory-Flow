@@ -235,6 +235,45 @@ async def release_work_order(run_id: int, work_order_id: int) -> str:
     )
 
 
+@tool
+async def propose_experiment(
+    purpose: str,
+    run_ids: list[int],
+    verbs: list[str],
+    to_tick: int | None = None,
+    max_spend_cents: int = 0,
+) -> str:
+    """Ask a human to approve a whole experiment up front, instead of
+    approving each change one at a time. Call this FIRST when you intend to
+    take more than one action.
+
+    Say what you are testing (`purpose`), which runs you will touch
+    (`run_ids` — include the control, even though you will not act on it),
+    which verbs you need (`verbs`: fork_run, advance_to_tick, capital_action,
+    set_release_policy, release_work_order), how far you will advance
+    (`to_tick`, an absolute tick — omit it if you will not advance), and the
+    most it may spend (`max_spend_cents`, 0 if the plan buys nothing).
+
+    Ask for the least that does the job. Everything inside the plan then runs
+    without stopping; anything outside it — another run, a verb you did not
+    ask for, a longer advance, a bigger charge — stops and asks, so a plan
+    that is too small costs one extra question and a plan that is too large
+    asks a person to approve power you did not need.
+
+    A fork's CHILD is not covered by the plan that created it: its id does not
+    exist yet, so name the runs you already know and expect one more pause
+    when you act on the new branch.
+    """
+    # The approval gate answers this call: its entire effect is the pause and
+    # the grant, so there is nothing to execute. Reaching this body means the
+    # routing that sends it to the gate is broken, which should be loud rather
+    # than laundered into the transcript as a fact about the factory.
+    raise RuntimeError(
+        "propose_experiment reached its tool body; the approval gate should "
+        "have answered it"
+    )
+
+
 #: Every verb the agent has. The graph pauses on each of these by name.
 ACTION_TOOLS = [
     fork_run,
@@ -246,3 +285,14 @@ ACTION_TOOLS = [
 ]
 
 ACTION_TOOL_NAMES = frozenset(verb.name for verb in ACTION_TOOLS)
+
+#: Not a verb — it changes nothing in the sim — but it must still reach the
+#: approval gate, because what it asks for is authority. Kept out of
+#: ACTION_TOOLS so it is not itself something a plan can grant, and named here
+#: so the graph's routing has one place to look.
+PROPOSE_TOOL = propose_experiment
+PROPOSE_TOOL_NAME = propose_experiment.name
+
+#: Everything that must pass the gate: the verbs, plus the request for
+#: authority over them.
+GATED_TOOL_NAMES = ACTION_TOOL_NAMES | {PROPOSE_TOOL_NAME}
