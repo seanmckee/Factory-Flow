@@ -10,13 +10,15 @@ Model a shop floor, run it forward through simulated days, fork the run at any
 moment, take one decision in one branch, then measure what that decision was
 worth. Or ask the agent to do it:
 
-![The agent's verdict on a fork experiment: a second drill press won by $3,375.59 net over three simulated days, broken down line by line](docs/screenshots/agent-verdict.png)
+![The agent running a full experiment: it reads the run, proposes a bounded plan, forks, buys a machine, advances both branches with live progress, and returns a computed verdict](docs/screenshots/agent-experiment.gif)
 
-> *"Is a second machine at its constraint worth buying?"* The agent found the
-> constraint, proposed a bounded experiment, and waited for approval. Then it
-> forked the run, bought the machine, hired an operator and advanced both
-> branches to the same tick. The verdict above is **computed by code, not
-> written by the model**. [The full walkthrough ↓](#the-agent)
+> *"Run #76 is at Day 4 · 0:00. Is a second machine at its constraint worth
+> buying?"* The agent finds the constraint and proposes an experiment. Once a
+> person approves it, the agent forks the run, buys the machine, hires an
+> operator and advances both branches to the same tick, showing progress as
+> it goes. It answers with a verdict **computed by code, not written by the
+> model**. (Recorded in real time, sped up.) [The full walkthrough
+> ↓](#the-agent)
 
 It's a study of Eliyahu Goldratt's _The Goal_, built as software: throughput is
 money made through sales, inventory is money tied up on the floor, and operating
@@ -122,35 +124,36 @@ time window, not a single snapshot.
 
 ### Ask it to test a decision
 
-> *"Run #70 is at day 3. Is a second machine at its constraint worth buying?
-> Fork it into a control and a branch that buys one (and hires someone to run
-> it), take both to the start of day 7, and tell me which won and why."*
+> *"Run #76 is at Day 4 · 0:00. Is a second machine at its constraint worth
+> buying? Fork it into a control and a branch that buys one and hires someone
+> to run it, advance both to Day 8 · 0:00, and tell me which won and why."*
 
-![The agent finds the constraint, then proposes a bounded experiment and waits for approval](docs/screenshots/agent-plan.png)
+![The agent reads the run, names the Drill Press as the constraint, and proposes a bounded experiment that waits for approval](docs/screenshots/agent-plan.png)
 
-First it reads the run. It corrects the question, too: tick 86,400 is the start
-of day **4**, not day 3. Next it finds the constraint (Drill Press, 99.2%
-utilized) and lays out a plan. Then, instead of stopping at each write, it calls
+It starts by reading the run. It finds the Drill Press at 99.2% utilization
+over days 1–3 (the Cutter is next at 93.4%) with 62 units queued, and prices
+the decision at the run's frozen rates: $1,200 for the machine and $288 for
+the hire. Then, instead of stopping at each write, it calls
 `propose_experiment`, so a person approves the **whole experiment** once. The
 approval is bounded on four axes, and each one pauses on its own if exceeded:
 
 - **Which runs.** A call against any other run pauses, so a plan about the
   fork can't quietly touch the control it's measured against.
 - **Which verbs.** Approving advances is not approving purchases.
-- **A tick horizon.** It may advance only as far as Day 7 · 0:00.
+- **A tick horizon.** Here the agent may advance only as far as Day 8 · 0:00.
 - **A spend ceiling,** checked against the sim's frozen price for each action,
   never against a figure the model supplied.
 
-A fork's child id didn't exist when the first plan was approved, so the plan
-can't cover it. The agent forks, then asks again for authority over #71, this
-time with a $1,488 ceiling for the $1,200 machine and the $288 hire.
+The fork's id (#77) didn't exist when the first plan was approved, so that
+plan can't cover it. The agent forks, then asks again: buy and hire on #77
+only, advance both runs to Day 8, with a ceiling of $1,488.
 
 ![The standing grant shown as a banner with its bounds and remaining spend, above a streaming progress bar with Stop](docs/screenshots/agent-running.png)
 
 While a grant is active it stays on screen: its bounds, what's left of the
 ceiling (updated as each charge lands), and a **Revoke** button that writes
 directly to the graph state rather than asking the model to stop. Advancing a
-branch three days takes several backend requests (the API caps one advance at
+branch four days takes several backend requests (the API caps one advance at
 20,000 ticks). `advance_to_tick` splits the jump into those requests inside a
 single approved call and streams progress. **Stop** halts at a tick boundary
 the backend has already committed and never aborts a request in flight, so a
@@ -158,9 +161,11 @@ stopped experiment can always resume.
 
 ### The verdict is computed, not written
 
-The card at the top of this page is the result. Both runs' P&L comes from
-frozen columns and the simulation is deterministic, so "which branch won, by
-how much, and which P&L line moved" is a calculation. That is the number an experiment exists to produce, and the model is not
+![The verdict card: per-line P&L for both branches with diverging effect-on-net bars](docs/screenshots/agent-verdict.png)
+
+Both runs' P&L comes from frozen columns and the simulation is deterministic,
+so "which branch won, by how much, and which P&L line moved" is a calculation.
+That is the number an experiment exists to produce, and the model is not
 allowed to retype it. `comparator.py` is pure, tested code with no LLM in it.
 It **refuses** to compare runs stopped at different ticks, because that would
 measure elapsed time rather than the decision. For a parent and its fork it
@@ -168,32 +173,39 @@ measures **from the fork point**, since before it the two branches are
 identical. The effects on each line always add up exactly to the change in net
 profit.
 
-Here it reads: **+$6,206 of throughput** paid for $1,488 of capital, $900 of
-extra rent and $432 of extra wages, and the branch won by **$3,375.59 in three
-days**. The agent's own write-up then adds what the table can't show: the
-bottleneck moved. With the drill press relieved, the **Cutter** is now the
-constraint, which makes the next decision a different decision.
+Here it reads: **+$6,024 of throughput** paid for $1,488 of capital, $1,200
+of extra rent and $576 of extra wages, and the branch won by **$2,825.97 in
+four days**, with 158 more units shipped and the 95th-percentile cycle time
+down 4.2 hours. Because the simulation is deterministic, an earlier,
+independent run of the same experiment (#72 vs #73) produced the same
+$2,825.97 to the cent.
 
-![The agent's write-up: the matched net scores, why the branch won line by line, and the constraint moving to the Cutter](docs/screenshots/agent-answer.png)
+![The agent's write-up: the result table, and why it won, with the constraint moving to the Cutter](docs/screenshots/agent-answer.png)
 
-![Both branches' net-profit curves on one chart: identical up to the fork line, the branch dropping by the capital spend, then overtaking the control](docs/screenshots/trends-fork-payback.png)
+The write-up adds what the table can't show: **the bottleneck moved**. With
+the Drill Press relieved (down to 83.5% utilization, its queue from 96 to 17),
+the Cutter is now pinned at 100% with its queue doubled. That makes the next
+decision a different decision.
+
+![Both branches' net-profit curves on one chart: identical up to the fork line, the branch dropping by the capital spend, then overtaking the control and pulling away](docs/screenshots/trends-fork-payback.png)
 
 "Open both net curves on Trends" links to the pair as URL state. The curves
 match exactly up to the dashed fork line. The branch then drops by the capital
-it spent, crosses the control during day 5 and keeps pulling away. You can read
-the payback period straight off the chart.
+it spent, crosses the control during day 4 and pulls away from there. You can
+read the payback period straight off the chart.
 
 ### Every write stops at a gate
 
-![An approval card for a single capital action: buy a machine at Cutter for $600, machines 1 → 2, operators 1 → 1](docs/screenshots/agent-capital-approval.png)
+![An approval card for a single capital action, declined: buy a machine at Cutter for $600, machines 1 → 2, operators 1 → 1, and the agent's explanation afterwards](docs/screenshots/agent-capital-approval.png)
 
 Outside an approved plan, every write pauses. What you approve is **what the
 sim says, not what the model said**. The gate fetches the run itself and shows
 its real name, its tick, the run's frozen price and the configuration the
-action would produce. Here it shows that buying a Cutter with no operator to
-hire leaves capacity at one staffed machine; the agent flagged that before
-asking. Declining doesn't cancel the turn. The refusal comes back as a tool
-result, and the agent reads it and explains what would actually raise capacity.
+action would produce. Here, buying a second Cutter with no operator to hire
+leaves capacity at one staffed machine; the agent flagged that before asking.
+Declining doesn't cancel the turn. The refusal comes back as a tool result,
+and the agent reads it and explains why the purchase alone wouldn't have
+helped.
 
 ### How the authority boundary is built
 
