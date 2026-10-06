@@ -173,11 +173,18 @@ def describe_plan(budget: Budget, runs: list[dict[str, Any]]) -> str:
         if budget["maxSpendCents"] > 0
         else "spend nothing"
     )
+    # The purpose stands as its own sentence. Splicing it into ours ("To
+    # {purpose}: …") assumed a verb phrase, and the model writes whole
+    # sentences — which rendered as "To on Run #77 only, … comparison.: run".
     purpose = budget["purpose"].strip()
-    intent = f"To {purpose[0].lower()}{purpose[1:]}: " if purpose else ""
+    if purpose:
+        purpose = purpose[0].upper() + purpose[1:]
+        if purpose[-1] not in ".!?":
+            purpose += "."
+        purpose += " "
     return (
-        f"{intent}run an experiment on {where}, using {verbs} — {horizon}, "
-        f"{ceiling}. Anything outside those bounds still asks you first."
+        f"{purpose}Approving lets the agent work on {where}, using {verbs} — "
+        f"{horizon}, {ceiling}. Anything outside those bounds still asks you first."
     )
 
 

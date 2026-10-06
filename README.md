@@ -12,7 +12,7 @@ worth. Or ask the agent to do it:
 
 ![The agent running a full experiment: it reads the run, proposes a bounded plan, forks, buys a machine, advances both branches with live progress, and returns a computed verdict](docs/screenshots/agent-experiment.gif)
 
-> *"Run #76 is at Day 4 · 0:00. Is a second machine at its constraint worth
+> *"Run #78 is at Day 4 · 0:00. Is a second machine at its constraint worth
 > buying?"* The agent finds the constraint and proposes an experiment. Once a
 > person approves it, the agent forks the run, buys the machine, hires an
 > operator and advances both branches to the same tick, showing progress as
@@ -124,16 +124,15 @@ time window, not a single snapshot.
 
 ### Ask it to test a decision
 
-> *"Run #76 is at Day 4 · 0:00. Is a second machine at its constraint worth
+> *"Run #78 is at Day 4 · 0:00. Is a second machine at its constraint worth
 > buying? Fork it into a control and a branch that buys one and hires someone
 > to run it, advance both to Day 8 · 0:00, and tell me which won and why."*
 
 ![The agent reads the run, names the Drill Press as the constraint, and proposes a bounded experiment that waits for approval](docs/screenshots/agent-plan.png)
 
 It starts by reading the run. It finds the Drill Press at 99.2% utilization
-over days 1–3 (the Cutter is next at 93.4%) with 62 units queued, and prices
-the decision at the run's frozen rates: $1,200 for the machine and $288 for
-the hire. Then, instead of stopping at each write, it calls
+over the first three days and prices the decision at the run's frozen rates:
+$1,200 for the machine and $288 for the hire. Then, instead of stopping at each write, it calls
 `propose_experiment`, so a person approves the **whole experiment** once. The
 approval is bounded on four axes, and each one pauses on its own if exceeded:
 
@@ -144,9 +143,9 @@ approval is bounded on four axes, and each one pauses on its own if exceeded:
 - **A spend ceiling,** checked against the sim's frozen price for each action,
   never against a figure the model supplied.
 
-The fork's id (#77) didn't exist when the first plan was approved, so that
-plan can't cover it. The agent forks, then asks again: buy and hire on #77
-only, advance both runs to Day 8, with a ceiling of $1,488.
+The fork's id (#79) didn't exist when the first plan was approved, so that
+plan can't cover it. The agent forks, then asks again for exactly what's
+left: buy and hire on #79 only, then advance both runs to Day 8.
 
 ![The standing grant shown as a banner with its bounds and remaining spend, above a streaming progress bar with Stop](docs/screenshots/agent-running.png)
 
@@ -176,16 +175,19 @@ profit.
 Here it reads: **+$6,024 of throughput** paid for $1,488 of capital, $1,200
 of extra rent and $576 of extra wages, and the branch won by **$2,825.97 in
 four days**, with 158 more units shipped and the 95th-percentile cycle time
-down 4.2 hours. Because the simulation is deterministic, an earlier,
-independent run of the same experiment (#72 vs #73) produced the same
-$2,825.97 to the cent.
+down 4.2 hours. Because the simulation is deterministic, this isn't a lucky
+draw: the agent ran the same experiment three times while these screenshots
+were being made (#72 vs #73, #76 vs #77, #78 vs #79), in separate
+conversations, and all three produced $2,825.97 to the cent.
 
 ![The agent's write-up: the result table, and why it won, with the constraint moving to the Cutter](docs/screenshots/agent-answer.png)
 
-The write-up adds what the table can't show: **the bottleneck moved**. With
-the Drill Press relieved (down to 83.5% utilization, its queue from 96 to 17),
-the Cutter is now pinned at 100% with its queue doubled. That makes the next
-decision a different decision.
+The write-up explains the result in the factory's terms: what the $1,488 bought,
+the extra wages and rent it committed to, and the flow effects behind the
+$6,024 of throughput. The verdict's last line shows something the agent picks
+up on next: **the constraint moved**. With the Drill Press relieved, the
+Cutter (work center 95) is now pinned at 100%, which makes the next decision
+a different decision.
 
 ![Both branches' net-profit curves on one chart: identical up to the fork line, the branch dropping by the capital spend, then overtaking the control and pulling away](docs/screenshots/trends-fork-payback.png)
 
@@ -201,8 +203,9 @@ read the payback period straight off the chart.
 Outside an approved plan, every write pauses. What you approve is **what the
 sim says, not what the model said**. The gate fetches the run itself and shows
 its real name, its tick, the run's frozen price and the configuration the
-action would produce. Here, buying a second Cutter with no operator to hire
-leaves capacity at one staffed machine; the agent flagged that before asking.
+action would produce. Here the Cutter is the new constraint (100% utilized,
+234 parts queued), but it has one operator, so a second machine with nobody to
+run it leaves capacity at one. The agent flagged that before asking.
 Declining doesn't cancel the turn. The refusal comes back as a tool result,
 and the agent reads it and explains why the purchase alone wouldn't have
 helped.

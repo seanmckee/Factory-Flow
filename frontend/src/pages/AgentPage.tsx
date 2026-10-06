@@ -26,6 +26,7 @@ import type { AgentEvent, AgentPlan, ApprovalRequest } from "../agent/sse";
 import { isSpent, planBounds, spentFraction } from "../agent/planDisplay";
 import Markdown from "../agent/Markdown";
 import { parseComparison, type RunComparison } from "../agent/verdict";
+import { appendReplyText } from "../agent/replyText";
 import { formatTickTime } from "../simulation/simTime";
 import VerdictCard from "../components/VerdictCard";
 import { useToast } from "../toast/ToastContext";
@@ -44,7 +45,15 @@ type ChatItem =
   | { kind: "user"; text: string }
   /** `verdicts` are computed answers a tool returned, shown as themselves
    * rather than left to the reply to paraphrase */
-  | { kind: "assistant"; text: string; tools: ToolCall[]; verdicts: RunComparison[] }
+  /** `toolsAtText` is how many tools had been called when text last arrived,
+   * so text resuming after a call starts its own paragraph */
+  | {
+      kind: "assistant";
+      text: string;
+      tools: ToolCall[];
+      verdicts: RunComparison[];
+      toolsAtText: number;
+    }
   | { kind: "approval"; request: ApprovalRequest; decision: Decision };
 
 /** what each tool did, in the user's terms — the chip under a reply */
@@ -155,7 +164,11 @@ export default function AgentPage() {
   /** shared by a turn and by the continuation after a decision */
   const handleEvent = (event: AgentEvent) => {
     if (event.type === "token") {
-      patchLastAssistant((last) => ({ ...last, text: last.text + event.text }));
+      patchLastAssistant((last) => ({
+        ...last,
+        text: appendReplyText(last.text, event.text, last.tools.length > last.toolsAtText),
+        toolsAtText: last.tools.length,
+      }));
     } else if (event.type === "tool") {
       patchLastAssistant((last) => ({
         ...last,
@@ -228,7 +241,7 @@ export default function AgentPage() {
     setItems((previous) => [
       ...previous,
       { kind: "user", text: message },
-      { kind: "assistant", text: "", tools: [], verdicts: [] },
+      { kind: "assistant", text: "", tools: [], verdicts: [], toolsAtText: 0 },
     ]);
     try {
       await streamChat(message, id, handleEvent);
@@ -251,7 +264,7 @@ export default function AgentPage() {
           : item,
       ),
       // a fresh target for the continuation's tokens
-      { kind: "assistant" as const, text: "", tools: [], verdicts: [] },
+      { kind: "assistant" as const, text: "", tools: [], verdicts: [], toolsAtText: 0 },
     ]);
     try {
       await resumeChat(threadId, approved, handleEvent);
