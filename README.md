@@ -2,11 +2,21 @@
 
 [![CI](https://github.com/seanmckee/Factory-Flow/actions/workflows/ci.yml/badge.svg)](https://github.com/seanmckee/Factory-Flow/actions/workflows/ci.yml)
 
-**A manufacturing simulator where the score is net profit, not parts finished.**
+**A manufacturing simulator where the score is net profit, not parts finished,
+with an AI agent that runs experiments on the factory and asks a human before
+it changes anything.**
 
 Model a shop floor, run it forward through simulated days, fork the run at any
-moment, take one decision in one branch — then measure what that decision was
-worth.
+moment, take one decision in one branch, then measure what that decision was
+worth. Or ask the agent to do it:
+
+![The agent's verdict on a fork experiment: a second drill press won by $3,375.59 net over three simulated days, broken down line by line](docs/screenshots/agent-verdict.png)
+
+> *"Is a second machine at its constraint worth buying?"* The agent found the
+> constraint, proposed a bounded experiment, and waited for approval. Then it
+> forked the run, bought the machine, hired an operator and advanced both
+> branches to the same tick. The verdict above is **computed by code, not
+> written by the model**. [The full walkthrough ↓](#the-agent)
 
 It's a study of Eliyahu Goldratt's _The Goal_, built as software: throughput is
 money made through sales, inventory is money tied up on the floor, and operating
@@ -16,12 +26,34 @@ running a machine costs money whether or not it produces anything.
 
 **Stack** — React 19 · TypeScript · Vite · Tailwind v4 · Recharts ·
 Express 5 · Drizzle ORM · Neon serverless Postgres · Zod · Vitest ·
-Python 3.12 · FastAPI · LangGraph · LangSmith
+Python 3.12 · FastAPI · LangGraph · OpenAI · LangSmith
 
-**Status** — the simulator is complete and driveable end to end, and an AI
-agent reads *and drives* it over the same REST API the browser uses, with
-every change it makes held at a human approval gate. 371 unit tests, none of
-which touch a database, an HTTP server or a live model.
+**Status:** the simulator works end to end. The AI agent reads it, runs
+experiments on it, and changes it through the same REST API the browser uses.
+Every change goes through a human approval gate. There are 519 unit tests,
+and none of them touch a database, an HTTP server or a live model.
+
+## Contents
+
+| | |
+| --- | --- |
+| **[The question it exists to answer](#the-question-it-exists-to-answer)** | Fork a run, make one decision, read what it was worth |
+| **[The agent](#the-agent)** | An AI operator over the simulation |
+| ↳ [Ask it about the factory](#ask-it-about-the-factory) | Read-only analysis; it names the figures it relied on |
+| ↳ [Ask it to test a decision](#ask-it-to-test-a-decision) | One approval covers a whole experiment, within four limits |
+| ↳ [The verdict is computed, not written](#the-verdict-is-computed-not-written) | A deterministic comparator decides which branch won |
+| ↳ [Every write stops at a gate](#every-write-stops-at-a-gate) | Approval cards built from what the sim reports, not from the model's claims |
+| ↳ [How the authority boundary is built](#how-the-authority-boundary-is-built) | Enforced by the code's structure, not by the prompt |
+| ↳ [Evals scored against the sim](#evals-scored-against-the-sim-not-against-a-judge) | Ground truth computed from the simulation, not judged by another LLM |
+| **[The tour](#the-tour)** | The simulator UI |
+| ↳ [The floor](#the-floor--what-is-happening-right-now) | Live status of every work centre |
+| ↳ [The dashboard](#the-dashboard--a-pl-over-any-window) | A profit-and-loss view over any time window, with the constraint ranked first |
+| ↳ [Capital actions](#capital-actions--decisions-that-cost-money-up-front) | Buy or retire machines, hire or let go operators, at prices frozen when the run started |
+| ↳ [Release policies](#release-policies--how-work-reaches-the-floor) | CONWIP, due-date, drum-buffer-rope |
+| ↳ [The factory is data](#the-factory-is-data) | Routings with setup time and scrap, plus orders and allocations |
+| **[How it works](#how-it-works)** | Engine, determinism, frozen config, persistence, API |
+| **[Running it](#running-it)** | Three services, one command each |
+| **[Deliberately not built](#deliberately-not-built)** · **[What's next](#whats-next)** | Scope, stated plainly |
 
 ---
 
@@ -54,6 +86,175 @@ The $1,488 decision was worth **$4,487.75** in five simulated days. That number
 is the product — not the chart, not the utilization figure. Everything in the
 codebase exists so that number can be trusted: same seed, same draws, frozen
 prices, money summed from columns written when it was earned.
+
+---
+
+## The agent
+
+`agent/` is a third service, a Python FastAPI app hosting a hand-built
+LangGraph agent. It does more than answer questions about the factory. It
+**runs experiments on it**: it forks a run, makes a decision in one branch,
+advances both branches and measures the difference. A human grants the
+authority for that, once per experiment, within limits the code enforces.
+
+It is a **pure HTTP client of the backend**. It has no database connection and
+does not import the engine. Its whole tool surface is the same REST API the
+browser uses, so it follows the same run locks, frozen config and seed
+reproducibility as any other client. There is no back door into the engine,
+which is why the API was built first.
+
+### Ask it about the factory
+
+![The agent answering "which run made the most money, and where is its constraint?" with the tool calls it made shown above the answer](docs/screenshots/agent-analyst.png)
+
+Eight read-only tools cover the run list, a run's P&L, windowed metrics, the
+floor snapshot, the capital log, both sides of the order book and the facility
+settings. Answers stream to the `/agent` page as server-sent events. Each tool
+call appears as a chip above the reply, so you can see what the agent looked
+at. Here it read the P&L of every run, picked the winner, then read that run's
+metrics and floor to find the constraint by name.
+
+The tool docstrings matter because the model plans from them. They spell out
+domain rules that a capable reader can still get wrong: money is integer
+cents; throughput is money made through sales, never a count of parts;
+`netCents` is the score and can be negative; and utilization must come from a
+time window, not a single snapshot.
+
+### Ask it to test a decision
+
+> *"Run #70 is at day 3. Is a second machine at its constraint worth buying?
+> Fork it into a control and a branch that buys one (and hires someone to run
+> it), take both to the start of day 7, and tell me which won and why."*
+
+![The agent finds the constraint, then proposes a bounded experiment and waits for approval](docs/screenshots/agent-plan.png)
+
+First it reads the run. It corrects the question, too: tick 86,400 is the start
+of day **4**, not day 3. Next it finds the constraint (Drill Press, 99.2%
+utilized) and lays out a plan. Then, instead of stopping at each write, it calls
+`propose_experiment`, so a person approves the **whole experiment** once. The
+approval is bounded on four axes, and each one pauses on its own if exceeded:
+
+- **Which runs.** A call against any other run pauses, so a plan about the
+  fork can't quietly touch the control it's measured against.
+- **Which verbs.** Approving advances is not approving purchases.
+- **A tick horizon.** It may advance only as far as Day 7 · 0:00.
+- **A spend ceiling,** checked against the sim's frozen price for each action,
+  never against a figure the model supplied.
+
+A fork's child id didn't exist when the first plan was approved, so the plan
+can't cover it. The agent forks, then asks again for authority over #71, this
+time with a $1,488 ceiling for the $1,200 machine and the $288 hire.
+
+![The standing grant shown as a banner with its bounds and remaining spend, above a streaming progress bar with Stop](docs/screenshots/agent-running.png)
+
+While a grant is active it stays on screen: its bounds, what's left of the
+ceiling (updated as each charge lands), and a **Revoke** button that writes
+directly to the graph state rather than asking the model to stop. Advancing a
+branch three days takes several backend requests (the API caps one advance at
+20,000 ticks). `advance_to_tick` splits the jump into those requests inside a
+single approved call and streams progress. **Stop** halts at a tick boundary
+the backend has already committed and never aborts a request in flight, so a
+stopped experiment can always resume.
+
+### The verdict is computed, not written
+
+The card at the top of this page is the result. Both runs' P&L comes from
+frozen columns and the simulation is deterministic, so "which branch won, by
+how much, and which P&L line moved" is a calculation. That is the number an experiment exists to produce, and the model is not
+allowed to retype it. `comparator.py` is pure, tested code with no LLM in it.
+It **refuses** to compare runs stopped at different ticks, because that would
+measure elapsed time rather than the decision. For a parent and its fork it
+measures **from the fork point**, since before it the two branches are
+identical. The effects on each line always add up exactly to the change in net
+profit.
+
+Here it reads: **+$6,206 of throughput** paid for $1,488 of capital, $900 of
+extra rent and $432 of extra wages, and the branch won by **$3,375.59 in three
+days**. The agent's own write-up then adds what the table can't show: the
+bottleneck moved. With the drill press relieved, the **Cutter** is now the
+constraint, which makes the next decision a different decision.
+
+![The agent's write-up: the matched net scores, why the branch won line by line, and the constraint moving to the Cutter](docs/screenshots/agent-answer.png)
+
+![Both branches' net-profit curves on one chart: identical up to the fork line, the branch dropping by the capital spend, then overtaking the control](docs/screenshots/trends-fork-payback.png)
+
+"Open both net curves on Trends" links to the pair as URL state. The curves
+match exactly up to the dashed fork line. The branch then drops by the capital
+it spent, crosses the control during day 5 and keeps pulling away. You can read
+the payback period straight off the chart.
+
+### Every write stops at a gate
+
+![An approval card for a single capital action: buy a machine at Cutter for $600, machines 1 → 2, operators 1 → 1](docs/screenshots/agent-capital-approval.png)
+
+Outside an approved plan, every write pauses. What you approve is **what the
+sim says, not what the model said**. The gate fetches the run itself and shows
+its real name, its tick, the run's frozen price and the configuration the
+action would produce. Here it shows that buying a Cutter with no operator to
+hire leaves capacity at one staffed machine; the agent flagged that before
+asking. Declining doesn't cancel the turn. The refusal comes back as a tool
+result, and the agent reads it and explains what would actually raise capacity.
+
+### How the authority boundary is built
+
+The boundary is a structural property of the code, not an instruction the model
+is trusted to follow:
+
+- **The read/write split is a module boundary.** `tools.py` holds the reads,
+  `actions.py` holds the writes, and the gate's list of gated tools is derived
+  from `actions.py`, never written by hand. A new verb in `actions.py` is
+  gated automatically.
+- **The graph is hand-built** (`agent → approval → tools`), not a stock ReAct
+  loop. A batch of pure reads skips the gate entirely, so "a read never pauses"
+  is guaranteed by the graph's shape. `interrupt_before` can't express that; it
+  pauses everything or nothing.
+- **Approval payloads are built from the sim,** never from the model's
+  arguments. A run id the sim can't confirm is declined before anyone sees it.
+- **A grant can only skip a pause it covers.** If a grant is wrong or stale,
+  the worst case is an extra question, never an unapproved write. Spend is
+  counted when the action is authorised, so even a backend 409 counts against
+  the ceiling.
+- **Grants live with the conversation** in checkpointed state. A new
+  conversation starts with no authority.
+- **The concurrency details are pinned down** after reading the langgraph
+  source: `durability="sync"` so the approval event can't race the checkpoint
+  that makes it resumable, and a per-thread lock so two simultaneous resumes
+  can't both execute a write.
+- **Model output is untrusted text.** Replies render as markdown through
+  `react-markdown` with raw HTML escaped, and the verdict card parses the
+  comparator's JSON, never the prose.
+
+### Evals scored against the sim, not against a judge
+
+This is what determinism makes possible. `uv run python -m factory_agent.evals.run`
+builds a LangSmith dataset whose **ground truth is computed from the same
+backend the agent reads**: the highest net profit across run summaries, the
+highest utilization in a run's metrics, the order-book totals, and the
+comparator's own verdict on a pair of runs. A wrong answer is simply wrong,
+not a disagreement with an LLM judge.
+
+The first suite scored **5/7**, and both failures were real defects rather than
+scoring noise:
+
+- The "buy me a machine" trap died on a raised exception when the model passed
+  a bad argument, instead of the tool error returning to the model.
+- It named the constraint "work center 98" rather than "Drill Press": metrics
+  carries ids only, and nothing told it to resolve names off the floor.
+
+Both were cheap fixes. Finding them was the point.
+
+Three examples score **conduct rather than prose**:
+
+- the graph **stopped** on the right call, against the right run;
+- a multi-step request pauses on `propose_experiment` rather than on the first
+  write;
+- "which line moved" is answered by **calling** the comparator, not by
+  subtracting two summaries.
+
+When no comparable pair of runs exists, the comparison examples are left out
+and the runner says so, because a smaller suite that still scores 100% is the
+quiet regression evals exist to catch. The suite never resumes a pause, so
+running it can't change the simulation, whatever the agent answers.
 
 ---
 
@@ -275,90 +476,6 @@ was.
 
 ---
 
-## The agent
-
-A third service — `agent/`, a Python FastAPI app hosting a LangGraph ReAct
-agent — reads the simulation through the backend's REST API and nothing else.
-Its entire tool surface is HTTP, so it inherits the run locks, the frozen
-config and the seed reproducibility exactly as the browser does. There is no
-back door into the engine, which is why the API was built first.
-
-Ask it *"which run made the most money and where is its constraint?"* and it
-plans over eight GET tools — the run list, a run's P&L, windowed metrics, the
-floor snapshot, the capital log, both sides of the order book, the facility
-settings — and answers with figures it can cite. Answers stream to the
-`/agent` page as server-sent events with the tool calls included, so you watch
-what it looked at while it reads.
-
-Five more tools let it *act*: fork a run, advance it, buy or retire a machine,
-hire or let go an operator, change a release policy, release a work order —
-which is what turns "the drill press is the constraint" into an experiment
-with an answer.
-
-### The approval gate
-
-Every write stops before it happens. The graph is hand-authored rather than a
-stock ReAct loop for exactly this reason — reads must not pause and writes
-must, and a blanket interrupt cannot tell them apart — so a batch of pure
-reads is routed past the gate entirely while a write suspends the graph and
-waits.
-
-What you approve is **what the sim says, not what the model said**. The gate
-fetches the run itself and shows its real name, its tick and, for a capital
-action, the run's own frozen price and the machine count it would produce:
-*"Buy a machine at Drill Press — $1,200.00 at Day 16 · 0:00:00. Machines 2 → 3,
-operators 2 → 2."* A model can claim anything about which run it means; the
-card states what the backend will actually do.
-
-The boundary is structural, not an instruction the model is trusted to follow:
-the tool cannot execute unless a human resumed that specific call. Declining
-is not a cancellation — the refusal comes back as a tool result, so the agent
-reads it and answers rather than crashing the turn.
-
-The tool docstrings are load-bearing, because they are what the model plans
-with. They carry the domain semantics that a competent reader still gets wrong:
-money is integer cents, throughput is money made through sales and never a
-count of parts, `netCents` is the score and can be negative, and utilization
-has to come from a window rather than from a snapshot.
-
-### Evals scored against the sim, not against a judge
-
-This is what the determinism buys. `uv run python -m factory_agent.evals.run`
-builds a LangSmith dataset whose **ground truth is computed from the same
-backend the agent reads** — argmax net over the run summaries, argmax
-utilization over a run's metrics, the order-book totals — so a wrong answer is
-a wrong answer rather than a disagreement with an LLM judge. The dataset is
-rebuilt from live sim state on each invocation under one stable name, so
-experiments accumulate against fresh truth.
-
-The first suite scored **5/7**, and both failures were real defects rather than
-scoring noise:
-
-- The "buy me a machine" trap died on a raised exception when the model passed
-  a bad argument, instead of the tool error returning to the model so it could
-  refuse the way it was meant to.
-- It named the constraint "work center 98" rather than "Drill Press": metrics
-  carries ids only, and nothing told it to resolve names off the floor.
-
-Both were cheap fixes, and the suite now scores **7/7**. Finding them is the
-point.
-
-One example is no longer scored on prose at all. The agent can buy a machine
-now, so "it declined" is the wrong answer; what the gate example checks is
-that the graph **stopped** — on a capital action, against the run the question
-named. Behaviour rather than wording, which is the same determinism argument
-applied to conduct. And because the suite never resumes a pause, running the
-evals cannot change the simulation however the agent answers.
-
-Next in this track: write tools (release, policy, capital, advance, fork)
-behind the same lock protocol the UI obeys, then the experiment graph — fork a
-run, take a decision in the branch, advance both, read the delta in net profit.
-The interesting part was never the tool-calling. It is that the environment can
-already tell the agent whether it was right, and the whole simulator was built
-to make that a measured answer rather than an assertion.
-
----
-
 ## Running it
 
 Three independent projects, no monorepo tooling. Node 20.19+ (Vite 8), a
@@ -391,8 +508,8 @@ Then open the simulator, click **New Run**, pick a release policy, and
 fast-forward a day.
 
 ```bash
-npx vitest run          # backend 231 tests, frontend 96
-uv run pytest           # agent 19 tests, no live model calls
+npx vitest run          # backend 231 tests, frontend 159
+uv run pytest           # agent 129 tests, no live model calls
 npm run check:fork      # backend, live DB: a fork replays its parent exactly
 npm run check:policy    # backend, live DB: policies stay isolated per run
 ```
@@ -439,18 +556,18 @@ omissions:
 
 ## What's next
 
-The agent's remaining phases, described above: write tools behind the run
-lock, then the experiment graph that forks a run, takes a decision in one
-branch and reads the delta.
-
-Further out, in rough order of how much of it is grounded in something the
-system can already cite:
+The agent can already run one experiment end to end. Next, roughly in order of
+how much of each the system can already ground in data it has:
 
 - **An event log**, and root-cause reports over it: given an order that shipped
   late or a day that lost money, walk backwards and name the constraint, the
   queue, the decision.
-- **Multi-run comparison** beyond one overlaid curve — every metric, same
-  window, deltas highlighted, a P&L column per branch.
+- **Experiments over more than two branches.** The comparator judges a pair
+  today. A sweep (no press, one, two; CONWIP vs DBR) needs the same
+  arithmetic ranked across many runs.
+- **A durable checkpointer.** `InMemorySaver` means a restart drops pending
+  approvals and the agent can run only one uvicorn worker. Both are fine for
+  now and neither will be later.
 - **Lateness prediction** as a conventional ML problem (real labels, calibrated
   probabilities, features that already exist in the time series) rather than
   something an LLM guesses at.
