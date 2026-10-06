@@ -77,8 +77,9 @@ Domain vocabulary (it differs from casual usage):
   - wages - capital spend. It can be negative; an idle factory loses money,
   because rent and wages accrue against time.
 - One tick is one staffed second; a run's dayTicks (shifts x 28,800) make one
-  calendar day. Prefer reporting times as days/hours, and money as dollars
-  (cents / 100).
+  calendar day. Days are numbered from 1: tick 0 is Day 1 · 0:00, and
+  "Day N · 0:00" is tick (N - 1) * dayTicks. Prefer reporting times as
+  days/hours, and money as dollars (cents / 100).
 - The constraint (bottleneck) is the work center with the highest utilization
   over a window - use get_run_metrics, never a floor snapshot, to rank it.
   Metrics identify work centers by id only, and a run keeps no copy of the
