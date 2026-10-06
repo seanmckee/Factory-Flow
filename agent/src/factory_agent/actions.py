@@ -70,7 +70,10 @@ async def advance_to_tick(run_id: int, to_tick: int) -> str:
     Give the TARGET tick, not a duration. That is what makes a fair comparison
     fair by construction: advance both branches to the same to_tick and they
     have run for the same time whatever state each was in. A run's dayTicks
-    ticks make one calendar day, so day N ends at N * dayTicks.
+    ticks make one calendar day, and days are numbered from 1 exactly as the
+    UI and the approval card print them: tick 0 is Day 1 · 0:00, so "Day N ·
+    0:00" (the start of day N) is tick (N - 1) * dayTicks. Advancing to
+    Day 8 · 0:00 on a one-shift run means to_tick = 7 * 28,800 = 201,600.
 
     It can take minutes for a long jump and reports progress as it goes. A
     human can stop it; if they do, the run keeps every tick it committed and
