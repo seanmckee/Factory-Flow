@@ -66,6 +66,15 @@ comparator and a verdict writer. It is now the boundary that pays, since the
 comparator is the node that needs no model at all. `InMemorySaver` is the
 first thing to fix if it does continue: it drops granted plans on restart.
 
+**One sim unit stopped being optional: 6H.3, rolling demand** (user call,
+2026-09-08). Running phase-3 experiments showed the comparator's equal-tick
+rule and a finite order book fighting each other — the branch that produces
+better clears the book sooner, idles longer, and pays more rent for the
+privilege, so it wins OTD and cycle time and loses net. That is an artifact
+of the book, not a finding about capacity, and it makes fork comparison less
+useful than it should be. See 6H.3 for the mechanism and for why demand has
+to arrive from the **seed** rather than from the agent.
+
 **The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
 6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
@@ -125,6 +134,43 @@ pays back in **0.6 of a fed day**.
       Track 8 agent should face: a stream of decisions, not one shot at a static
       book. New randomness, so it needs a draw domain of its own (the 6C
       pattern) and must stay reproducible from `rng_seed` alone.
+
+      **Promoted from "polish" to the thing blocking useful experiments**
+      (user call, 2026-09-08, from running phase-3 experiments). 6H's original
+      note blamed the order book; this is the mechanism. **A finite book
+      penalises efficiency at a fixed horizon.** The comparator *enforces*
+      equal `tickNum` — the right fairness rule for isolating a decision — so
+      the higher-capacity branch, which clears the book sooner, spends a
+      larger share of its equal-length window **idle**. Both branches then
+      accrue rent and wages against time with no throughput left to earn, and
+      the efficient one accrues *more*, because it is paying for the extra
+      machine and the extra operator. The playthrough baseline prices the
+      tail: an idle day costs **$4,051** on one press and more on two. So
+      capacity pays back only until demand runs out and is pure cost
+      afterwards — the branch that produced better keeps OTD and cycle time
+      and **loses on net**. That is an artifact of the book's finiteness, not
+      a finding about capacity, which is what makes fork comparison less
+      useful than it should be right now.
+
+      **Demand must come from the seed, not from the agent.** Tempting to let
+      the agent create sales orders and derive work orders from them, and it
+      breaks two things at once. Two same-seed branches would diverge because
+      the model invented different orders — measuring the dice rather than the
+      decision, the exact failure the draw-key design exists to prevent. And
+      demand is read **live** by every run (`loadRunState`), so orders created
+      mid-experiment change what every *other* run can still earn, including
+      the control. The agent's decisions belong **on top** of arrivals rather
+      than being the arrivals: accept or decline an order, promise a due date,
+      price it, choose what to release. That is a richer decision surface than
+      the static book and still replays from `rng_seed` alone.
+
+      **Cheaper half-measure, if the full unit waits:** compare at *book
+      exhaustion* rather than at a fixed tick — net at the moment the last
+      order shipped, plus how long each branch took to get there. It asks a
+      different question ("who cleared the book better") and needs the
+      comparator's equal-tick rule relaxed for that one case, so it is not
+      free, but it removes the idle tail from the verdict without any new
+      simulation.
 
 ### Track 7 follow-ups — richer comparison (deferred)
 
