@@ -749,10 +749,14 @@ resumes where it left off.
 **Fast-forward is the point of the page, not a faster clock.** There is
 deliberately no arbitrary speed multiplier: the question a run answers is
 where a set of releases ends up, and a "100×" button lies the moment the
-multiplier outruns the server's ~500–4000 ticks a second (the minute clock's
-60-a-beat is far inside that; an unbounded multiplier isn't). The jumps sit
-beside the clock as calendar units — `JUMP_PRESETS`: **+1 hour / +4 hours /
-+1 day**. **Run until idle is gone**, removed with Track 6A: an empty floor
+multiplier outruns the server's tick rate. That bound moved with Track 9 — the
+engine does ~1.9M ticks a second now and a long jump is ~99% database round
+trips — but the conclusion did not: a multiplier would still be pacing against
+a number that is not the engine's. The jumps are calendar units instead. Two
+sit in the bar (`JUMP_PRESETS`: **+1 hour / +1 day**) and the range beyond
+them moved into `JumpDialog`, since once sixty days cost about what one did, a
+row of buttons stopped being able to span the useful span.
+**Run until idle is gone**, removed with Track 6A: an empty floor
 stopped being a goal the moment rent accrues against time — an idle factory
 is a money furnace, and "run out the order book" is not a question a factory
 asks.
@@ -764,8 +768,12 @@ aborts in flight, because the server commits that batch regardless and an
 aborted request would only leave the page claiming a tick the run has passed.
 **A jump streams rather than blocks**: there is no modal overlay
 (`SimulatingOverlay` is deleted) — progress is inline in the transport bar
-with Stop beside it, and the page refreshes as each committed hour lands, so
-a day reads as the charts flying through it. A jump also **stops itself when
+with Stop beside it. The page refreshes as committed hours land, throttled to
+`JUMP_REFRESH_MIN_MS` (500) and always once more on landing: `refresh` is two
+queries and nothing in the transport bar needs it — progress and the tick come
+off the advance's own answer — so across sixty days the unthrottled version
+spent minutes on reads nobody is watching against about a second of
+simulation. A jump also **stops itself when
 the floor empties** (the toast names the Day · time): nothing can land
 mid-jump *by hand* — the jump holds the run's lock — but the run's own
 release policy (RP) can: an advance feeds the floor from the backlog, so a
@@ -839,6 +847,32 @@ block on the tab a `shrink-0` card grid would push the tab strip itself below
 the fold; the pane keeps `min-h-56` and its own scrollport, which is also what
 keeps its `sticky` header sticking (sticky resolves against the nearest
 scrollport, so an `overflow-auto` in between would make it inert).
+
+**How far to run lives in a dialog too** (`JumpDialog`, the "Run to…" button).
+Its two halves **compose rather than compete**: the horizon scrubber is a
+**ceiling** and the condition an **early exit**, because a condition with no
+ceiling is a run that might never stop and a horizon alone is what the old
+presets already were. `simulation/jumpPlan.ts` holds the pure half (the
+`capital.ts` pattern) — the horizon scale, the condition predicates and the
+stop sentences, unit-tested.
+
+Three things there are load-bearing rather than cosmetic. The scale is
+**stepped**, not a free range: the useful span is three orders of magnitude
+and a linear track gives the first day 1.6% of itself. Its hour stops end at
+**6**, because a one-shift day is 8 staffed hours — an "8 hours" stop would
+land on the identical tick as "1 day" for that run and a "12 hours" stop would
+sort *after* it, and the scale cannot change shape per run without the labels
+lying. And every condition is answered from the **advance's own result**
+(`wipCount`, `backlogCount`, `scrappedCount`, the four money lines), so
+watching one costs no request; net is accumulated client-side and is *exact*
+rather than an estimate, since a capital action is the only other term in the
+score and cannot land while the jump holds the run's lock. Conditions are
+checked at each committed hour — the boundary Stop already lands on — and
+`alreadyMet` warns before a jump is spent discovering that "WIP falls below
+200" is true of a floor of 120. It returns **null** for the two backlog
+conditions rather than guessing: `backlogCount` is reported only by an
+advance, and a dialog that guessed would be guessing about the one thing it
+was asked to watch.
 
 **The release policy lives in a dialog off the transport bar too**
 (`PolicyDialog`, the button naming the active policy — `Policy · CONWIP`):

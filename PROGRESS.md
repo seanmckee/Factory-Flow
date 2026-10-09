@@ -75,8 +75,9 @@ staffed day over ~1,000 parts runs **82× faster, byte-identical**. Next is
 and then 9.4, the end-to-end proof against the playthrough baseline. It
 supersedes 6G.2, which optimized a loop the port deleted.
 
-**The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
-6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
+**The remaining sim units wait behind the agent.** 6H.2 and
+6H.3 are **deferred** (user call, 2026-09-04); 6G.2 was superseded by Track 9
+and 6G.3 landed with it. The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
 already drive. What is left there is polish and perf, and playing the sim kept
 generating more of it — 6F, 6G and 6H were all invented while driving 6E. Pick
@@ -202,13 +203,29 @@ across the minute grid rather than counting ticks).
       money, so the optimization is provably byte-identical rather than
       probably. The one-batch-vs-several test is the other half.
 
-- [ ] **6G.3 Refresh cadence during a jump.** The jump loop calls `refresh`
-      after every committed hour — `GET /:id` plus `GET /:id/floor`, ~216 ms
-      together — which is ~1.7 s of a simulated day and ~17 s of a ten-day jump
-      spent on reads nobody is looking at mid-flight. The advance result already
-      carries the tick number, WIP count, all five money lines and the scrap
-      count, so the transport bar can be driven from it and the floor refreshed
-      on a slower cadence (and always at the end).
+- [x] **6G.3 Refresh cadence during a jump.** Done 2026-10-08, pulled forward
+      because Track 9's horizons made it load-bearing rather than tidy: a
+      60-day jump is ~480 committed hours, and a `refresh` per hour (two
+      queries, ~250 ms) spent over two minutes on reads nobody is watching
+      against about a second of simulation. Throttled to `JUMP_REFRESH_MIN_MS`
+      (500) with a guaranteed refresh on landing. Nothing in the transport bar
+      depends on it — progress and the tick number come off the advance's own
+      answer.
+
+### Fast-forward controls (`feat/jump-horizons`)
+
+Done 2026-10-08, out of the ledger's order, because Track 9 invalidated the
+control: the jump presets topped out at **+1 day** since a day used to cost
+~30 s of engine time, and it now costs ~15 ms. A row of buttons cannot span
+one hour to sixty days.
+
+- [x] **A horizon and an early exit, in one dialog.** `JumpDialog` behind a
+      "Run to…" button, with `simulation/jumpPlan.ts` as the pure half. The
+      scrubber is a **ceiling** and the condition an **early exit** — a
+      condition with no ceiling is a run that might never stop. Conditions:
+      floor empties, backlog clears, WIP above/below N, net turns positive,
+      scrap reaches N; all answered from the advance's own result, so watching
+      one costs no request. The bar keeps +1 hour and +1 day.
 
 ### 6H — Demand deep enough to pay back a decision (`feat/demand-depth`)
 
