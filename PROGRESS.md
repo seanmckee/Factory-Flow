@@ -66,6 +66,12 @@ comparator and a verdict writer. It is now the boundary that pays, since the
 comparator is the node that needs no model at all. `InMemorySaver` is the
 first thing to fix if it does continue: it drops granted plans on restart.
 
+**Track 9 (discrete-event engine) is open** (2026-10-08): the sim is being
+re-cut from a one-second tick loop to an event queue, because rolling demand
+(6H.3) needs an indefinite horizon and the tick loop cannot afford one. 9.1 —
+the characterization test that is the port's oracle — is in. It supersedes
+6G.2, which optimized a loop the port deletes.
+
 **The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
 6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
@@ -77,9 +83,88 @@ them up after the agent, if its behaviour shows they are needed.
 
 ## Next, in order
 
+### Track 9 — Discrete-event engine (`perf/discrete-event`)
+
+Planned 2026-10-08. The engine is time-stepped at one simulated second per
+tick, and the cost is structural rather than tunable: 15 days is 432,000 ticks
+over a floor that peaked at 865 parts, and `simulationTick` clones **every**
+part **every** tick whether or not anything happened to it — ~370M part-tick
+iterations for one playthrough, ~5 wall-minutes. The same run is ~36k events
+(a start and a completion per unit per step, plus releases and the hourly
+policy evaluation). Three to four orders of magnitude, not a tuning win.
+
+**It comes before 6H.3 because 6H.3 is what makes it bite.** Rolling demand
+exists to give a run an indefinite horizon; an indefinite horizon is exactly
+the quantity the tick loop cannot afford. And a DES port has an **oracle** —
+the engine suite, `check:fork`, `check:policy` and the playthrough baseline —
+where rolling demand changes behaviour and has none, so the refactor is the
+one to do while it can still be checked.
+
+**It replaces the tick loop; there is no hybrid.** Two engines is the mistake
+the frontend copy already made ("drifted badly the one time they coexisted").
+The characterization test is scaffolding: the recorded numbers stay, the old
+loop does not.
+
+**It stays in TypeScript, in `backend/`, behind the existing
+`simulateBatch(RunState, ticks) → RunBatch` seam.** Not in `agent/`: the agent
+is a pure HTTP client of the backend *by design*, and the approval gate's whole
+claim — that what a person approves is built from the sim rather than from the
+model's arguments — requires the sim to be somewhere the agent cannot reach
+into. A Python engine would also need the nine `run_*` tables, so it would
+either re-read them over HTTP per event or open a second writer against a run
+the lock exists to keep single. SimPy buys a scheduler and a resource pool and
+costs a service boundary; what the port actually needs is a binary heap keyed
+`(time, sequence)`, because the rules — `min(machines, operators)` with
+list-order admission — are already written.
+
+What makes it tractable: `sampleProcessTime` is keyed on
+`(seed, workOrderId, unitIndex, stepIndex)` with **no draw cursor**, so draws
+do not depend on event order and every process time and scrap draw reproduces
+unchanged. The money model cooperates too — time expense and wages are
+floor-diffs that telescope over an interval, carrying is piecewise-constant
+between events, capital is a lump at a tick.
+
+The three places byte-identity is actually at risk, and where the effort goes:
+**tie-break order** (admission is WIP-list order, which decides who pays a
+changeover and the `priorCounts` credit sequence, so the queue needs an
+insertion sequence keyed to reproduce it); **the off-by-one** (a part admitted
+at tick *t* has `progressSeconds += 1` within that same tick, so completion is
+admission + actual − 1); and **observations** (`run_buckets` wants per-minute
+`busy`/`queued`/`capacity`, which becomes integrating piecewise-constant state
+across the minute grid rather than counting ticks).
+
+- [x] **9.1 Characterization test.** `simulation/characterization.test.ts` — one
+      heavy fixture (555 units, five centres, a capacity-1 press, scrap at the
+      constraint / mid-route / a last step, a pre-paid changeover, parts
+      stranded past a shortened routing, an idle centre, dated rates, a carried
+      remainder and non-zero `priorCounts`) pinned two ways: a **fingerprint**
+      of the batch serialized whole, which is the byte-identical guarantee, and
+      a **digest** of aggregates, which says *what* moved when the fingerprint
+      stops matching. Plus the chunking half — the same opening state run as
+      1/2/2/4 batches must answer identically, which is what guards the port's
+      own batching.
+
+- [ ] **9.2 The event queue and the engine core.** A binary heap keyed
+      `(time, seq)`; `simulateTick` and the two claim passes become admission
+      and completion events; `simulateBatch` keeps its signature and its
+      per-batch contract. Delete the tick loop in the same commit.
+
+- [ ] **9.3 Observations off intervals.** Emit `run_buckets` rows by
+      integrating piecewise-constant occupancy across the minute grid rather
+      than summing per-tick counts. Every field stays a sum, a count or a max.
+
+- [ ] **9.4 Prove it.** `check:fork`, `check:policy`, and the 15-day playground
+      seed re-run against the recorded baseline (+$42,444, 100% OTD, drill
+      press 82.7%). Record the new wall time; expect the bottleneck to move to
+      Postgres inserts and `/metrics` reads.
+
 ### 6G — Simulator throughput (`perf/observation-buckets`)
 
-- [ ] **6G.2 Clone on write in the tick loop.** Every tick copies **every** WIP
+- [ ] ~~**6G.2 Clone on write in the tick loop.**~~ **Superseded by Track 9**
+      (2026-10-08): it optimizes a loop the port deletes, and buys 2–5× on the
+      same 370M iterations where the port removes them. The characterization
+      test it specced was written anyway, as 9.1 — it is the port's oracle.
+      Original note: Every tick copies **every** WIP
       part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
       20,000 ticks is 40 million object clones — and a part that sits queued
       changes nothing, so its clone is pure waste. Pass unchanged parts through
@@ -394,6 +479,9 @@ Scheduling ahead is the cheap fallback if the rework proves out of proportion.
 Design invariants live in `CLAUDE.md`. These are the ones about *sequence and
 scope* that would otherwise be re-argued:
 
+- **DES comes before rolling demand, and replaces the tick loop rather than
+  joining it** (user call, 2026-10-08). See Track 9 for the arithmetic and for
+  why it stays in TypeScript in `backend/` rather than moving to `agent/`.
 - **Track 7 comes before Track 8, and forking *is* load-bearing** (user call,
   2026-09-04, reversing the note below). Comparison is the agent's whole
   mechanism: it is how the agent tells a decision that paid from one that did
