@@ -626,7 +626,14 @@ export function useSimulationPage() {
       const released = await releaseWorkOrder(runId, selectedOrderId);
       setSelectedOrderId(null);
       await refresh(runId);
-      showToast(`Released ${released.partsReleased} parts at tick ${released.releasedAtTick}`);
+      // Day · time, like every other moment the page names. A raw tick is the
+      // run's internal clock; staffed time is the only one a factory reads.
+      showToast(
+        `Released ${released.partsReleased} parts at ${formatTickTime(
+          released.releasedAtTick,
+          run?.dayTicks ?? TICKS_PER_DAY,
+        )}`,
+      );
     } catch (error) {
       report(error, "Failed to release the work order");
     } finally {
