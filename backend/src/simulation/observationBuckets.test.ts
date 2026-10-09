@@ -4,7 +4,7 @@ import {
   bucketLastTick,
   bucketTicks,
 } from "./observationBuckets.js";
-import type { TickMetrics } from "./simulationTick.js";
+import type { TickMetrics } from "./observations.js";
 
 /** One tick's observations; `at` is `[busy, queued, capacity]` per center. */
 const makeTick = (

@@ -17,7 +17,7 @@ import {
 import type { AdmittableOrder } from "../simulation/releaseAdmission.js";
 import type { BacklogOrder } from "../simulation/releasePolicy.js";
 import type { RunState } from "../simulation/simulateBatch.js";
-import { setupKey } from "../simulation/simulationTick.js";
+import { setupKey } from "../simulation/observations.js";
 import type { Routing, RoutingStep, WipPart } from "../simulation/types.js";
 
 export type RunRow = typeof simulationRuns.$inferSelect;

@@ -7,8 +7,9 @@ import {
   groupDeliveryBySalesOrder,
 } from "./metrics.js";
 import { bucketTicks } from "./observationBuckets.js";
-import { simulateTick } from "./simulationTick.js";
-import type { TickMetrics } from "./simulationTick.js";
+import type { CostRates } from "./operatingExpense.js";
+import type { TickMetrics } from "./observations.js";
+import { simulateBatch } from "./simulateBatch.js";
 import type { FinishedPart, Routing, WipPart, WorkCenter } from "./types.js";
 
 const makeWorkCenters = (...centers: [id: number, capacity: number][]) =>
@@ -249,8 +250,8 @@ describe("aggregateMetrics", () => {
     ).toThrow(/work center 99/);
   });
 
-  it("aggregates what simulateTick actually emits", () => {
-    // guards the seam: the tick must keep reporting every center every tick,
+  it("aggregates what the engine actually emits", () => {
+    // guards the seam: the engine must keep reporting every center every tick,
     // or these denominators quietly change meaning
     const routings = new Map<number, Routing>([
       [
@@ -263,7 +264,7 @@ describe("aggregateMetrics", () => {
         },
       ],
     ]);
-    let wipParts: WipPart[] = [
+    const wipParts: WipPart[] = [
       {
         id: "part-1",
         workOrderId: 1,
@@ -274,13 +275,37 @@ describe("aggregateMetrics", () => {
         actualProcessTimeSeconds: 3,
       },
     ];
+    const freeCosts: CostRates = {
+      dayTicks: 28_800,
+      facilityOverheadCentsPerDay: 0,
+      wipCarryingBpsPerDay: 0,
+      standingCostByWorkCenter: new Map(),
+      wageCentsPerHourByWorkCenter: new Map(),
+    };
 
-    const series: TickMetrics[] = [];
-    for (let tickNum = 1; tickNum <= 3; tickNum++) {
-      const result = simulateTick(wipParts, routings, tickNum, testWorkCenters, 42);
-      wipParts = result.wipParts;
-      series.push(result.metrics);
-    }
+    const batch = simulateBatch(
+      {
+        tickNum: 0,
+        rngSeed: 42,
+        wipParts,
+        routingByWorkOrder: routings,
+        workCenters: testWorkCenters,
+        workOrders: [{ id: 1, partId: 1 }],
+        parts: [{ id: 1, materialCostCents: 0 }],
+        salesOrders: [],
+        allocations: [],
+        costs: freeCosts,
+        carryRemainder: 0,
+        setupDone: new Set<string>(),
+        priorCounts: new Map(),
+      },
+      3,
+    );
+    const series: TickMetrics[] = batch.ticks.map((tick) => ({
+      tickNum: tick.tickNum,
+      wipCount: tick.wipCount,
+      workCenters: tick.workCenters,
+    }));
 
     const result = aggregate(series, testWorkCenters);
 

@@ -1,9 +1,98 @@
 import { describe, it, expect } from "vitest";
+import { setupKey } from "./observations.js";
+import type { CostRates } from "./operatingExpense.js";
 import { unitDraw } from "./sampleProcessTime.js";
-import { setupKey, simulateTick } from "./simulationTick.js";
+import { simulateBatch } from "./simulateBatch.js";
 import type { Routing, WipPart, WorkCenter } from "./types.js";
 
 const SEED = 42;
+
+/** a free factory: the floor's rules are what these specs are about */
+const FREE_COSTS: CostRates = {
+  dayTicks: 28_800,
+  facilityOverheadCentsPerDay: 0,
+  wipCarryingBpsPerDay: 0,
+  standingCostByWorkCenter: new Map(),
+  wageCentsPerHourByWorkCenter: new Map(),
+};
+
+/**
+ * One tick of the floor.
+ *
+ * These specs were written against a `simulateTick` that no longer exists: the
+ * engine schedules completions rather than stepping seconds, so there is no
+ * per-second entry point to call. They are kept **verbatim** and driven
+ * through `simulateBatch` at a batch length of one, because what they pin is
+ * the floor's rules — who claims a machine, who pays a changeover, what a
+ * scrap draw ruins, what an observation counts — and the port changed none of
+ * them. A rewrite that quietly redefined one would fail here, which is the
+ * whole reason they were not rewritten alongside it.
+ *
+ * Driving the batch rather than reaching into the engine is deliberate too: it
+ * is the seam production uses, so nothing here can pass against an engine the
+ * run service cannot actually drive.
+ */
+function simulateTick(
+  wipParts: WipPart[],
+  routingByWorkOrder: Map<number, Routing>,
+  tickNum: number,
+  workCenters: Map<number, WorkCenter>,
+  rngSeed: number,
+  setupDone: ReadonlySet<string> = new Set(),
+) {
+  const batch = simulateBatch(
+    {
+      tickNum: tickNum - 1,
+      rngSeed,
+      wipParts,
+      routingByWorkOrder,
+      workCenters,
+      // every work order on the floor makes the same free part: these specs
+      // are about the floor, and `calculateThroughput` has its own suite
+      workOrders: [...new Set(wipParts.map((part) => part.workOrderId))].map(
+        (id) => ({ id, partId: 1 }),
+      ),
+      parts: [{ id: 1, materialCostCents: 0 }],
+      salesOrders: [],
+      allocations: [],
+      costs: FREE_COSTS,
+      carryRemainder: 0,
+      setupDone,
+      priorCounts: new Map(),
+    },
+    1,
+  );
+
+  const observed = batch.ticks[0];
+  if (!observed) throw new Error("a one-tick batch emitted no observation");
+  return {
+    wipParts: batch.wipParts,
+    finishedParts: batch.finishedParts.map((part) => ({
+      id: part.partId,
+      workOrderId: part.workOrderId,
+      releasedAtTick: part.releasedAtTick,
+      completedAtTick: part.completedAtTick,
+    })),
+    scrappedParts: batch.scrappedParts.map((part) => ({
+      id: part.partId,
+      workOrderId: part.workOrderId,
+      unitIndex: part.unitIndex,
+      releasedAtTick: part.releasedAtTick,
+      scrappedAtTick: part.scrappedAtTick,
+      stepIndex: part.stepIndex,
+      workCenterId: part.workCenterId,
+    })),
+    setupsStarted: batch.setupsStarted.map(({ workOrderId, stepIndex }) => ({
+      workOrderId,
+      stepIndex,
+    })),
+    metrics: {
+      tickNum: observed.tickNum,
+      wipCount: observed.wipCount,
+      workCenters: observed.workCenters,
+    },
+  };
+}
 
 const testRouting: Routing = {
   steps: [
@@ -41,7 +130,7 @@ const tick = (
   seed = SEED,
 ) => simulateTick(wipParts, testRoutings, tickNum, workCenters, seed);
 
-describe("simulateTick", () => {
+describe("the floor, one tick at a time", () => {
   it("advances a part's progress by 1 second per tick", () => {
     const result = tick([makeWipPart("part-1")]);
     expect(result.wipParts[0]?.progressSeconds).toBe(1);
@@ -623,5 +712,84 @@ describe("simulateTick", () => {
         { workCenterId: 20, busy: 0, queued: 0, capacity: 1 },
       ]);
     });
+  });
+});
+
+/**
+ * The engine does not evaluate every tick — it jumps to the next one that can
+ * differ, and repeats the observation across the quiet stretch between. That
+ * shortcut is the whole point of the port, and it is only sound if "can
+ * differ" is right.
+ *
+ * It was not, in the first cut: the test asked whether anything had **left the
+ * floor**, which misses the commonest event there is. A unit moving to its
+ * next step frees the machine behind it and joins a queue ahead of it without
+ * finishing or scrapping, so a floor whose parts were all mid-route simply
+ * froze — every later tick a copy of the one the transition happened on. The
+ * randomized differential sweep against the old engine is what caught it.
+ */
+describe("waking on the next tick that can differ", () => {
+  const twoSteps = new Map<number, Routing>([
+    [
+      1,
+      {
+        steps: [
+          { workCenterId: 10, processTimeSeconds: 3, setupTimeSeconds: 0, scrapBps: 0 },
+          { workCenterId: 20, processTimeSeconds: 5, setupTimeSeconds: 0, scrapBps: 0 },
+        ],
+      },
+    ],
+  ]);
+  const singles = new Map<number, WorkCenter>([
+    [10, { id: 10, capacity: 1 }],
+    [20, { id: 20, capacity: 1 }],
+  ]);
+
+  const observationsOf = (ticks: number) =>
+    simulateBatch(
+      {
+        tickNum: 0,
+        rngSeed: SEED,
+        wipParts: [
+          makeWipPart("part-1", { actualProcessTimeSeconds: 3 }),
+          makeWipPart("part-2", { unitIndex: 1, actualProcessTimeSeconds: 3 }),
+        ],
+        routingByWorkOrder: twoSteps,
+        workCenters: singles,
+        workOrders: [{ id: 1, partId: 1 }],
+        parts: [{ id: 1, materialCostCents: 0 }],
+        salesOrders: [],
+        allocations: [],
+        costs: FREE_COSTS,
+        carryRemainder: 0,
+        setupDone: new Set<string>(),
+        priorCounts: new Map(),
+      },
+      ticks,
+    ).ticks;
+
+  it("frees the machine behind a part that only moved on", () => {
+    const observed = observationsOf(6);
+
+    // tick 3: part-1 finishes the first step still holding its machine, with
+    // part-2 queued behind it and the second center untouched
+    expect(observed[2]?.workCenters).toEqual([
+      { workCenterId: 10, busy: 1, queued: 1, capacity: 1 },
+      { workCenterId: 20, busy: 0, queued: 0, capacity: 1 },
+    ]);
+    // tick 4: both machines run — the one part-1 vacated, and the one it moved
+    // onto. Reading tick 3 as "nothing left the floor" stalls both.
+    expect(observed[3]?.workCenters).toEqual([
+      { workCenterId: 10, busy: 1, queued: 0, capacity: 1 },
+      { workCenterId: 20, busy: 1, queued: 0, capacity: 1 },
+    ]);
+  });
+
+  it("keeps the floor moving rather than repeating the transition tick", () => {
+    // the bug's signature: with nothing finishing and nothing scrapping, every
+    // tick after the transition was a copy of it
+    const observed = observationsOf(20);
+    const second = observed.filter((tick) => tick.workCenters[1]!.busy > 0);
+    expect(second.length).toBeGreaterThan(1);
   });
 });

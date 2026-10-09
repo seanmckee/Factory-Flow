@@ -1,17 +1,13 @@
 import { creditFinishedParts } from "./calculateThroughput.js";
+import { FloorEngine } from "./floorEngine.js";
 import {
   accrueCarrying,
   materialCostByWorkOrder,
   timeExpenseAtTick,
   wagesAtTick,
-  wipMaterialValueCents,
   type CostRates,
 } from "./operatingExpense.js";
-import {
-  setupKey,
-  simulateTick,
-  type TickWorkCenterMetrics,
-} from "./simulationTick.js";
+import type { TickWorkCenterMetrics } from "./observations.js";
 import type {
   Allocation,
   Part,
@@ -163,34 +159,49 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     throw new Error(`Cannot advance a run by ${ticks} ticks`);
   }
 
+  const costByWorkOrder = materialCostByWorkOrder(state.workOrders, state.parts);
   const priorCounts = new Map(state.priorCounts);
-  const setupDone = new Set(state.setupDone);
+
+  // Nothing observed, nothing spent, nothing moved. The floor is handed back
+  // rather than rebuilt from the engine, so a zero-tick advance cannot so much
+  // as re-derive a part's progress.
+  if (ticks === 0) {
+    return {
+      tickNum: state.tickNum,
+      wipParts: state.wipParts,
+      finishedParts: [],
+      scrappedParts: [],
+      ticks: [],
+      priorCounts,
+      carryRemainder: state.carryRemainder,
+      setupDone: new Set(state.setupDone),
+      setupsStarted: [],
+    };
+  }
+
+  const engine = new FloorEngine({
+    wipParts: state.wipParts,
+    routingByWorkOrder: state.routingByWorkOrder,
+    workCenters: state.workCenters,
+    rngSeed: state.rngSeed,
+    setupDone: state.setupDone,
+    materialCostByWorkOrder: costByWorkOrder,
+    startTick: state.tickNum,
+  });
+
+  const endTick = state.tickNum + ticks;
   const setupsStarted: SetupStartRecord[] = [];
   const finishedParts: FinishedPartRecord[] = [];
   const scrappedParts: ScrappedPartRecord[] = [];
   const tickRecords: TickRecord[] = [];
-  let wipParts = state.wipParts;
   let carryRemainder = state.carryRemainder;
-  const costByWorkOrder = materialCostByWorkOrder(state.workOrders, state.parts);
 
-  for (let offset = 1; offset <= ticks; offset++) {
-    const tickNum = state.tickNum + offset;
-
-    const result = simulateTick(
-      wipParts,
-      state.routingByWorkOrder,
-      tickNum,
-      state.workCenters,
-      state.rngSeed,
-      setupDone,
-    );
-
-    for (const started of result.setupsStarted) {
-      setupDone.add(setupKey(started.workOrderId, started.stepIndex));
-      setupsStarted.push({ ...started, atTick: tickNum });
+  for (const segment of engine.run(endTick)) {
+    for (const started of segment.setupsStarted) {
+      setupsStarted.push({ ...started, atTick: segment.tickNum });
     }
 
-    for (const scrapped of result.scrappedParts) {
+    for (const scrapped of segment.scrapped) {
       const materialCostCents = costByWorkOrder.get(scrapped.workOrderId);
       if (materialCostCents === undefined) {
         throw new Error(
@@ -210,7 +221,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
     }
 
     const credits = creditFinishedParts(
-      result.finishedParts,
+      segment.finished,
       priorCounts,
       state.workOrders,
       state.parts,
@@ -220,7 +231,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
 
     // the credit knows the money, the finished part knows the ticks
     const releasedAtTick = new Map(
-      result.finishedParts.map((part) => [part.id, part.releasedAtTick]),
+      segment.finished.map((part) => [part.id, part.releasedAtTick]),
     );
 
     let throughputCents = 0;
@@ -228,7 +239,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
       const released = releasedAtTick.get(credit.partId);
       if (released === undefined) {
         throw new Error(
-          `Credit for part ${credit.partId} has no finished part in tick ${tickNum}`,
+          `Credit for part ${credit.partId} has no finished part in tick ${segment.tickNum}`,
         );
       }
 
@@ -241,7 +252,7 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
         partId: credit.partId,
         workOrderId: credit.workOrderId,
         releasedAtTick: released,
-        completedAtTick: tickNum,
+        completedAtTick: segment.tickNum,
         throughputCents: credit.throughputCents,
         salesOrderId: credit.salesOrderId,
         unitPriceCents: credit.unitPriceCents,
@@ -250,38 +261,46 @@ export function simulateBatch(state: RunState, ticks: number): RunBatch {
       });
     }
 
-    // carrying charges the end-of-tick floor — the set `wipCount` counts — so
-    // a part that finished during the tick pays no rent for it
-    const carrying = accrueCarrying(
-      wipMaterialValueCents(result.wipParts, costByWorkOrder),
-      state.costs.wipCarryingBpsPerDay,
-      state.costs.dayTicks,
-      carryRemainder,
-    );
-    carryRemainder = carrying.carryRemainder;
+    // One row per tick, as the stored series has always had. The events landed
+    // on the segment's first tick and every tick after it observed the same
+    // floor, so only the money moves across the span: the two time rates are
+    // functions of the tick number, and carrying folds a constant WIP value.
+    for (
+      let tickNum = segment.tickNum;
+      tickNum <= segment.quietThrough;
+      tickNum++
+    ) {
+      // carrying charges the end-of-tick floor — the set `wipCount` counts —
+      // so a part that finished during the tick pays no rent for it
+      const carrying = accrueCarrying(
+        segment.wipMaterialCents,
+        state.costs.wipCarryingBpsPerDay,
+        state.costs.dayTicks,
+        carryRemainder,
+      );
+      carryRemainder = carrying.carryRemainder;
 
-    tickRecords.push({
-      tickNum,
-      throughputCents,
-      wipCount: result.metrics.wipCount,
-      operatingExpenseCents: timeExpenseAtTick(state.costs, tickNum),
-      carryingCostCents: carrying.carryingCostCents,
-      wageCents: wagesAtTick(state.costs, tickNum),
-      workCenters: result.metrics.workCenters,
-    });
-
-    wipParts = result.wipParts;
+      tickRecords.push({
+        tickNum,
+        throughputCents: tickNum === segment.tickNum ? throughputCents : 0,
+        wipCount: segment.wipCount,
+        operatingExpenseCents: timeExpenseAtTick(state.costs, tickNum),
+        carryingCostCents: carrying.carryingCostCents,
+        wageCents: wagesAtTick(state.costs, tickNum),
+        workCenters: segment.workCenters,
+      });
+    }
   }
 
   return {
-    tickNum: state.tickNum + ticks,
-    wipParts,
+    tickNum: endTick,
+    wipParts: engine.survivors(endTick),
     finishedParts,
     scrappedParts,
     ticks: tickRecords,
     priorCounts,
     carryRemainder,
-    setupDone,
+    setupDone: engine.setupDone,
     setupsStarted,
   };
 }

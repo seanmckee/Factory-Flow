@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { CostRates, DatedRate } from "./operatingExpense.js";
 import { PROCESS_TIME_DEVIATION, sampleProcessTime } from "./sampleProcessTime.js";
 import { simulateBatch, type RunBatch, type RunState } from "./simulateBatch.js";
-import { setupKey } from "./simulationTick.js";
+import { setupKey } from "./observations.js";
 import type { Routing, RoutingStep, WipPart, WorkCenter } from "./types.js";
 
 /**

@@ -1,4 +1,4 @@
-import type { TickMetrics } from "./simulationTick.js";
+import type { TickMetrics } from "./observations.js";
 
 /**
  * Ticks per stored observation bucket — one simulated minute.

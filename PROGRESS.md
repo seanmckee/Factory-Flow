@@ -66,11 +66,14 @@ comparator and a verdict writer. It is now the boundary that pays, since the
 comparator is the node that needs no model at all. `InMemorySaver` is the
 first thing to fix if it does continue: it drops granted plans on restart.
 
-**Track 9 (discrete-event engine) is open** (2026-10-08): the sim is being
-re-cut from a one-second tick loop to an event queue, because rolling demand
-(6H.3) needs an indefinite horizon and the tick loop cannot afford one. 9.1 —
-the characterization test that is the port's oracle — is in. It supersedes
-6G.2, which optimized a loop the port deletes.
+**Track 9 (discrete-event engine) is open** (2026-10-08): the sim is re-cut
+from a one-second tick loop to an event queue, because rolling demand (6H.3)
+needs an indefinite horizon and the tick loop could not afford one. **9.1 and
+9.2 are in**: the engine is event-driven, the tick loop is deleted, and a
+staffed day over ~1,000 parts runs **82× faster, byte-identical**. Next is
+9.3 (observations off intervals, now the only O(ticks) work left in the path)
+and then 9.4, the end-to-end proof against the playthrough baseline. It
+supersedes 6G.2, which optimized a loop the port deleted.
 
 **The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
 6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
@@ -144,14 +147,37 @@ across the minute grid rather than counting ticks).
       1/2/2/4 batches must answer identically, which is what guards the port's
       own batching.
 
-- [ ] **9.2 The event queue and the engine core.** A binary heap keyed
-      `(time, seq)`; `simulateTick` and the two claim passes become admission
-      and completion events; `simulateBatch` keeps its signature and its
-      per-batch contract. Delete the tick loop in the same commit.
+- [x] **9.2 The event queue and the engine core.** `minHeap.ts` (a number
+      heap; `scheduleKey` packs `(tick, ordinal)` into one, so popping gives
+      the earliest tick and, within a tick, the lowest WIP-list position — the
+      tie-break the loop got for free by iterating the array) and
+      `floorEngine.ts`. `simulateBatch` keeps its signature and its per-batch
+      contract; `simulationTick.ts` is **deleted**, its observation types moved
+      to `observations.ts` and its 37 tick-level specs kept verbatim in
+      `floorEngine.test.ts`, driven through `simulateBatch` at a batch length
+      of one. **One staffed day over ~1,000 parts: 1,231 ms → 15 ms (82×)**,
+      byte-identical; 15 days with the floor draining, 2,038 ms → 58 ms.
+      Proved by a throwaway differential harness over **2,000 generated
+      factories** against the old engine, whose engine-independent half
+      survives as `engineProperties.test.ts`.
 
-- [ ] **9.3 Observations off intervals.** Emit `run_buckets` rows by
-      integrating piecewise-constant occupancy across the minute grid rather
-      than summing per-tick counts. Every field stays a sum, a count or a max.
+      It found **one real bug**, and it is the one to remember: the "can the
+      next tick differ?" test asked whether anything had *left the floor*,
+      which misses the commonest event there is. A unit moving to its next step
+      frees the machine behind it and joins a queue ahead of it without
+      finishing or scrapping, so a floor whose parts were all mid-route froze —
+      every later tick a copy of the transition's. Pinned by name in
+      `floorEngine.test.ts`.
+
+- [ ] **9.3 Observations off intervals.** The engine already yields
+      **segments** (a tick's observation plus the last tick identical to it)
+      and `simulateBatch` expands them back into one `TickRecord` per tick, so
+      what is left is the output shape: emit `run_buckets` rows by integrating
+      a segment across the minute grid rather than materializing the ticks in
+      between. Every field stays a sum, a count or a max. This is now the
+      engine's floor — 9.2 left the per-tick expansion as the only O(ticks)
+      work in the path, and it is also what `runService` re-buckets on the far
+      side, so the two collapse into one pass.
 
 - [ ] **9.4 Prove it.** `check:fork`, `check:policy`, and the 15-day playground
       seed re-run against the recorded baseline (+$42,444, 100% OTD, drill

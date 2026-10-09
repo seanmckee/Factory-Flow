@@ -37,7 +37,7 @@ npm run build      # tsc -b && vite build
 npm run lint       # eslint .
 npm test           # vitest (watch)
 npx vitest run                                   # single pass
-npx vitest run src/simulation/simulationTick.test.ts   # single file
+npx vitest run src/simulation/floorEngine.test.ts       # single file
 npx vitest run -t "capacity of 1"                # single test by name
 
 # agent (port 8000; requires agent/.env with OPENAI_API_KEY — see .env.example)
@@ -171,8 +171,53 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 
 The backend owns the engine: `types.ts` (narrow structural input types that
 Drizzle rows satisfy without mapping), `sampleProcessTime.ts`,
-`simulationTick.ts`, `calculateThroughput.ts` and `operatingExpense.ts`. Pure
-functions, no DB and no HTTP, unit-tested under `environment: node`.
+`floorEngine.ts` + `minHeap.ts`, `observations.ts`, `calculateThroughput.ts`
+and `operatingExpense.ts`. Pure functions, no DB and no HTTP, unit-tested
+under `environment: node`.
+
+**The engine is discrete-event, not time-stepped** (Track 9, 2026-10-08).
+`floorEngine.ts` schedules a completion per part per step on a binary heap and
+jumps to the next tick that can differ, instead of looping over simulated
+seconds; a staffed day over ~1,000 parts went from 1,231 ms to 15 ms, the
+batch byte-identical. There is **no tick loop left and no second engine** —
+`simulationTick.ts` is deleted, and the frontend's copy went years ago, both
+for the same reason.
+
+Three decisions that predate the port are what made it exact, and all three
+are load-bearing for any further change: **draws do not depend on event
+order** (`sampleProcessTime` is keyed on `(seed, workOrderId, unitIndex,
+stepIndex)` with no cursor, so a part's process time and scrap fate are the
+same numbers whatever order the engine reaches them in); **admission order is
+WIP-list order**, fixed for the life of a batch since releases are grafted on
+between batches, so a part's index in the opening list is a stable **ordinal**
+and every queue is ordered by it — that is the whole tie-break, and it decides
+who pays a changeover and which sales order a unit is credited to; and
+**everything observable between two events is constant**, which is what lets a
+quiet stretch be one observation with a span.
+
+The arithmetic trap is the boundary: a part admitted at tick `t` has its
+progress incremented *within* that tick, so `completesAtTick = t + actual − 1`.
+Reading it as `t + actual` shifts every completion in the run by a second —
+small enough to look like noise, large enough to change what a fork comparison
+says.
+
+The subtler trap is deciding when the next tick *can* differ. It is **every
+completion**, not just the ones that leave the floor: a unit moving to its next
+step frees the machine behind it and joins a queue ahead of it without
+finishing or scrapping, and reading only finishes and scraps freezes a floor
+whose parts are all mid-route. That was the port's one real bug, caught by a
+randomized differential sweep over 2,000 generated factories.
+
+Two suites guard it, and they do different jobs.
+`characterization.test.ts` pins one heavy fixture two ways — a **fingerprint**
+of the batch serialized whole (the byte-identical guarantee) and a **digest**
+of aggregates (what moved, when the fingerprint says something did) — and is
+the oracle any future engine change answers to; updating a snapshot is never
+the fix. `engineProperties.test.ts` checks over random factories that a batch
+chunked any way answers identically, which is what every batch-boundary
+decision in the run service rests on. `floorEngine.test.ts` holds the
+tick-level specs, kept **verbatim** from the deleted loop and driven through
+`simulateBatch` at a batch length of one.
 
 **The cost model (Tracks 6A/6D).** Ticks are **staffed seconds**; a calendar
 day is `shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` ×
@@ -348,10 +393,14 @@ advancing and releasing take the run's `advancing` lock via `withRunLock`: an
 advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
 
-`simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
-`wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry **per work
-center in
-the map, idle ones included**. `busy` counts machines, not parts. This is
+The engine emits `TickMetrics` (`observations.ts`) alongside the parts:
+`tickNum`, `wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry
+**per work center in
+the map, idle ones included**. `busy` counts machines, not parts. Occupancy is
+read **between admission and completion**, which is where the tick loop read
+it: a part completing this tick held its machine for all of it, and a part
+arriving from this tick's completions is not yet queued anywhere a count can
+see. This is
 emitted rather than derived afterwards because a part that finished during the
 tick held a machine for all of it and is gone from `wipParts` by the time
 anything could look — so a centre's busiest ticks are exactly what a post-tick
@@ -360,6 +409,14 @@ the **effective** capacity the tick admitted against (`min(machines,
 operators)`, taken at the load boundary so the engine never learns what an
 operator is), and a capital action moves it mid-run, so the observation has to
 carry its own denominator. Keep the list total.
+
+The engine yields **segments** — a tick's observation plus the last tick whose
+observation is identical to it — and `simulateBatch` expands a segment into
+the one row per tick the stored series has always had, since only the money
+moves across a quiet span (the two time rates are functions of the tick number,
+and carrying folds a constant WIP value). The segment's `workCenters` array is
+**shared** across its ticks rather than copied, so a quiet hour allocates one
+array instead of 3,600: treat it as frozen.
 
 `aggregateMetrics` in `metrics.ts` reduces a window to utilization (busy
 machine-ticks ÷ **summed capacity-ticks**, reported as `capacityTicks`), queue
