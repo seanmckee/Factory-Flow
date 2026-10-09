@@ -66,8 +66,18 @@ comparator and a verdict writer. It is now the boundary that pays, since the
 comparator is the node that needs no model at all. `InMemorySaver` is the
 first thing to fix if it does continue: it drops granted plans on restart.
 
-**The remaining sim units wait behind the agent.** 6G.2, 6G.3, 6H.2,
-6H.3 are **deferred** (user call, 2026-09-04). The sim is done: it
+**Track 9 (discrete-event engine) is open** (2026-10-08): the sim is re-cut
+from a one-second tick loop to an event queue, because rolling demand (6H.3)
+needs an indefinite horizon and the tick loop could not afford one. **9.1 and
+9.2 are in**: the engine is event-driven, the tick loop is deleted, and a
+staffed day over ~1,000 parts runs **82× faster, byte-identical**. Next is
+9.3 (observations off intervals, now the only O(ticks) work left in the path)
+and then 9.4, the end-to-end proof against the playthrough baseline. It
+supersedes 6G.2, which optimized a loop the port deleted.
+
+**The remaining sim units wait behind the agent.** 6H.2 and
+6H.3 are **deferred** (user call, 2026-09-04); 6G.2 was superseded by Track 9
+and 6G.3 landed with it. The sim is done: it
 has a five-line P&L, a book with a horizon, forking, and an API an agent can
 already drive. What is left there is polish and perf, and playing the sim kept
 generating more of it — 6F, 6G and 6H were all invented while driving 6E. Pick
@@ -77,9 +87,111 @@ them up after the agent, if its behaviour shows they are needed.
 
 ## Next, in order
 
+### Track 9 — Discrete-event engine (`perf/discrete-event`)
+
+Planned 2026-10-08. The engine is time-stepped at one simulated second per
+tick, and the cost is structural rather than tunable: 15 days is 432,000 ticks
+over a floor that peaked at 865 parts, and `simulationTick` clones **every**
+part **every** tick whether or not anything happened to it — ~370M part-tick
+iterations for one playthrough, ~5 wall-minutes. The same run is ~36k events
+(a start and a completion per unit per step, plus releases and the hourly
+policy evaluation). Three to four orders of magnitude, not a tuning win.
+
+**It comes before 6H.3 because 6H.3 is what makes it bite.** Rolling demand
+exists to give a run an indefinite horizon; an indefinite horizon is exactly
+the quantity the tick loop cannot afford. And a DES port has an **oracle** —
+the engine suite, `check:fork`, `check:policy` and the playthrough baseline —
+where rolling demand changes behaviour and has none, so the refactor is the
+one to do while it can still be checked.
+
+**It replaces the tick loop; there is no hybrid.** Two engines is the mistake
+the frontend copy already made ("drifted badly the one time they coexisted").
+The characterization test is scaffolding: the recorded numbers stay, the old
+loop does not.
+
+**It stays in TypeScript, in `backend/`, behind the existing
+`simulateBatch(RunState, ticks) → RunBatch` seam.** Not in `agent/`: the agent
+is a pure HTTP client of the backend *by design*, and the approval gate's whole
+claim — that what a person approves is built from the sim rather than from the
+model's arguments — requires the sim to be somewhere the agent cannot reach
+into. A Python engine would also need the nine `run_*` tables, so it would
+either re-read them over HTTP per event or open a second writer against a run
+the lock exists to keep single. SimPy buys a scheduler and a resource pool and
+costs a service boundary; what the port actually needs is a binary heap keyed
+`(time, sequence)`, because the rules — `min(machines, operators)` with
+list-order admission — are already written.
+
+What makes it tractable: `sampleProcessTime` is keyed on
+`(seed, workOrderId, unitIndex, stepIndex)` with **no draw cursor**, so draws
+do not depend on event order and every process time and scrap draw reproduces
+unchanged. The money model cooperates too — time expense and wages are
+floor-diffs that telescope over an interval, carrying is piecewise-constant
+between events, capital is a lump at a tick.
+
+The three places byte-identity is actually at risk, and where the effort goes:
+**tie-break order** (admission is WIP-list order, which decides who pays a
+changeover and the `priorCounts` credit sequence, so the queue needs an
+insertion sequence keyed to reproduce it); **the off-by-one** (a part admitted
+at tick *t* has `progressSeconds += 1` within that same tick, so completion is
+admission + actual − 1); and **observations** (`run_buckets` wants per-minute
+`busy`/`queued`/`capacity`, which becomes integrating piecewise-constant state
+across the minute grid rather than counting ticks).
+
+- [x] **9.1 Characterization test.** `simulation/characterization.test.ts` — one
+      heavy fixture (555 units, five centres, a capacity-1 press, scrap at the
+      constraint / mid-route / a last step, a pre-paid changeover, parts
+      stranded past a shortened routing, an idle centre, dated rates, a carried
+      remainder and non-zero `priorCounts`) pinned two ways: a **fingerprint**
+      of the batch serialized whole, which is the byte-identical guarantee, and
+      a **digest** of aggregates, which says *what* moved when the fingerprint
+      stops matching. Plus the chunking half — the same opening state run as
+      1/2/2/4 batches must answer identically, which is what guards the port's
+      own batching.
+
+- [x] **9.2 The event queue and the engine core.** `minHeap.ts` (a number
+      heap; `scheduleKey` packs `(tick, ordinal)` into one, so popping gives
+      the earliest tick and, within a tick, the lowest WIP-list position — the
+      tie-break the loop got for free by iterating the array) and
+      `floorEngine.ts`. `simulateBatch` keeps its signature and its per-batch
+      contract; `simulationTick.ts` is **deleted**, its observation types moved
+      to `observations.ts` and its 37 tick-level specs kept verbatim in
+      `floorEngine.test.ts`, driven through `simulateBatch` at a batch length
+      of one. **One staffed day over ~1,000 parts: 1,231 ms → 15 ms (82×)**,
+      byte-identical; 15 days with the floor draining, 2,038 ms → 58 ms.
+      Proved by a throwaway differential harness over **2,000 generated
+      factories** against the old engine, whose engine-independent half
+      survives as `engineProperties.test.ts`.
+
+      It found **one real bug**, and it is the one to remember: the "can the
+      next tick differ?" test asked whether anything had *left the floor*,
+      which misses the commonest event there is. A unit moving to its next step
+      frees the machine behind it and joins a queue ahead of it without
+      finishing or scrapping, so a floor whose parts were all mid-route froze —
+      every later tick a copy of the transition's. Pinned by name in
+      `floorEngine.test.ts`.
+
+- [ ] **9.3 Observations off intervals.** The engine already yields
+      **segments** (a tick's observation plus the last tick identical to it)
+      and `simulateBatch` expands them back into one `TickRecord` per tick, so
+      what is left is the output shape: emit `run_buckets` rows by integrating
+      a segment across the minute grid rather than materializing the ticks in
+      between. Every field stays a sum, a count or a max. This is now the
+      engine's floor — 9.2 left the per-tick expansion as the only O(ticks)
+      work in the path, and it is also what `runService` re-buckets on the far
+      side, so the two collapse into one pass.
+
+- [ ] **9.4 Prove it.** `check:fork`, `check:policy`, and the 15-day playground
+      seed re-run against the recorded baseline (+$42,444, 100% OTD, drill
+      press 82.7%). Record the new wall time; expect the bottleneck to move to
+      Postgres inserts and `/metrics` reads.
+
 ### 6G — Simulator throughput (`perf/observation-buckets`)
 
-- [ ] **6G.2 Clone on write in the tick loop.** Every tick copies **every** WIP
+- [ ] ~~**6G.2 Clone on write in the tick loop.**~~ **Superseded by Track 9**
+      (2026-10-08): it optimizes a loop the port deletes, and buys 2–5× on the
+      same 370M iterations where the port removes them. The characterization
+      test it specced was written anyway, as 9.1 — it is the port's oracle.
+      Original note: Every tick copies **every** WIP
       part (`{ ...source }`) and rebuilds the claims array, so 2,000 parts over
       20,000 ticks is 40 million object clones — and a part that sits queued
       changes nothing, so its clone is pure waste. Pass unchanged parts through
@@ -91,13 +203,29 @@ them up after the agent, if its behaviour shows they are needed.
       money, so the optimization is provably byte-identical rather than
       probably. The one-batch-vs-several test is the other half.
 
-- [ ] **6G.3 Refresh cadence during a jump.** The jump loop calls `refresh`
-      after every committed hour — `GET /:id` plus `GET /:id/floor`, ~216 ms
-      together — which is ~1.7 s of a simulated day and ~17 s of a ten-day jump
-      spent on reads nobody is looking at mid-flight. The advance result already
-      carries the tick number, WIP count, all five money lines and the scrap
-      count, so the transport bar can be driven from it and the floor refreshed
-      on a slower cadence (and always at the end).
+- [x] **6G.3 Refresh cadence during a jump.** Done 2026-10-08, pulled forward
+      because Track 9's horizons made it load-bearing rather than tidy: a
+      60-day jump is ~480 committed hours, and a `refresh` per hour (two
+      queries, ~250 ms) spent over two minutes on reads nobody is watching
+      against about a second of simulation. Throttled to `JUMP_REFRESH_MIN_MS`
+      (500) with a guaranteed refresh on landing. Nothing in the transport bar
+      depends on it — progress and the tick number come off the advance's own
+      answer.
+
+### Fast-forward controls (`feat/jump-horizons`)
+
+Done 2026-10-08, out of the ledger's order, because Track 9 invalidated the
+control: the jump presets topped out at **+1 day** since a day used to cost
+~30 s of engine time, and it now costs ~15 ms. A row of buttons cannot span
+one hour to sixty days.
+
+- [x] **A horizon and an early exit, in one dialog.** `JumpDialog` behind a
+      "Run to…" button, with `simulation/jumpPlan.ts` as the pure half. The
+      scrubber is a **ceiling** and the condition an **early exit** — a
+      condition with no ceiling is a run that might never stop. Conditions:
+      floor empties, backlog clears, WIP above/below N, net turns positive,
+      scrap reaches N; all answered from the advance's own result, so watching
+      one costs no request. The bar keeps +1 hour and +1 day.
 
 ### 6H — Demand deep enough to pay back a decision (`feat/demand-depth`)
 
@@ -394,6 +522,9 @@ Scheduling ahead is the cheap fallback if the rework proves out of proportion.
 Design invariants live in `CLAUDE.md`. These are the ones about *sequence and
 scope* that would otherwise be re-argued:
 
+- **DES comes before rolling demand, and replaces the tick loop rather than
+  joining it** (user call, 2026-10-08). See Track 9 for the arithmetic and for
+  why it stays in TypeScript in `backend/` rather than moving to `agent/`.
 - **Track 7 comes before Track 8, and forking *is* load-bearing** (user call,
   2026-09-04, reversing the note below). Comparison is the agent's whole
   mechanism: it is how the agent tells a decision that paid from one that did

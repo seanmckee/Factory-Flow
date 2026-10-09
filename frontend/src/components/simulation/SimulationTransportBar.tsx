@@ -1,27 +1,30 @@
-import { Factory, ListOrdered, LoaderCircle, Play, Square } from "lucide-react";
+import { FastForward, Factory, ListOrdered, LoaderCircle, Play, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { JUMP_PRESETS, type SimulationPageController } from "../../simulation/useSimulationPage";
 import { TICKS_PER_DAY } from "../../simulation/simTime";
 import { CapitalDialog } from "./CapitalDialog";
+import { JumpDialog } from "./JumpDialog";
 import { PolicyDialog } from "./PolicyDialog";
 import { POLICY_LABELS } from "../../simulation/releasePolicy";
 
 type Props = Pick<SimulationPageController,
   "capitalOpen" | "floor" | "isRunning" | "jump" | "onCapitalAction" |
   "onPolicyChange" | "onRelease" | "pendingAction" | "policyOpen" |
-  "releasableOrders" |
+  "jumpOpen" | "releasableOrders" |
   "run" | "runId" | "runJump" | "selectedOrderId" | "setCapitalOpen" |
-  "setIsRunning" | "setPolicyOpen" | "setSelectedOrderId" |
+  "setIsRunning" | "setJumpOpen" | "setPolicyOpen" | "setSelectedOrderId" |
   "setStopping" | "stopping" | "stopJumpRef"
 >;
 
 export function SimulationTransportBar(props: Props) {
-  const { capitalOpen, floor, isRunning, jump, onCapitalAction, onPolicyChange,
+  const { capitalOpen, floor, isRunning, jump, jumpOpen, onCapitalAction,
+    onPolicyChange,
     onRelease,
     pendingAction, policyOpen, releasableOrders, run, runId,
-    runJump, selectedOrderId, setCapitalOpen, setIsRunning, setPolicyOpen,
+    runJump, selectedOrderId, setCapitalOpen, setIsRunning, setJumpOpen,
+    setPolicyOpen,
     setSelectedOrderId,
     setStopping, stopping, stopJumpRef } = props;
   return (
@@ -63,6 +66,11 @@ export function SimulationTransportBar(props: Props) {
           {preset.label}
         </Button>
       ))}
+      {/* the horizon and the early exit live together in a dialog: the bar
+          keeps the two jumps nobody needs to think about */}
+      <Button size="sm" variant="outline" onClick={() => setJumpOpen(true)} disabled={runId === null || jump !== null}>
+        <FastForward className="size-4" /> Run to…
+      </Button>
       {jump && (
         <div className="ml-auto flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{jump.label}</span>
@@ -80,6 +88,13 @@ export function SimulationTransportBar(props: Props) {
         centers={floor?.workCenters ?? []}
         onApply={(change) => void onPolicyChange(change)}
         pending={pendingAction === "policy"}
+      />
+      <JumpDialog
+        open={jumpOpen}
+        onOpenChange={setJumpOpen}
+        run={run}
+        disabled={jump !== null}
+        onRun={(ticks, condition, label) => void runJump(ticks, label, condition)}
       />
       <CapitalDialog
         open={capitalOpen}

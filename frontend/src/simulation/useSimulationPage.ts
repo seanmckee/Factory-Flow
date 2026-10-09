@@ -41,13 +41,41 @@ import { useToast } from "../toast/ToastContext";
 import type { SalesOrder } from "../types/SalesOrder";
 import type { WorkOrder } from "../types/WorkOrder";
 
+import {
+  conditionMet,
+  describeStop,
+  type JumpCondition,
+  type JumpOutcome,
+  type JumpProbe,
+} from "./jumpPlan";
+
 const TICK_INTERVAL_MS = 1000;
+/**
+ * The most often a jump re-reads the run and the floor mid-flight.
+ *
+ * A jump commits one simulated hour per request, and `refresh` is two queries
+ * (`GET /:id` + `/floor`) — perfectly affordable 24 times across a day, and
+ * nearly two minutes of reads across sixty, against about twelve seconds of
+ * actual simulation. The engine stopped being the cost of a jump, so this did
+ * not need throttling until horizons got long enough to want one.
+ *
+ * Nothing in the transport bar depends on it: progress and the tick number
+ * come off the advance's own answer. What throttling costs is how often the
+ * Floor tab redraws *during* a jump, which is the read nobody is watching —
+ * and the jump always refreshes once more when it lands.
+ */
+const JUMP_REFRESH_MIN_MS = 500;
 const CLOCK_TICKS_PER_BEAT = 60;
 const CHUNK_TICKS = 3600;
 
+/**
+ * The jumps that stay in the transport bar. Everything beyond a day moved into
+ * `JumpDialog`, where a horizon is chosen rather than clicked: once sixty days
+ * cost about what one did, a row of buttons stopped being able to span the
+ * useful range. These two are what you reach for without thinking.
+ */
 export const JUMP_PRESETS = [
   { label: "+1 hour", ticks: 3_600 },
-  { label: "+4 hours", ticks: 4 * 3_600 },
   { label: "+1 day", ticks: TICKS_PER_DAY },
 ];
 
@@ -73,6 +101,7 @@ export function useSimulationPage() {
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [actions, setActions] = useState<CapitalAction[]>([]);
   const [capitalOpen, setCapitalOpen] = useState(false);
+  const [jumpOpen, setJumpOpen] = useState(false);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>([]);
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
@@ -363,7 +392,11 @@ export function useSimulationPage() {
   );
 
   const runJump = useCallback(
-    async (target: number, jumpLabel: string) => {
+    async (
+      target: number,
+      jumpLabel: string,
+      condition: JumpCondition = { kind: "none" },
+    ) => {
       if (runId === null) return showToast("Create or select a run first", "error");
       if (jump) return;
       // an active policy can feed an empty floor from the backlog, so the
@@ -395,6 +428,14 @@ export function useSimulationPage() {
       let done = 0;
       let autoOrders = 0;
       let autoParts = 0;
+      // the run's net as the jump began. Accumulating it from each advance's
+      // four money lines is exact, not an estimate: a capital action is the
+      // only other term and cannot land while the jump holds the run's lock
+      let netCents = run?.netCents ?? 0;
+      let scrappedSoFar = 0;
+      let outcome: JumpOutcome = { kind: "horizon" };
+      let probe: JumpProbe | null = null;
+      let lastRefresh = 0;
       try {
         while (done < target && !stopJumpRef.current) {
           const size = Math.min(CHUNK_TICKS, target - done);
@@ -405,21 +446,51 @@ export function useSimulationPage() {
             (total, entry) => total + entry.partsReleased,
             0,
           );
+          scrappedSoFar += result.scrappedCount;
+          netCents +=
+            result.throughputCents -
+            result.operatingExpenseCents -
+            result.carryingCostCents -
+            result.wageCents;
+          probe = {
+            tickNum: result.tickNum,
+            wipCount: result.wipCount,
+            backlogCount: result.backlogCount,
+            scrappedSoFar,
+            netCents,
+          };
           setJump({ label, ticksDone: done, ticksTotal: target, tickNum: result.tickNum });
-          try {
-            await refresh(runId);
-          } catch (error) {
-            report(error, "Failed to load run");
+          const now = Date.now();
+          if (now - lastRefresh >= JUMP_REFRESH_MIN_MS) {
+            lastRefresh = now;
+            try {
+              await refresh(runId);
+            } catch (error) {
+              report(error, "Failed to load run");
+            }
           }
           // drained only when nothing is left that could refill the floor —
           // backlogCount is always 0 under manual, so this is the old
-          // condition there
+          // condition there. It is a floor under every jump rather than a
+          // condition you pick: there is nothing left to simulate.
           if (result.wipCount === 0 && result.backlogCount === 0) {
-            showToast(
-              `Floor emptied at ${formatTickTime(result.tickNum, run?.dayTicks ?? TICKS_PER_DAY)} — stopped the jump`,
-            );
+            outcome = { kind: "drained" };
             break;
           }
+          if (conditionMet(condition, probe)) {
+            outcome = { kind: "condition", condition };
+            break;
+          }
+        }
+        // always land on the truth, however the mid-flight reads were paced
+        try {
+          await refresh(runId);
+        } catch (error) {
+          report(error, "Failed to load run");
+        }
+        if (stopJumpRef.current) outcome = { kind: "stopped" };
+        if (probe) {
+          showToast(describeStop(outcome, probe, run?.dayTicks ?? TICKS_PER_DAY));
         }
       } catch (error) {
         reportAdvance(error, runId);
@@ -692,6 +763,7 @@ export function useSimulationPage() {
 
   return {
     actions, activeTab, capitalOpen, changeTab, compareRun, compareRunId, floor,
+    jumpOpen, setJumpOpen,
     forkName, forkOpen,
     isLoading, isRunLoading,
     isRunning, jump,

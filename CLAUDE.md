@@ -37,7 +37,7 @@ npm run build      # tsc -b && vite build
 npm run lint       # eslint .
 npm test           # vitest (watch)
 npx vitest run                                   # single pass
-npx vitest run src/simulation/simulationTick.test.ts   # single file
+npx vitest run src/simulation/floorEngine.test.ts       # single file
 npx vitest run -t "capacity of 1"                # single test by name
 
 # agent (port 8000; requires agent/.env with OPENAI_API_KEY — see .env.example)
@@ -171,8 +171,53 @@ Drizzle migrations live in `backend/drizzle/`; generate/apply with `npx drizzle-
 
 The backend owns the engine: `types.ts` (narrow structural input types that
 Drizzle rows satisfy without mapping), `sampleProcessTime.ts`,
-`simulationTick.ts`, `calculateThroughput.ts` and `operatingExpense.ts`. Pure
-functions, no DB and no HTTP, unit-tested under `environment: node`.
+`floorEngine.ts` + `minHeap.ts`, `observations.ts`, `calculateThroughput.ts`
+and `operatingExpense.ts`. Pure functions, no DB and no HTTP, unit-tested
+under `environment: node`.
+
+**The engine is discrete-event, not time-stepped** (Track 9, 2026-10-08).
+`floorEngine.ts` schedules a completion per part per step on a binary heap and
+jumps to the next tick that can differ, instead of looping over simulated
+seconds; a staffed day over ~1,000 parts went from 1,231 ms to 15 ms, the
+batch byte-identical. There is **no tick loop left and no second engine** —
+`simulationTick.ts` is deleted, and the frontend's copy went years ago, both
+for the same reason.
+
+Three decisions that predate the port are what made it exact, and all three
+are load-bearing for any further change: **draws do not depend on event
+order** (`sampleProcessTime` is keyed on `(seed, workOrderId, unitIndex,
+stepIndex)` with no cursor, so a part's process time and scrap fate are the
+same numbers whatever order the engine reaches them in); **admission order is
+WIP-list order**, fixed for the life of a batch since releases are grafted on
+between batches, so a part's index in the opening list is a stable **ordinal**
+and every queue is ordered by it — that is the whole tie-break, and it decides
+who pays a changeover and which sales order a unit is credited to; and
+**everything observable between two events is constant**, which is what lets a
+quiet stretch be one observation with a span.
+
+The arithmetic trap is the boundary: a part admitted at tick `t` has its
+progress incremented *within* that tick, so `completesAtTick = t + actual − 1`.
+Reading it as `t + actual` shifts every completion in the run by a second —
+small enough to look like noise, large enough to change what a fork comparison
+says.
+
+The subtler trap is deciding when the next tick *can* differ. It is **every
+completion**, not just the ones that leave the floor: a unit moving to its next
+step frees the machine behind it and joins a queue ahead of it without
+finishing or scrapping, and reading only finishes and scraps freezes a floor
+whose parts are all mid-route. That was the port's one real bug, caught by a
+randomized differential sweep over 2,000 generated factories.
+
+Two suites guard it, and they do different jobs.
+`characterization.test.ts` pins one heavy fixture two ways — a **fingerprint**
+of the batch serialized whole (the byte-identical guarantee) and a **digest**
+of aggregates (what moved, when the fingerprint says something did) — and is
+the oracle any future engine change answers to; updating a snapshot is never
+the fix. `engineProperties.test.ts` checks over random factories that a batch
+chunked any way answers identically, which is what every batch-boundary
+decision in the run service rests on. `floorEngine.test.ts` holds the
+tick-level specs, kept **verbatim** from the deleted loop and driven through
+`simulateBatch` at a batch length of one.
 
 **The cost model (Tracks 6A/6D).** Ticks are **staffed seconds**; a calendar
 day is `shifts × 28,800` ticks (8-hour shifts) — `TICKS_PER_DAY` ×
@@ -348,10 +393,14 @@ advancing and releasing take the run's `advancing` lock via `withRunLock`: an
 advance replaces the WIP rows wholesale, so a release landing mid-batch would
 be deleted by the write that follows it.
 
-`simulateTick` returns `metrics: TickMetrics` alongside the parts: `tickNum`,
-`wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry **per work
-center in
-the map, idle ones included**. `busy` counts machines, not parts. This is
+The engine emits `TickMetrics` (`observations.ts`) alongside the parts:
+`tickNum`, `wipCount`, and a `{ workCenterId, busy, queued, capacity }` entry
+**per work center in
+the map, idle ones included**. `busy` counts machines, not parts. Occupancy is
+read **between admission and completion**, which is where the tick loop read
+it: a part completing this tick held its machine for all of it, and a part
+arriving from this tick's completions is not yet queued anywhere a count can
+see. This is
 emitted rather than derived afterwards because a part that finished during the
 tick held a machine for all of it and is gone from `wipParts` by the time
 anything could look — so a centre's busiest ticks are exactly what a post-tick
@@ -360,6 +409,14 @@ the **effective** capacity the tick admitted against (`min(machines,
 operators)`, taken at the load boundary so the engine never learns what an
 operator is), and a capital action moves it mid-run, so the observation has to
 carry its own denominator. Keep the list total.
+
+The engine yields **segments** — a tick's observation plus the last tick whose
+observation is identical to it — and `simulateBatch` expands a segment into
+the one row per tick the stored series has always had, since only the money
+moves across a quiet span (the two time rates are functions of the tick number,
+and carrying folds a constant WIP value). The segment's `workCenters` array is
+**shared** across its ticks rather than copied, so a quiet hour allocates one
+array instead of 3,600: treat it as frozen.
 
 `aggregateMetrics` in `metrics.ts` reduces a window to utilization (busy
 machine-ticks ÷ **summed capacity-ticks**, reported as `capacityTicks`), queue
@@ -692,10 +749,14 @@ resumes where it left off.
 **Fast-forward is the point of the page, not a faster clock.** There is
 deliberately no arbitrary speed multiplier: the question a run answers is
 where a set of releases ends up, and a "100×" button lies the moment the
-multiplier outruns the server's ~500–4000 ticks a second (the minute clock's
-60-a-beat is far inside that; an unbounded multiplier isn't). The jumps sit
-beside the clock as calendar units — `JUMP_PRESETS`: **+1 hour / +4 hours /
-+1 day**. **Run until idle is gone**, removed with Track 6A: an empty floor
+multiplier outruns the server's tick rate. That bound moved with Track 9 — the
+engine does ~1.9M ticks a second now and a long jump is ~99% database round
+trips — but the conclusion did not: a multiplier would still be pacing against
+a number that is not the engine's. The jumps are calendar units instead. Two
+sit in the bar (`JUMP_PRESETS`: **+1 hour / +1 day**) and the range beyond
+them moved into `JumpDialog`, since once sixty days cost about what one did, a
+row of buttons stopped being able to span the useful span.
+**Run until idle is gone**, removed with Track 6A: an empty floor
 stopped being a goal the moment rent accrues against time — an idle factory
 is a money furnace, and "run out the order book" is not a question a factory
 asks.
@@ -707,8 +768,12 @@ aborts in flight, because the server commits that batch regardless and an
 aborted request would only leave the page claiming a tick the run has passed.
 **A jump streams rather than blocks**: there is no modal overlay
 (`SimulatingOverlay` is deleted) — progress is inline in the transport bar
-with Stop beside it, and the page refreshes as each committed hour lands, so
-a day reads as the charts flying through it. A jump also **stops itself when
+with Stop beside it. The page refreshes as committed hours land, throttled to
+`JUMP_REFRESH_MIN_MS` (500) and always once more on landing: `refresh` is two
+queries and nothing in the transport bar needs it — progress and the tick come
+off the advance's own answer — so across sixty days the unthrottled version
+spent minutes on reads nobody is watching against about a second of
+simulation. A jump also **stops itself when
 the floor empties** (the toast names the Day · time): nothing can land
 mid-jump *by hand* — the jump holds the run's lock — but the run's own
 release policy (RP) can: an advance feeds the floor from the backlog, so a
@@ -782,6 +847,32 @@ block on the tab a `shrink-0` card grid would push the tab strip itself below
 the fold; the pane keeps `min-h-56` and its own scrollport, which is also what
 keeps its `sticky` header sticking (sticky resolves against the nearest
 scrollport, so an `overflow-auto` in between would make it inert).
+
+**How far to run lives in a dialog too** (`JumpDialog`, the "Run to…" button).
+Its two halves **compose rather than compete**: the horizon scrubber is a
+**ceiling** and the condition an **early exit**, because a condition with no
+ceiling is a run that might never stop and a horizon alone is what the old
+presets already were. `simulation/jumpPlan.ts` holds the pure half (the
+`capital.ts` pattern) — the horizon scale, the condition predicates and the
+stop sentences, unit-tested.
+
+Three things there are load-bearing rather than cosmetic. The scale is
+**stepped**, not a free range: the useful span is three orders of magnitude
+and a linear track gives the first day 1.6% of itself. Its hour stops end at
+**6**, because a one-shift day is 8 staffed hours — an "8 hours" stop would
+land on the identical tick as "1 day" for that run and a "12 hours" stop would
+sort *after* it, and the scale cannot change shape per run without the labels
+lying. And every condition is answered from the **advance's own result**
+(`wipCount`, `backlogCount`, `scrappedCount`, the four money lines), so
+watching one costs no request; net is accumulated client-side and is *exact*
+rather than an estimate, since a capital action is the only other term in the
+score and cannot land while the jump holds the run's lock. Conditions are
+checked at each committed hour — the boundary Stop already lands on — and
+`alreadyMet` warns before a jump is spent discovering that "WIP falls below
+200" is true of a floor of 120. It returns **null** for the two backlog
+conditions rather than guessing: `backlogCount` is reported only by an
+advance, and a dialog that guessed would be guessing about the one thing it
+was asked to watch.
 
 **The release policy lives in a dialog off the transport bar too**
 (`PolicyDialog`, the button naming the active policy — `Policy · CONWIP`):
